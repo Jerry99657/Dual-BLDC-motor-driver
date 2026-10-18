@@ -1,0 +1,128 @@
+#include <assert.h>
+#include <stdio.h>
+#include <string.h>
+#include <stddef.h>
+#include "app_storage.h"
+#include "w25q64.h"
+#include "main.h"
+
+static uint8_t flash[3*W25Q64_SECTOR_SIZE];
+static uint32_t tick, busy_until;
+static unsigned sync_calls;
+static bool fail_program, corrupt_read;
+uint32_t HAL_GetTick(void) { return tick; }
+bool W25Q_Init(void) { return true; }
+uint32_t W25Q_ReadID(void) { return 0xEF4017; }
+bool W25Q_Read(uint32_t addr, uint8_t *data, uint32_t len) {
+    assert((int32_t)(tick-busy_until)>=0);
+    assert(addr+len<=sizeof(flash)); memcpy(data,flash+addr,len);
+    if(corrupt_read) data[0]^=1;
+    return true;
+}
+bool W25Q_PollBusy(bool *busy) { *busy=(int32_t)(tick-busy_until)<0; return true; }
+bool W25Q_BeginSectorErase(uint32_t addr) {
+    assert((int32_t)(tick-busy_until)>=0);
+    assert(addr%W25Q64_SECTOR_SIZE==0 && addr+W25Q64_SECTOR_SIZE<=sizeof(flash));
+    memset(flash+addr,255,W25Q64_SECTOR_SIZE); busy_until=tick+40; return true;
+}
+bool W25Q_BeginPageProgram(uint32_t addr,const uint8_t *data,uint16_t len) {
+    assert((int32_t)(tick-busy_until)>=0);
+    assert(addr+len<=sizeof(flash) && addr%256+len<=256);
+    if(fail_program) return false;
+    for(unsigned i=0;i<len;++i) flash[addr+i]&=data[i];
+    busy_until=tick+3; return true;
+}
+bool W25Q_SectorErase(uint32_t addr) {
+    ++sync_calls; if(!W25Q_BeginSectorErase(addr)) return false;
+    tick=busy_until; return true;
+}
+bool W25Q_PageProgram(uint32_t addr,const uint8_t *data,uint16_t len) {
+    ++sync_calls; if(!W25Q_BeginPageProgram(addr,data,len)) return false;
+    tick=busy_until; return true;
+}
+static void service(unsigned ms) {
+    for(unsigned i=0;i<ms;++i) { ++tick; AppStorage_Service(tick); }
+}
+static bool result(void) {
+    bool success; assert(AppStorage_PollSaveResult(&success)); return success;
+}
+static uint32_t crc32(const void *data,unsigned len) {
+    const uint8_t *bytes=data; uint32_t crc=0xFFFFFFFFU;
+    for(unsigned i=0;i<len;++i) {
+        crc^=bytes[i];
+        for(unsigned bit=0;bit<8;++bit) crc=(crc>>1)^((crc&1U)?0xEDB88320U:0U);
+    }
+    return ~crc;
+}
+int main(void) {
+    memset(flash,255,sizeof(flash)); assert(AppStorage_Init());
+    assert(sync_calls==0);
+    assert(((AppStorage_Get()->flags & APP_SPEED_LIMIT_MASK)>>APP_SPEED_LIMIT_SHIFT)==100);
+    AppStorage_Get()->speed_x10=123;
+    AppStorage_Get()->flags=(AppStorage_Get()->flags & ~APP_SPEED_LIMIT_MASK) |
+                            (123UL<<APP_SPEED_LIMIT_SHIFT);
+    AppStorage_Get()->speed_step_x10=6;
+    AppStorage_Get()->torque_step_x100=7;
+    AppStorage_Get()->position_step_x100=4;
+    assert(AppStorage_RequestSave()); service(10);
+    bool success; assert(!AppStorage_PollSaveResult(&success));
+    assert(!AppStorage_RequestSave()); /* snapshot in flight is immutable */
+    AppStorage_Get()->speed_x10=456;
+    AppStorage_Get()->flags=(AppStorage_Get()->flags & ~APP_SPEED_LIMIT_MASK) |
+                            (234UL<<APP_SPEED_LIMIT_SHIFT);
+    service(50); assert(result());
+    assert(AppStorage_Get()->speed_x10==456); /* live edit survives completion */
+    assert(((AppStorage_Get()->flags & APP_SPEED_LIMIT_MASK)>>APP_SPEED_LIMIT_SHIFT)==234);
+    service(10); assert(sync_calls==0);
+    assert(AppStorage_Init()); assert(AppStorage_Get()->speed_x10==123);
+    assert(((AppStorage_Get()->flags & APP_SPEED_LIMIT_MASK)>>APP_SPEED_LIMIT_SHIFT)==123);
+    assert(((AppStorage_Get()->flags & APP_POSITION_SPEED_MASK)>>APP_POSITION_SPEED_SHIFT)==30);
+    assert(AppStorage_Get()->speed_step_x10==6 && AppStorage_Get()->torque_step_x100==7 && AppStorage_Get()->position_step_x100==4);
+    AppStorage_Get()->speed_x10=789; assert(AppStorage_RequestSave());
+    service(60); assert(result()); service(10);
+    assert(AppStorage_Init()); assert(AppStorage_Get()->speed_x10==789);
+    /* Interrupted/incomplete replacement leaves previous valid A/B copy. */
+    AppStorage_Get()->speed_x10=321; assert(AppStorage_RequestSave());
+    service(10); tick=busy_until; assert(AppStorage_Init());
+    assert(AppStorage_Get()->speed_x10==789);
+    fail_program=true; assert(AppStorage_RequestSave()); service(50); assert(!result());
+    fail_program=false; assert(AppStorage_RequestSave()); service(50); assert(result()); service(10);
+    corrupt_read=true; assert(AppStorage_RequestSave()); service(50); assert(!result());
+    corrupt_read=false; service(20); assert(AppStorage_Init());
+    /* Queued logs rotate across sector boundary without synchronous waits. */
+    for(unsigned i=0;i<150;++i) {
+        AppStorage_Log(APP_LOG_TARGET_CHANGED,i); service(50);
+    }
+    assert(sync_calls==0);
+    AppStorage_ResetDefaults(); assert(AppStorage_Get()->speed_x10==0);
+    assert(((AppStorage_Get()->flags & APP_SPEED_LIMIT_MASK)>>APP_SPEED_LIMIT_SHIFT)==100);
+    assert(AppStorage_RequestSave()); service(60); assert(result());
+    assert(AppStorage_Get()->speed_step_x10==5 && AppStorage_Get()->torque_step_x100==5 && AppStorage_Get()->position_step_x100==5);
+    /* Both configured speed-limit endpoints survive the real NOR save/reload. */
+    const unsigned limits[]={1,600};
+    for(unsigned i=0;i<2;++i) {
+        AppStorage_Get()->flags=(AppStorage_Get()->flags & ~APP_SPEED_LIMIT_MASK) |
+                                ((uint32_t)limits[i]<<APP_SPEED_LIMIT_SHIFT);
+        assert(AppStorage_RequestSave()); service(60); assert(result()); service(20);
+        assert(AppStorage_Init());
+        assert(((AppStorage_Get()->flags & APP_SPEED_LIMIT_MASK)>>APP_SPEED_LIMIT_SHIFT)==limits[i]);
+    }
+    /* Original version 1 settings remain readable after adding step fields. */
+    struct Legacy {
+        uint32_t magic; uint16_t version,size; uint32_t seq;
+        int32_t speed,voltage,position; uint32_t flags,brightness,crc;
+    } legacy={0x464F4331UL,1,sizeof(legacy),21,-123,250,125,
+              APP_FLAG_LED_ENABLE|(31UL<<APP_POSITION_SPEED_SHIFT),35,0};
+    legacy.crc=crc32(&legacy,offsetof(struct Legacy,crc));
+    service(20); memset(flash,255,sizeof(flash)); memcpy(flash,&legacy,sizeof(legacy));
+    assert(AppStorage_Init());
+    const AppSettings *migrated=AppStorage_Get();
+    assert(migrated->version==2 && migrated->speed_x10==-123 && migrated->voltage_x100==250 && migrated->led_brightness==35);
+    assert(migrated->speed_step_x10==5 && migrated->torque_step_x100==5 && migrated->position_step_x100==5);
+    assert((migrated->flags & APP_SPEED_LIMIT_MASK)==0); /* UI supplies default for old records. */
+    assert(AppStorage_RequestSave()); service(60); assert(result()); service(20);
+    assert(AppStorage_Init() && AppStorage_Get()->speed_x10==-123);
+    assert((AppStorage_Get()->flags & APP_SPEED_LIMIT_MASK)==0); /* Existing version 2 layout. */
+    printf("PASS: async save/log, A/B recovery, failure paths, step/speed-limit persistence, version 1 migration\n");
+    return 0;
+}

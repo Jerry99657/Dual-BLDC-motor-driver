@@ -100,7 +100,18 @@ const MotorParams* JerryFOC_getMotorParams(void)
 
 void JerryFOC_useCurrentLoop(uint8_t enable)
 {
+    enable = enable ? 1U : 0U;
+    if (flag_use_current_loop == enable) return;
+    uint32_t primask = __get_PRIMASK();
+    __disable_irq();
+    /* 速度环输出在电压模式下是 V，电流模式下是 A，限幅也必须切换。 */
+    vel_loop_M0.limit = enable ? active_motor->max_current : active_motor->vel_limit;
+    vel_loop_M0.integral_prev = vel_loop_M0.output_prev = vel_loop_M0.error_prev = 0.0f;
+    iq_loop_M0.integral_prev = iq_loop_M0.output_prev = iq_loop_M0.error_prev = 0.0f;
+    id_loop_M0.integral_prev = id_loop_M0.output_prev = id_loop_M0.error_prev = 0.0f;
+    JerryFOC_Target_Iq = 0.0f;
     flag_use_current_loop = enable;
+    __set_PRIMASK(primask);
 }
 
 /* ================= 速度/电流/位置状态 ================= */
@@ -275,15 +286,17 @@ __RAM_FUNC void JerryFOC_setPhaseVoltage(float Uq, float Ud, float angle_el)
 }
 
 /* ================= 传感器标定 ================= */
-void JerryFOC_alignSensor(void)
+void JerryFOC_alignStart(void)
 {
-    /* 阻塞式标定期间暂停 ADC FOC 回调，否则 10 kHz 电流环会覆盖标定电压。 */
+    /* 标定期间暂停 ADC FOC 回调，否则 10 kHz 电流环会覆盖标定电压。 */
     foc_fast_loop_enabled = 0U;
 
     /* 在 D 轴施加电压，迫使转子物理 D 轴对齐到电角度 0 */
     JerryFOC_setPhaseVoltage(0.0f, 3.0f, 0.0f);
-    HAL_Delay(3000);
+}
 
+void JerryFOC_alignFinish(void)
+{
     /* 只有拿到新鲜编码器数据才允许记录零点。 */
     if (AngleSrc_Encoder_IsSource(angle_source) &&
         MT6701_IsContinuous() && MT6701_IsHealthy()) {
@@ -292,6 +305,13 @@ void JerryFOC_alignSensor(void)
 
     JerryFOC_setPhaseVoltage(0.0f, 0.0f, 0.0f);
     foc_fast_loop_enabled = 1U;
+}
+
+void JerryFOC_alignSensor(void)
+{
+    JerryFOC_alignStart();
+    HAL_Delay(3000);
+    JerryFOC_alignFinish();
 }
 
 float JerryFOC_getAngle(void)
@@ -416,6 +436,11 @@ float JerryFOC_getVelocity(void) { return filtered_velocity_global; }
 float JerryFOC_getPhaseCurrent_A(void) { return phase_current_a; }
 float JerryFOC_getPhaseCurrent_B(void) { return phase_current_b; }
 float JerryFOC_getIq(void) { return iq_current; }
+float JerryFOC_getId(void) { return id_current; }
+float JerryFOC_getElectricalAngle(void)
+{
+    return angle_source ? angle_source->getElectricalAngle() : 0.0f;
+}
 float JerryFOC_getTargetVelocity(void) { return JerryFOC_Target_Velocity; }
 float JerryFOC_getTargetPosition(void) { return JerryFOC_Target_Position; }
 

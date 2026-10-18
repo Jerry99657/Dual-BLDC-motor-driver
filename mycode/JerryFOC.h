@@ -65,6 +65,8 @@ void JerryFOC_useCurrentLoop(uint8_t enable); /* 0: 电压控制(默认), 1: PI 
 void JerryFOC_setVelocity(float target_vel);
 void JerryFOC_setCurrent(float target_Iq);
 void JerryFOC_alignSensor(void);
+void JerryFOC_alignStart(void);
+void JerryFOC_alignFinish(void);
 void JerryFOC_setPhaseVoltage(float Uq, float Ud, float angle_el);
 
 /* PID 与滤波计算 */
@@ -87,6 +89,8 @@ float JerryFOC_getTargetPosition(void);
 float JerryFOC_getPhaseCurrent_A(void);
 float JerryFOC_getPhaseCurrent_B(void);
 float JerryFOC_getIq(void);
+float JerryFOC_getId(void);
+float JerryFOC_getElectricalAngle(void);
 
 /* 10 kHz 快速环入口 */
 void JerryFOC_run(void);

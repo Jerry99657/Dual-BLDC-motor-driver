@@ -1,0 +1,56 @@
+# CMake / Ninja build directories (including host tests and UI previews)
+/build/
+/cmake-build-*/
+/Debug/
+/Release/
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+CTestTestfile.cmake
+Testing/
+build.ninja
+rules.ninja
+.ninja_deps
+.ninja_log
+compile_commands.json
+CMakeUserPresets.json
+
+# Compiler and firmware outputs
+*.o
+*.obj
+*.d
+*.su
+*.elf
+*.axf
+*.hex
+*.bin
+*.map
+*.lst
+*.list
+*.exe
+
+# Local editor indexes and temporary files
+.cache/
+.ccls-cache/
+*.code-workspace
+*.swp
+*.swo
+*~
+*.tmp
+*.bak
+*.log
+
+# Python host-test caches and local environments
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+
+# Windows / macOS metadata
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# Keep project configuration in Git: .ioc, .mxproject, .clangd,
+# CMakePresets.json, .vscode/, .settings/, sources and linker scripts.

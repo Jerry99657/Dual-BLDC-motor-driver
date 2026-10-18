@@ -1,4 +1,5 @@
 #include "MT6701.h"
+#include "kk_oled_driver.h"
 #include <stdint.h>
 
 uint8_t MT6701_Data[3] = {0};
@@ -90,6 +91,8 @@ void HAL_SPI_ErrorCallback(SPI_HandleTypeDef *hspi)
         CS_Disable;
         mt6701_transfer_active = 0U;
         mt6701_error_counter++;
+    } else if (hspi->Instance == SPI3) {
+        OLED_DriverHandleSpiError();
     }
 }
 

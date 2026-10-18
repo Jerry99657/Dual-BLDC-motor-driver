@@ -36,7 +36,14 @@
 #include "motor_params.h"
 #include "ws2812.h"
 #include "protocol.h"
+#include "app_storage.h"
+#include "kk_oled.h"
+#include "kk_oled_driver.h"
+#include "kk_ui.h"
+#include "ui_app.h"
+#include "ui_input.h"
 #include <math.h>
+#include <stdbool.h>
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -59,6 +66,11 @@
 /* USER CODE BEGIN PV */
 static uint8_t rx_byte;
 static volatile uint8_t g_need_align = 0U;
+static uint8_t ui_ok = 0U;
+static uint8_t g_aligning = 0U;
+static uint32_t g_align_start = 0U;
+
+#define ALIGN_TIME_MS 3000U
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -103,6 +115,18 @@ static void WS2812_UpdateStatus(void)
         color = 30U;                                          /* 蓝 */
     } else {
         color = (30U << 8);                                   /* 绿 */
+    }
+
+    if (!AppStorage_LedEnabled()) {
+        color = 0U;
+    } else {
+        uint8_t bright = AppStorage_LedBrightness();
+        if (bright < 100U) {
+            uint32_t r = (((color >> 16) & 0xFFU) * bright) / 100U;
+            uint32_t g = (((color >> 8) & 0xFFU) * bright) / 100U;
+            uint32_t b = ((color & 0xFFU) * bright) / 100U;
+            color = (r << 16) | (g << 8) | b;
+        }
     }
 
     if (color != last_color) {
@@ -167,12 +191,15 @@ int main(void)
   MX_TIM3_Init();
   MX_TIM8_Init();
   MX_USART1_UART_Init();
-  MX_USART2_UART_Init();
   MX_ADC2_Init();
   MX_I2C3_Init();
   MX_TIM2_Init();
   MX_USB_Device_Init();
   /* USER CODE BEGIN 2 */
+  /* 0. SPI2/SPI3 使用软件 NSS，清除 CubeMX 默认生成的 NSSP 位 */
+  CLEAR_BIT(SPI2->CR2, SPI_CR2_NSSP);
+  CLEAR_BIT(SPI3->CR2, SPI_CR2_NSSP);
+
   /* 1. 开启 DWT 计数器，提供微秒级延时 */
   CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
   DWT->CYCCNT = 0;
@@ -204,8 +231,24 @@ int main(void)
   /* 6. WS2812 状态灯 */
   WS2812_Init();
 
-  /* 7. 启动音效（必须在 ADC 注入组启动前播放） */
-  JerryFOC_playStartupSound();
+  /* 7. W25Q64 设置/日志与 KK_UI */
+  ui_input_init();
+  (void)AppStorage_Init();
+  if (AppStorage_IsReady()) {
+      AppStorage_Log(APP_LOG_BOOT, AppStorage_ReadID());
+  }
+
+  if (OLED_Init() == OLED_OK) {
+      /* 面板原生 80x160，旋转为 160x80 横屏 */
+      OLED_SetRotation(OLED_ROTATION_270);
+      ui_app_reset(HAL_GetTick());
+      if (KK_UI_Init(ui_app_get()) == KK_UI_OK) {
+          ui_ok = 1U;
+      }
+  }
+
+  /* 8. 启动音效（必须在 ADC 注入组启动前播放） */
+//   JerryFOC_playStartupSound();
 
   /* 8. 上电请求一次编码器零点标定 */
   g_need_align = 1U;
@@ -225,11 +268,50 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
+    uint32_t now = HAL_GetTick();
+    OLED_DriverService();
+    AppStorage_Service(now);
+    uint8_t ui_keys = ui_input_poll();
+
+    if (ui_ok) {
+        ui_app_update(now);
+        /* 存储服务可能耗时，动画与 DMA 超时判定必须使用新时间。 */
+        now = HAL_GetTick();
+        KK_UI_Status ui_status = KK_UI_Update(
+            now, (KK_UI_Input){.keys = ui_keys});
+        if (ui_status == KK_UI_DISPLAY_ERROR ||
+            ui_status == KK_UI_DISPLAY_TIMEOUT) {
+            ui_app_note_display_error();
+            (void)KK_UI_RecoverDisplay();
+        }
+        ui_app_process_events();
+    }
+
     if (g_need_align) {
         g_need_align = 0U;
         JerryFOC_setMode(JERRYFOC_MODE_TORQUE);
         JerryFOC_setCurrent(0.0f);
-        JerryFOC_alignSensor();
+
+        JerryFOC_alignStart();
+        g_aligning = 1U;
+        g_align_start = now;
+
+        if (ui_ok) {
+            (void)KK_UI_ShowToast("Aligning...", ALIGN_TIME_MS);
+            (void)KK_UI_Update(HAL_GetTick(), (KK_UI_Input){0U});
+        }
+    }
+
+    /* 标定不阻塞主循环，期间按键和界面仍然可用 */
+    if (g_aligning && (now - g_align_start) >= ALIGN_TIME_MS) {
+        g_aligning = 0U;
+        JerryFOC_alignFinish();
+        AppStorage_Log(APP_LOG_ALIGN_DONE,
+                       AngleSrc_Encoder_IsAligned() ? 1U : 0U);
+
+        if (ui_ok) {
+            KK_UI_Invalidate();
+        }
     }
 
     Telemetry_Service();

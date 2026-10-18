@@ -13,7 +13,8 @@
                            WS2812_RESET_LOW_SLOTS)
 
 static uint32_t ws2812_colors[WS2812_LED_COUNT] = {0U};
-static uint16_t ws2812_dma_buffer[WS2812_DMA_LENGTH];
+/* HAL_TIM_PWM_Start_DMA 以 32 位访问比较值，缓冲区必须是 uint32_t */
+static uint32_t ws2812_dma_buffer[WS2812_DMA_LENGTH];
 static volatile uint8_t ws2812_busy = 0U;
 static volatile uint8_t ws2812_pending = 0U;
 
@@ -72,7 +73,7 @@ void WS2812_Show(void)
     __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1, 0U);
 
     if (HAL_TIM_PWM_Start_DMA(&htim3, TIM_CHANNEL_1,
-                              (const uint32_t *)ws2812_dma_buffer,
+                              ws2812_dma_buffer,
                               (uint16_t)WS2812_DMA_LENGTH) != HAL_OK) {
         ws2812_busy = 0U;
         __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1, 0U);

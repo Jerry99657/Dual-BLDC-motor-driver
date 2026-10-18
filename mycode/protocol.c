@@ -59,15 +59,15 @@ void Protocol_HandleLine(char *line)
     if (strncmp(line, "Speed:", 6) == 0) {
         g_openloop_debug = 0U;
         JerryFOC_setMode(JERRYFOC_MODE_VELOCITY);
-        JerryFOC_setVelocity(atof(line + 6));
+        JerryFOC_setVelocity(strtof(line + 6, NULL));
     } else if (strncmp(line, "Angle:", 6) == 0) {
         g_openloop_debug = 0U;
         JerryFOC_setMode(JERRYFOC_MODE_POSITION);
-        JerryFOC_setPosition(atof(line + 6), 0.0f);
+        JerryFOC_setPosition(strtof(line + 6, NULL), 0.0f);
     } else if (strncmp(line, "Torque:", 7) == 0) {
         g_openloop_debug = 0U;
         JerryFOC_setMode(JERRYFOC_MODE_TORQUE);
-        JerryFOC_setCurrent(atof(line + 7));
+        JerryFOC_setCurrent(strtof(line + 7, NULL));
     } else if (strncmp(line, "OpenLoop:", 9) == 0) {
         /* 纯开环诊断：OpenLoop:速度,电压，例如 OpenLoop:30,6 */
         float speed = 10.0f;
@@ -76,10 +76,10 @@ void Protocol_HandleLine(char *line)
 
         if (comma) {
             *comma = '\0';
-            speed = atof(line + 9);
-            voltage = atof(comma + 1);
+            speed = strtof(line + 9, NULL);
+            voltage = strtof(comma + 1, NULL);
         } else {
-            speed = atof(line + 9);
+            speed = strtof(line + 9, NULL);
         }
 
         if (speed < 2.0f) {
