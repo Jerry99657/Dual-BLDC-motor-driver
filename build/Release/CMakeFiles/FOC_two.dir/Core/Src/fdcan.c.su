@@ -1,0 +1,3 @@
+D:/STM32/stm32cubemx_project/vscode/stm32g341vbt6/FOC_two/Core/Src/fdcan.c:30:6:MX_FDCAN1_Init	8	static
+D:/STM32/stm32cubemx_project/vscode/stm32g341vbt6/FOC_two/Core/Src/fdcan.c:68:6:HAL_FDCAN_MspInit	104	static
+D:/STM32/stm32cubemx_project/vscode/stm32g341vbt6/FOC_two/Core/Src/fdcan.c:109:6:HAL_FDCAN_MspDeInit	0	static

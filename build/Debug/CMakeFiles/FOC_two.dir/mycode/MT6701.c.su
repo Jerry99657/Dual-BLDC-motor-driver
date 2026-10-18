@@ -1,0 +1,14 @@
+D:/STM32/stm32cubemx_project/vscode/stm32g341vbt6/FOC_two/mycode/MT6701.c:21:16:MT6701_CalculateCrc6	24	static
+D:/STM32/stm32cubemx_project/vscode/stm32g341vbt6/FOC_two/mycode/MT6701.c:35:16:MT6701_RequestSample	16	static
+D:/STM32/stm32cubemx_project/vscode/stm32g341vbt6/FOC_two/mycode/MT6701.c:55:6:HAL_SPI_TxRxCpltCallback	32	static
+D:/STM32/stm32cubemx_project/vscode/stm32g341vbt6/FOC_two/mycode/MT6701.c:87:6:HAL_SPI_ErrorCallback	16	static
+D:/STM32/stm32cubemx_project/vscode/stm32g341vbt6/FOC_two/mycode/MT6701.c:96:6:MT6701_StartContinuous	8	static
+D:/STM32/stm32cubemx_project/vscode/stm32g341vbt6/FOC_two/mycode/MT6701.c:106:6:MT6701_StopContinuous	8	static
+D:/STM32/stm32cubemx_project/vscode/stm32g341vbt6/FOC_two/mycode/MT6701.c:116:9:MT6701_IsContinuous	4	static
+D:/STM32/stm32cubemx_project/vscode/stm32g341vbt6/FOC_two/mycode/MT6701.c:121:6:MT6701_Service	8	static
+D:/STM32/stm32cubemx_project/vscode/stm32g341vbt6/FOC_two/mycode/MT6701.c:131:9:MT6701_IsHealthy	4	static
+D:/STM32/stm32cubemx_project/vscode/stm32g341vbt6/FOC_two/mycode/MT6701.c:137:10:MT6701_GetRawAngle	4	static
+D:/STM32/stm32cubemx_project/vscode/stm32g341vbt6/FOC_two/mycode/MT6701.c:142:9:MT6701_GetStatus	4	static
+D:/STM32/stm32cubemx_project/vscode/stm32g341vbt6/FOC_two/mycode/MT6701.c:147:10:MT6701_GetSampleCounter	4	static
+D:/STM32/stm32cubemx_project/vscode/stm32g341vbt6/FOC_two/mycode/MT6701.c:152:10:MT6701_GetErrorCounter	4	static
+D:/STM32/stm32cubemx_project/vscode/stm32g341vbt6/FOC_two/mycode/MT6701.c:157:10:MT6701_GetSampleAgeCycles	4	static

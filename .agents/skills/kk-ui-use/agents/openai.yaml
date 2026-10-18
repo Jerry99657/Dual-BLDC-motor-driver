@@ -1,0 +1,6 @@
+interface:
+  display_name: "KK_UI 使用"
+  short_description: "安装含真实亮度与组件演示的标准 Demo，或构建产品界面"
+  default_prompt: "使用 $kk-ui-use 在当前工程安装配套标准 Demo；支持 OLED 对比度时接入亮度实时预览，并验证组件与波形页面。已有产品界面按明确需求修改。"
+policy:
+  allow_implicit_invocation: true

@@ -1,0 +1,8 @@
+{
+	"InstallScripts" : 
+	[
+		"D:/STM32/stm32cubemx_project/vscode/stm32g341vbt6/FOC_two/build/Debug/cmake_install.cmake",
+		"D:/STM32/stm32cubemx_project/vscode/stm32g341vbt6/FOC_two/build/Debug/cmake/stm32cubemx/cmake_install.cmake"
+	],
+	"Parallel" : false
+}

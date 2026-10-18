@@ -1,0 +1,10 @@
+D:/STM32/stm32cubemx_project/vscode/stm32g341vbt6/FOC_two/mycode/angle_src_encoder.c:28:13:reset_velocity_estimator	16	static
+D:/STM32/stm32cubemx_project/vscode/stm32g341vbt6/FOC_two/mycode/angle_src_encoder.c:38:14:_normalizeAngle	24	static
+D:/STM32/stm32cubemx_project/vscode/stm32g341vbt6/FOC_two/mycode/angle_src_encoder.c:44:14:angle_meas_electrical	16	static
+D:/STM32/stm32cubemx_project/vscode/stm32g341vbt6/FOC_two/mycode/angle_src_encoder.c:52:14:angle_meas_mechanical	4	static
+D:/STM32/stm32cubemx_project/vscode/stm32g341vbt6/FOC_two/mycode/angle_src_encoder.c:57:14:angle_meas_velocity	4	static
+D:/STM32/stm32cubemx_project/vscode/stm32g341vbt6/FOC_two/mycode/angle_src_encoder.c:69:14:AngleSrc_Encoder_Init	16	static
+D:/STM32/stm32cubemx_project/vscode/stm32g341vbt6/FOC_two/mycode/angle_src_encoder.c:84:6:AngleSrc_Encoder_Align	24	static
+D:/STM32/stm32cubemx_project/vscode/stm32g341vbt6/FOC_two/mycode/angle_src_encoder.c:103:6:AngleSrc_Encoder_Update	32	static
+D:/STM32/stm32cubemx_project/vscode/stm32g341vbt6/FOC_two/mycode/angle_src_encoder.c:152:9:AngleSrc_Encoder_IsAligned	4	static
+D:/STM32/stm32cubemx_project/vscode/stm32g341vbt6/FOC_two/mycode/angle_src_encoder.c:157:9:AngleSrc_Encoder_IsSource	16	static
