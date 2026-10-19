@@ -1,5 +1,0 @@
-D:/STM32/stm32cubemx_project/vscode/stm32g341vbt6/FOC_two/mycode/protocol.c:54:6:Protocol_HandleLine	40	static,ignoring_inline_asm
-D:/STM32/stm32cubemx_project/vscode/stm32g341vbt6/FOC_two/mycode/protocol.c:35:6:Protocol_Feed	24	static
-D:/STM32/stm32cubemx_project/vscode/stm32g341vbt6/FOC_two/mycode/protocol.c:113:6:Telemetry_Send	24	static
-D:/STM32/stm32cubemx_project/vscode/stm32g341vbt6/FOC_two/mycode/protocol.c:139:6:Telemetry_Service	16	static
-D:/STM32/stm32cubemx_project/vscode/stm32g341vbt6/FOC_two/mycode/protocol.c:155:6:Protocol_UsbTxComplete	0	static

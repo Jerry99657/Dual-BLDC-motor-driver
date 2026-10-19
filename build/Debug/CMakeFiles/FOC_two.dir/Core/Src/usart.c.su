@@ -1,3 +1,0 @@
-D:/STM32/stm32cubemx_project/vscode/stm32g341vbt6/FOC_two/Core/Src/usart.c:31:6:MX_USART1_UART_Init	8	static
-D:/STM32/stm32cubemx_project/vscode/stm32g341vbt6/FOC_two/Core/Src/usart.c:74:6:HAL_UART_MspInit	112	static
-D:/STM32/stm32cubemx_project/vscode/stm32g341vbt6/FOC_two/Core/Src/usart.c:118:6:HAL_UART_MspDeInit	16	static
