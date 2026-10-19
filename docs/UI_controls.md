@@ -70,9 +70,13 @@ Debug 的 FOC 文件使用 -Og，保留调试信息并缩减 Flash 与高频中�
 
 ## 固件识别与连发诊断
 
-本轮固件在 `About` 首行 `FW` 显示 **UI-R7**，用于确认板上已经运行当前构建。旧版本的 FW 在列表下方，需要向下滚动才能看见；不能仅凭首屏未显示就判断固件版本。
+本轮固件在 `About` 首行 `FW` 显示 **UI-R20-USB**，用于确认板上已经运行当前构建。此次修复 USB 遥测发送状态竞争和活动缓冲区被覆盖的问题，见 [USB_CDC_tx_recovery.md](USB_CDC_tx_recovery.md)。HSO CONTROL 期间，高于实测 45rpm 的正常减速继续使用 HSO；目标低于边界或要求反转时先减至实测 45rpm，再平滑返回编码器。改速幅度不再触发提前返回，Speed 指令仍用 rad/s。真正失锁先停机，反馈健康时新 Speed 可直接起转。Run 页先提交模式再提交目标。Status 的 Feedback 显示当前反馈来源，完整恢复规则见 [HSO_recovery.md](HSO_recovery.md)。H Gate 为当前校验原因，H Qual 为资格/保持计数，H Jitter 为角度暂停预算，H Reset 为上次角度清零误差，H Lost 保留上次异常原因，H Actual 为观测磁链，见 [ST_HSO_integration.md](ST_HSO_integration.md)。手动加载过载预算见 [2804_current_limits.md](2804_current_limits.md)。Status 的 I Trip、IU/IV/IW R/Z 和 ChipRev，解释及同步采样修复见 [current_adc_diagnostics.md](current_adc_diagnostics.md)。旧版本的 FW 在列表下方，需要向下滚动才能看见；不能仅凭首屏未显示就判断固件版本。
 
-`Status` 首屏显示两个计数：`KeyRpt` 是 Run/Run Steps 收到的连发事件数，持续按住加减键时应增加；`DispErr` 是显示刷新错误/超时进入恢复的次数。两者上电从零计数；Status 数字每 500 ms 更新，离开 Run/Run Steps 后仍保留，方便复查。
+`Status → Bus` 为 ADC 实测母线电压。`Drive` 显示采样/电流零点的具体状态或锁存故障，编码器在线与对齐另看 Encoder / Aligned。BusRaw 是最新母线原始值，BusCnt / FrameCnt 是规则组样本数 / 完整注入帧数，正常约每秒增加 2000 / 10000；ADC1Err / ADC2Err 显示 HAL 错误码。Enc2 显示第二路 MT6701 的健康状态和原始角度，Enc2Err 为其错误累计值。第二路目前只有诊断采样，没有启用功率输出。
+
+Run 在采样未就绪时显示具体原因并拒绝确认启动；运行中采样异常则停止。上电没有电机母线电源时仍连续测量，Bus 显示 `0.0 V`，Drive / Run 显示 `WAIT BUS`。稍后接通母线会更新读数，并在电流零点完成、母线稳定后继续初始化，无需因最初 0 V 而复位。没有新样本时 Bus 显示 `NO DATA`。运行后的真实故障显示 `ADC PAIR`、`FRAME TIMEOUT`、`BUS TIMEOUT`、`ADC ERROR`、`BUS LOST` 等首因；功率输出关闭，但母线检测继续。锁存故障不会随母线恢复自动解除，处理后重新启动开发板。详见 [ADC / PWM 应用适配记录](ADC_dual_motor_review.md)。
+
+`Status` 中的 `KeyRpt` 是 Run/Run Steps 收到的连发事件数，持续按住加减键时应增加；`DispErr` 是显示刷新错误/超时进入恢复的次数。两者上电从零计数；Status 数字每 500 ms 更新，离开 Run/Run Steps 后仍保留，方便复查。
 
 本轮实际复现了两条旧代码故障路径：刷新失败恢复后，按住 1 s 的目标仍只有 0.05（正常应为 0.30）；DMA 完成 IRQ 提前发生时，核心会保持 Busy。修复后，相应错误注入测试均通过。尚未取得板上计数或时序观测，因此不把这两条源码缺陷直接等同于已经证实的实物故障原因。
 
@@ -105,4 +109,4 @@ Debug 的 FOC 文件使用 -Og，保留调试信息并缩减 Flash 与高频中�
 
 尚未烧录或连接电机验证。实屏帧率、物理按键电平、实际负载下三模式运行和电流环参数需要上板确认；主机模拟不代表这些项目已经验收。
 
-最终构建占用（2026-10-19）：Debug Flash 130980 B / RAM 19584 B；Release Flash 93636 B / RAM 19280 B。Release 固件为 `build/Release/FOC_two.elf` 和同目录 `FOC_two.bin`。
+最终构建占用（2026-10-19，UI-R20-USB）：Debug Flash 113940 B / RAM 21344 B；Release Flash 112604 B / RAM 21048 B。Debug 保留 `-g3`，应用采用 `-Og`，HAL / USB / UI 等采用 `-Os`，HSO 适配与定点数学采用 `-O2`。固件分别为 `build/Debug/FOC_two.elf`、`build/Release/FOC_two.elf` 和各自同目录的 `FOC_two.bin`。HSO 的观察、磁链估算与接管操作见 [ST_HSO_integration.md](ST_HSO_integration.md)，铭牌电流修正及保护见 [2804_current_limits.md](2804_current_limits.md)。

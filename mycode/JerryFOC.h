@@ -91,6 +91,16 @@ float JerryFOC_getPhaseCurrent_B(void);
 float JerryFOC_getIq(void);
 float JerryFOC_getId(void);
 float JerryFOC_getElectricalAngle(void);
+uint8_t JerryFOC_isDriveReady(void);
+float JerryFOC_getBusVoltage(void);
+/* Experimental spinning takeover; encoder remains connected as a watchdog.
+ * Disabling returns to encoder with zero targets. Position uses encoder only. */
+uint8_t JerryFOC_useHSO(uint8_t enable);
+uint8_t JerryFOC_isHSOActive(void);
+uint8_t JerryFOC_hasHSOFault(void);
+const char *JerryFOC_getHSOFaultText(void); /* Loss history, cleared by next successful Use. */
+const char *JerryFOC_getFeedbackText(void); /* ENCODER / HSO / TO ENCODER / STOPPED. */
+uint8_t JerryFOC_isHSOReturning(void);
 
 /* 10 kHz 快速环入口 */
 void JerryFOC_run(void);

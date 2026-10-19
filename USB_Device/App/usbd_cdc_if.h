@@ -109,7 +109,8 @@ extern USBD_CDC_ItfTypeDef USBD_Interface_fops_FS;
 uint8_t CDC_Transmit_FS(uint8_t* Buf, uint16_t Len);
 
 /* USER CODE BEGIN EXPORTED_FUNCTIONS */
-
+/* Main-loop telemetry readiness. The CDC class owns the only TX busy state. */
+uint8_t CDC_TxReady_FS(void);
 /* USER CODE END EXPORTED_FUNCTIONS */
 
 /**

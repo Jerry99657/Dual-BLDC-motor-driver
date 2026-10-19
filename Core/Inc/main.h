@@ -65,6 +65,8 @@ void Error_Handler(void);
 #define LED2_GPIO_Port GPIOE
 #define MT6701_CSN_Pin GPIO_PIN_4
 #define MT6701_CSN_GPIO_Port GPIOA
+#define MT6701_CSN2_Pin GPIO_PIN_12
+#define MT6701_CSN2_GPIO_Port GPIOB
 #define KEY_Up_Pin GPIO_PIN_8
 #define KEY_Up_GPIO_Port GPIOD
 #define KEY_Right_Pin GPIO_PIN_9

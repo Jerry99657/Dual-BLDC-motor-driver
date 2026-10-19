@@ -59,6 +59,9 @@ void MX_GPIO_Init(void)
   HAL_GPIO_WritePin(GPIOA, MT6701_CSN_Pin|TFT3_CS_Pin, GPIO_PIN_SET);
 
   /*Configure GPIO pin Output Level */
+  HAL_GPIO_WritePin(MT6701_CSN2_GPIO_Port, MT6701_CSN2_Pin, GPIO_PIN_SET);
+
+  /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(GPIOD, W25_NSS_Pin|TFT3_RESET_Pin, GPIO_PIN_SET);
 
   /*Configure GPIO pin Output Level */
@@ -77,6 +80,13 @@ void MX_GPIO_Init(void)
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_MEDIUM;
   HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+
+  /*Configure GPIO pin : MT6701_CSN2_Pin */
+  GPIO_InitStruct.Pin = MT6701_CSN2_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_MEDIUM;
+  HAL_GPIO_Init(MT6701_CSN2_GPIO_Port, &GPIO_InitStruct);
 
   /*Configure GPIO pins : KEY_Up_Pin KEY_Right_Pin KEY_Down_Pin KEY_Left_Pin
                            KEY_OK_Pin KEY2_Pin */

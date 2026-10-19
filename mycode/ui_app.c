@@ -11,6 +11,8 @@
 #include "kk_oled.h"
 #include "kk_ui_draw.h"
 #include "MT6701.h"
+#include "motor_sampling.h"
+#include "st_hso.h"
 #include "ui_fonts.h"
 #include "ui_icons.h"
 
@@ -65,14 +67,31 @@ static char s_txt_id[24];
 static char s_txt_ia[24];
 static char s_txt_ib[24];
 static char s_txt_enc[16];
+static char s_txt_enc2[16];
+static char s_txt_enc2_err[16];
+static char s_txt_drive[16];
+static char s_txt_current_adc[3][24];
+static char s_txt_current_trip[24];
+static char s_txt_adc_revision[16];
 static char s_txt_align[16];
 static char s_txt_raw[16];
 static char s_txt_elec[24];
 static char s_txt_mech[24];
 static char s_txt_err[16];
 static char s_txt_bus[24];
+static char s_txt_bus_raw[16];
+static char s_txt_bus_count[16];
+static char s_txt_frame_count[16];
+static char s_txt_adc1_error[16];
+static char s_txt_adc2_error[16];
 static char s_txt_repeat[16];
 static char s_txt_display_errors[16];
+static char s_txt_hso[16], s_txt_hso_speed[24], s_txt_hso_error[24];
+static char s_txt_hso_flux[24], s_txt_hso_time[24];
+static char s_txt_hso_gate[16], s_txt_hso_qual[24], s_txt_hso_lost[16];
+static char s_txt_hso_flux_actual[24];
+static char s_txt_hso_jitter[24], s_txt_hso_reset[24];
+static char s_txt_feedback[16];
 static uint32_t s_input_repeats;
 static uint32_t s_display_errors;
 
@@ -122,9 +141,15 @@ static const char *mode_name(JerryFOC_ControlMode mode)
     }
 }
 
+static const char *drive_status_text(void)
+{
+    const char *sampling = MotorSampling_GetStatusText();
+    /* Keep an actual ADC/bus/current fault visible after leaving HSO. */
+    return JerryFOC_hasHSOFault() && strcmp(sampling, "READY") == 0 ? "HSO STOPPED" : sampling;
+}
+
 static void refresh_texts(void)
 {
-    const MotorParams *mp = JerryFOC_getMotorParams();
     char v[16];
     snprintf(s_txt_repeat, sizeof(s_txt_repeat), "%lu", (unsigned long)s_input_repeats);
     snprintf(s_txt_display_errors, sizeof(s_txt_display_errors), "%lu", (unsigned long)s_display_errors);
@@ -164,6 +189,36 @@ static void refresh_texts(void)
 
     snprintf(s_txt_enc, sizeof(s_txt_enc), "%s",
              MT6701_IsHealthy() ? "OK" : "ERROR");
+    MT6701_2_Snapshot encoder2;
+    MT6701_2_GetSnapshot(&encoder2);
+    snprintf(s_txt_enc2, sizeof(s_txt_enc2), "%s %u",
+             encoder2.healthy ? "OK" : "ERROR", (unsigned)encoder2.raw_angle);
+    snprintf(s_txt_enc2_err, sizeof(s_txt_enc2_err), "%lu", (unsigned long)encoder2.errors);
+    snprintf(s_txt_drive, sizeof(s_txt_drive), "%s",
+             drive_status_text());
+    StHsoSnapshot hso;
+    StHso_GetSnapshot(&hso);
+    snprintf(s_txt_feedback, sizeof(s_txt_feedback), "%s", JerryFOC_getFeedbackText());
+    snprintf(s_txt_hso_gate, sizeof(s_txt_hso_gate), "%s",
+             StHso_ReasonText(JerryFOC_isHSOActive() ? hso.reason : hso.entry_reason));
+    snprintf(s_txt_hso_qual, sizeof(s_txt_hso_qual), "%lu/200 ms %lu/20",
+             (unsigned long)(hso.qualified_samples / 10U), (unsigned long)hso.bad_samples);
+    snprintf(s_txt_hso_jitter, sizeof(s_txt_hso_jitter), "%lu/50 %lu/10",
+             (unsigned long)hso.qualify_paused_samples, (unsigned long)hso.qualify_bad_run);
+    fmt_fixed(v, sizeof(v), to_x10(hso.qualify_reset_angle_rad * 57.2957795f), 10);
+    snprintf(s_txt_hso_reset, sizeof(s_txt_hso_reset), "%s deg", v);
+    snprintf(s_txt_hso_lost, sizeof(s_txt_hso_lost), "%s", JerryFOC_getHSOFaultText());
+    fmt_fixed(v, sizeof(v), to_x10(hso.flux_wb * 1000.0f), 10);
+    snprintf(s_txt_hso_flux_actual, sizeof(s_txt_hso_flux_actual), "%s mWb", v);
+    snprintf(s_txt_hso, sizeof(s_txt_hso), "%s",
+             JerryFOC_isHSOActive() ? (JerryFOC_isHSOReturning() ? "RETURNING" : "CONTROL") :
+             (JerryFOC_hasHSOFault() ? "LOST" : StHso_StateText(hso.state)));
+    fmt_fixed(v, sizeof(v), to_x10(hso.velocity_rad_s), 10);
+    snprintf(s_txt_hso_speed, sizeof(s_txt_hso_speed), "%s rad/s", v);
+    fmt_fixed(v, sizeof(v), to_x10(hso.angle_error_rad * 57.2957795f), 10);
+    snprintf(s_txt_hso_error, sizeof(s_txt_hso_error), "%s deg", v);
+    snprintf(s_txt_hso_flux, sizeof(s_txt_hso_flux), "%lu uWb", (unsigned long)(hso.reference_flux_wb * 1000000.0f));
+    snprintf(s_txt_hso_time, sizeof(s_txt_hso_time), "%lu us / %lu", (unsigned long)(hso.max_control_cycles / 170U), (unsigned long)hso.overruns);
     snprintf(s_txt_align, sizeof(s_txt_align), "%s",
              AngleSrc_Encoder_IsAligned() ? "YES" : "NO");
     snprintf(s_txt_raw, sizeof(s_txt_raw), "%u",
@@ -178,8 +233,32 @@ static void refresh_texts(void)
     snprintf(s_txt_err, sizeof(s_txt_err), "%lu",
              (unsigned long)MT6701_GetErrorCounter());
 
-    fmt_fixed(v, sizeof(v), to_x10(mp->bus_voltage), 10);
-    snprintf(s_txt_bus, sizeof(s_txt_bus), "%s V", v);
+    MotorSamplingDiagnostics adc;
+    MotorSampling_GetDiagnostics(&adc);
+    snprintf(s_txt_adc_revision, sizeof(s_txt_adc_revision), "0x%04X", (unsigned)adc.silicon_revision);
+    for (unsigned i = 0U; i < 3U; ++i) {
+        snprintf(s_txt_current_adc[i], sizeof(s_txt_current_adc[i]), "%u / %u",
+                 (unsigned)adc.current_raw[i], (unsigned)adc.current_zero[i]);
+    }
+    if (adc.fault_phase != 0U) {
+        unsigned i = adc.fault_phase - 1U;
+        snprintf(s_txt_current_trip, sizeof(s_txt_current_trip), "%s %c %u",
+                 adc.fault_during_zero ? "ZERO" : "RUN", "UVW"[i],
+                 (unsigned)adc.fault_current_raw[i]);
+    } else {
+        snprintf(s_txt_current_trip, sizeof(s_txt_current_trip), "--");
+    }
+    if (adc.bus_fresh) {
+        fmt_fixed(v, sizeof(v), to_x10(adc.bus_voltage), 10);
+        snprintf(s_txt_bus, sizeof(s_txt_bus), "%s V", v);
+    } else {
+        snprintf(s_txt_bus, sizeof(s_txt_bus), "NO DATA");
+    }
+    snprintf(s_txt_bus_raw, sizeof(s_txt_bus_raw), "%u", (unsigned)adc.bus_raw);
+    snprintf(s_txt_bus_count, sizeof(s_txt_bus_count), "%lu", (unsigned long)adc.bus_samples);
+    snprintf(s_txt_frame_count, sizeof(s_txt_frame_count), "%lu", (unsigned long)adc.frame_samples);
+    snprintf(s_txt_adc1_error, sizeof(s_txt_adc1_error), "0x%lX", (unsigned long)adc.adc1_error);
+    snprintf(s_txt_adc2_error, sizeof(s_txt_adc2_error), "0x%lX", (unsigned long)adc.adc2_error);
 }
 
 /* ---------- 页面描述 ---------- */
@@ -211,6 +290,13 @@ static const KK_UI_MenuPage menu_pages[] = {
 
 static const KK_UI_InfoRow status_rows[] = {
     {"Mode",    s_txt_mode},
+    {"Bus",     s_txt_bus},
+    {"Drive",   s_txt_drive},
+    {"I Trip",  s_txt_current_trip},
+    {"IU R/Z",  s_txt_current_adc[0]},
+    {"IV R/Z",  s_txt_current_adc[1]},
+    {"IW R/Z",  s_txt_current_adc[2]},
+    {"ChipRev", s_txt_adc_revision},
     {"KeyRpt",  s_txt_repeat},
     {"DispErr", s_txt_display_errors},
     {"Target",  s_txt_target},
@@ -225,11 +311,29 @@ static const KK_UI_InfoRow status_rows[] = {
     {"Elec",    s_txt_elec},
     {"Mech",    s_txt_mech},
     {"Errors",  s_txt_err},
-    {"Bus",     s_txt_bus},
+    {"BusRaw",  s_txt_bus_raw},
+    {"BusCnt",  s_txt_bus_count},
+    {"FrameCnt",s_txt_frame_count},
+    {"ADC1Err", s_txt_adc1_error},
+    {"ADC2Err", s_txt_adc2_error},
+    {"Enc2",    s_txt_enc2},
+    {"Enc2Err", s_txt_enc2_err},
+    {"HSO",     s_txt_hso},
+    {"Feedback",s_txt_feedback},
+    {"H Gate",  s_txt_hso_gate},
+    {"H Qual",  s_txt_hso_qual},
+    {"H Jitter",s_txt_hso_jitter},
+    {"H Reset", s_txt_hso_reset},
+    {"H Lost",  s_txt_hso_lost},
+    {"H Speed", s_txt_hso_speed},
+    {"H Error", s_txt_hso_error},
+    {"H Flux",  s_txt_hso_flux},
+    {"H Actual",s_txt_hso_flux_actual},
+    {"H Time",  s_txt_hso_time},
 };
 
 static const KK_UI_InfoRow about_rows[] = {
-    {"FW",      "UI-R7"},
+    {"FW",      "UI-R20-USB"},
     {"MCU",     "STM32G431"},
     {"Motor",   "2804 BLDC"},
     {"Control", "10kHz FOC"},
@@ -297,6 +401,9 @@ static void stop_run(void)
 {
     uint32_t primask = __get_PRIMASK();
     __disable_irq();
+    /* Stop active HSO without erasing loss history. An unhealthy-feedback
+     * block remains until acknowledgement or a valid fresh motion command. */
+    if (JerryFOC_isHSOActive() && !JerryFOC_hasHSOFault()) (void)JerryFOC_useHSO(0U);
     g_openloop_debug = 0U;
     JerryFOC_setMode(JERRYFOC_MODE_TORQUE);
     JerryFOC_setVelocity(0.0f);
@@ -314,6 +421,9 @@ static void apply_run_target(void)
     __disable_irq();
     g_openloop_debug = 0U;
     JerryFOC_useCurrentLoop(s_current_loop ? 1U : 0U);
+    /* Set mode before target so recovery and speed-change policy apply to
+     * this command, including the first Run confirmation after an HSO stop. */
+    JerryFOC_setMode(s_run_mode);
     switch (s_run_mode) {
     case JERRYFOC_MODE_VELOCITY:
         JerryFOC_setVelocity((float)s_run_speed_x10 / 10.0f);
@@ -328,7 +438,6 @@ static void apply_run_target(void)
                                    s_run_voltage_x100) / 100.0f);
         break;
     }
-    JerryFOC_setMode(s_run_mode);
     __set_PRIMASK(primask);
 }
 
@@ -475,7 +584,8 @@ void ui_app_update(uint32_t now_ms)
         }
     }
 
-    if (s_run_active && (!MT6701_IsHealthy() || !AngleSrc_Encoder_IsAligned() ||
+    if (s_run_active && (!JerryFOC_isDriveReady() ||
+                         !MT6701_IsHealthy() || !AngleSrc_Encoder_IsAligned() ||
                          JerryFOC_getMode() != s_run_mode || g_openloop_debug)) {
         stop_run();
         s_pending_toast = "Motor stopped";
@@ -611,6 +721,7 @@ void KK_UI_CustomOnInput(KK_UI_PageId page, KK_UI_InputEvent event)
     }
     if (page != UI_PAGE_RUN) return;
     if (event.action == KK_UI_INPUT_BACK) {
+        if (JerryFOC_hasHSOFault()) (void)JerryFOC_useHSO(0U);
         stop_run(); /* 在退出动画开始前停止，不等待 OnLeave。 */
         (void)KK_UI_CustomRequestClose();
         return;
@@ -622,8 +733,14 @@ void KK_UI_CustomOnInput(KK_UI_PageId page, KK_UI_InputEvent event)
     }
     if (event.action == KK_UI_INPUT_OK) {
         bool changed = run_target_changed();
-        if (s_run_active && !changed) {
+        if (JerryFOC_hasHSOFault()) {
+            (void)JerryFOC_useHSO(0U);
             stop_run();
+            (void)KK_UI_ShowToast("HSO reset", 900U);
+        } else if (s_run_active && !changed) {
+            stop_run();
+        } else if (!JerryFOC_isDriveReady()) {
+            (void)KK_UI_ShowToast(MotorSampling_GetStatusText(), 900U);
         } else if (!MT6701_IsHealthy() || !AngleSrc_Encoder_IsAligned()) {
             (void)KK_UI_ShowToast("Encoder not ready", 900U);
         } else {
@@ -728,16 +845,20 @@ void KK_UI_CustomOnDraw(KK_UI_PageId page, int16_t x_offset,
             snprintf(buf, sizeof(buf), "Act %s rad/s", v);
     }
     OLED_DrawUTF8((int16_t)(4 + x_offset), 38, buf);
-    if (!MT6701_IsHealthy() || !AngleSrc_Encoder_IsAligned()) {
+    if (!JerryFOC_isDriveReady()) {
+        snprintf(buf, sizeof(buf), "%s", drive_status_text());
+    } else if (!MT6701_IsHealthy() || !AngleSrc_Encoder_IsAligned()) {
         snprintf(buf, sizeof(buf), "%s", MT6701_IsHealthy() ? "NOT ALIGNED" : "ENCODER ERROR");
     } else {
         fmt_fixed(v, sizeof(v), to_x100(JerryFOC_getIq()), 100);
         snprintf(buf, sizeof(buf), "Iq %s A", v);
     }
     OLED_DrawUTF8((int16_t)(4 + x_offset), 51, buf);
-    fmt_fixed(v, sizeof(v), s_run_steps[s_run_mode], s_run_mode == JERRYFOC_MODE_VELOCITY ? 10 : 100);
-    snprintf(buf, sizeof(buf), "Step %s", v);
-    OLED_DrawUTF8((int16_t)(W - 4 - OLED_GetUTF8Width(buf) + x_offset), 51, buf);
+    if (JerryFOC_isDriveReady() && MT6701_IsHealthy() && AngleSrc_Encoder_IsAligned()) {
+        fmt_fixed(v, sizeof(v), s_run_steps[s_run_mode], s_run_mode == JERRYFOC_MODE_VELOCITY ? 10 : 100);
+        snprintf(buf, sizeof(buf), "Step %s", v);
+        OLED_DrawUTF8((int16_t)(W - 4 - OLED_GetUTF8Width(buf) + x_offset), 51, buf);
+    }
     OLED_DrawHLine(x_offset, 65, (uint16_t)W);
     OLED_DrawUTF8((int16_t)(4 + x_offset), 67,
                  s_run_active && !changed ? "OK:Cancel  K2:Back" : "OK:Confirm K2:Back");

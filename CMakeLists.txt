@@ -37,6 +37,12 @@ add_executable(${CMAKE_PROJECT_NAME})
 # Add STM32CubeMX generated sources
 add_subdirectory(cmake/stm32cubemx)
 
+# Keep debug symbols and useful stepping in application code. HAL and USB
+# drivers use size optimization so the Debug image fits the real 128 KiB Flash.
+target_compile_options(${CMAKE_PROJECT_NAME} PRIVATE $<$<CONFIG:Debug>:-Og>)
+target_compile_options(STM32_Drivers PRIVATE $<$<CONFIG:Debug>:-Os>)
+target_compile_options(USB_Device_Library PRIVATE $<$<CONFIG:Debug>:-Os>)
+
 # Link directories setup
 target_link_directories(${CMAKE_PROJECT_NAME} PRIVATE
     # Add user defined library search paths
@@ -48,6 +54,9 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     mycode/MT6701.c
     mycode/angle_src_encoder.c
     mycode/motor_params.c
+    mycode/motor_sampling.c
+    mycode/st_hso.c
+    ThirdParty/ST_HSO/fixpmath.c
     mycode/ws2812.c
     mycode/protocol.c
 
@@ -100,14 +109,11 @@ set(FOC_UI_SOURCES
 set_source_files_properties(${FOC_UI_SOURCES}
     PROPERTIES COMPILE_OPTIONS "-Os")
 
-# 10 kHz FOC 在 Debug 中使用保留调试信息的 -Og；-O0 占用过多 Flash，
-# 也会增加高频中断的执行时间，挤占按键轮询和 UI 动画的主循环时间。
-set_source_files_properties(mycode/JerryFOC.c
-    PROPERTIES COMPILE_OPTIONS "$<$<CONFIG:Debug>:-Og>")
-
 # Add include paths
 target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
     mycode
+    mycode/st_hso_port
+    ThirdParty/ST_HSO
     mycode/kk_oled/include
     mycode/kk_oled/graphics
     mycode/kk_oled/driver
@@ -128,9 +134,14 @@ list(REMOVE_ITEM CMAKE_C_IMPLICIT_LINK_LIBRARIES ob)
 # Add linked libraries
 target_link_libraries(${CMAKE_PROJECT_NAME}
     stm32cubemx
+    ${CMAKE_CURRENT_SOURCE_DIR}/ThirdParty/ST_HSO/libHSO.a
+    ${CMAKE_CURRENT_SOURCE_DIR}/ThirdParty/ST_HSO/libImpedCorr.a
 
     # Add user defined libraries
 )
+
+set_source_files_properties(mycode/st_hso.c ThirdParty/ST_HSO/fixpmath.c
+    PROPERTIES COMPILE_OPTIONS "-O2")
 
 # 让 IDE 的常规构建同步生成最新 BIN，避免只更新 ELF 后误用旧固件。
 add_custom_command(TARGET ${CMAKE_PROJECT_NAME} POST_BUILD

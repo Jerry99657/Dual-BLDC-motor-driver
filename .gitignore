@@ -1,5 +1,5 @@
 # CMake / Ninja build directories (including host tests and UI previews)
-/build/
+/build/*
 /cmake-build-*/
 /Debug/
 /Release/
@@ -54,3 +54,16 @@ Desktop.ini
 
 # Keep project configuration in Git: .ioc, .mxproject, .clangd,
 # CMakePresets.json, .vscode/, .settings/, sources and linker scripts.
+
+# Keep final Debug / Release firmware backups; ignore their intermediates.
+# Reopen only these directories so other build outputs stay ignored.
+!/build/Debug/
+!/build/Release/
+/build/Debug/*
+/build/Release/*
+!/build/Debug/*.elf
+!/build/Debug/*.bin
+!/build/Debug/*.map
+!/build/Release/*.elf
+!/build/Release/*.bin
+!/build/Release/*.map

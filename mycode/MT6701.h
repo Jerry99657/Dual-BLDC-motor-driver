@@ -29,4 +29,18 @@ uint32_t MT6701_GetSampleCounter(void);
 uint32_t MT6701_GetErrorCounter(void);
 uint16_t MT6701_GetSampleAgeCycles(void);
 
+/* M2 diagnostic input on SPI2 / MT6701_CSN2 (PB12). SPI2 is shared with
+ * W25Q64: call Service ONLY from the same main loop as AppStorage_Service.
+ * This input is not yet the real-time angle source of an M2 FOC controller. */
+typedef struct {
+    uint16_t raw_angle;
+    uint8_t status;
+    uint8_t healthy;
+    uint32_t samples;
+    uint32_t errors;
+    float angle;
+} MT6701_2_Snapshot;
+void MT6701_2_Service(uint32_t now_ms);
+void MT6701_2_GetSnapshot(MT6701_2_Snapshot *out);
+
 #endif /* __MT6701_H_ */

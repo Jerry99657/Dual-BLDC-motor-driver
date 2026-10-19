@@ -1,0 +1,55 @@
+{
+  "package": "X-CUBE-MCSDK 6.4.2 / Utilities/PC_Software/STMCWB/assets/MotorControlPack/MotorControl.zip",
+  "files": [
+    {
+      "file": "fixpmath.c",
+      "source": "MCSDK/MCLib/Any/Src/fixpmath.c",
+      "sha256": "714787803e5000e83c198a35ebd9c37a69ffec6d19c8bed7a803158fde86e753"
+    },
+    {
+      "file": "fixpmath.h",
+      "source": "MCSDK/MCLib/Any/Inc/fixpmath.h",
+      "sha256": "c2bd9bc140f698d3c531d53e2a7e6e8aed9b25ba537b3be675fb330d27cd859e"
+    },
+    {
+      "file": "fixpmath_types.h",
+      "source": "MCSDK/MCLib/Any/Inc/fixpmath_types.h",
+      "sha256": "ecd74c1fbfa09b0f6f3a542545e0dfcc00abc2f68883a6d76fb74b296460f7e2"
+    },
+    {
+      "file": "fixpmpyxufloat.h",
+      "source": "MCSDK/MCLib/Any/Inc/fixpmpyxufloat.h",
+      "sha256": "ee773a77ea5abf8e0b7e5edac85408af734699b042e3286b815d3d771f3da2af"
+    },
+    {
+      "file": "hso.h",
+      "source": "MCSDK/MCLib/Any/Inc/hso.h",
+      "sha256": "ed6f772efdf2d29cd1a7d180ce1397cdebf2284f54dd43d49ad261a8f631c71c"
+    },
+    {
+      "file": "impedcorr.h",
+      "source": "MCSDK/MCLib/Any/Inc/impedcorr.h",
+      "sha256": "d0a9e0ea0e9543f840d8f090f341f06242734a862b42c5f7deef8e9bd9f916bf"
+    },
+    {
+      "file": "libHSO.a",
+      "source": "libHSO/libHSO.a",
+      "sha256": "0247ac0fa79d0dd3dcd7f030897a674f78f044a4ab9205f856a3ae1a59aca092"
+    },
+    {
+      "file": "libImpedCorr.a",
+      "source": "libHSO/libImpedCorr.a",
+      "sha256": "7b0b06ca397b8524357dcc280d2d4aef0686d79d81b0f76e54d6e19438e2a2d8"
+    },
+    {
+      "file": "mathlib.c",
+      "source": "MCSDK/MCLib/Any/Src/mathlib.c",
+      "sha256": "27ad81f2695a0145b12f456b69d59a94b64ba5ad0c47d231fde4de86cf2f53d0"
+    },
+    {
+      "file": "mathlib.h",
+      "source": "MCSDK/MCLib/Any/Inc/mathlib.h",
+      "sha256": "7d173110b9b6280fdb2c0ad652de182218cec804806888c1459a47e28dfd80f6"
+    }
+  ]
+}

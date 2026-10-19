@@ -9,12 +9,11 @@
 /* 命令行输入：USART1 和 USB CDC 共用 */
 void Protocol_Feed(uint8_t source, const uint8_t *data, uint32_t len);
 void Protocol_HandleLine(char *line);
+/* Last HSO command: 1=accepted, -1=unknown, -2=invalid parameter, -3=not ready. */
+int8_t Protocol_GetHsoResult(void);
 
 /* 遥测输出：USART1 立即发送，USB CDC 由主循环发送 */
 void Telemetry_Send(const uint8_t *data, uint16_t len);
 void Telemetry_Service(void);
-
-/* 由 usbd_cdc_if.c 的 CDC_TransmitCplt_FS 调用 */
-void Protocol_UsbTxComplete(void);
 
 #endif /* __PROTOCOL_H */

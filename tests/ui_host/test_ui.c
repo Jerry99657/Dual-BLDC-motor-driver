@@ -8,11 +8,18 @@
 #include "kk_ui_internal.h"
 #include "kk_oled_internal.h"
 #include "JerryFOC.h"
+#include "MT6701.h"
+#include "motor_sampling.h"
+#include "st_hso.h"
 #include "app_storage.h"
 
 GPIO_TypeDef host_gpio = {0xFFFFU};
 static uint32_t tick, dma_done;
-static bool dma_busy, healthy = true, aligned = true;
+static bool dma_busy, healthy = true, aligned = true, drive_ready = true;
+static bool hso_active, hso_fault;
+static bool bus_data = true;
+static float bus_voltage = 24.0f;
+static const char *unready_status = "FRAME TIMEOUT";
 static unsigned submissions, frame_changes;
 static uint8_t displayed[OLED_BUFFER_SIZE];
 static FILE *record_file;
@@ -32,6 +39,30 @@ GPIO_PinState HAL_GPIO_ReadPin(GPIO_TypeDef *port, uint16_t pin) {
     return (port->pins & pin) ? GPIO_PIN_SET : GPIO_PIN_RESET;
 }
 uint8_t MT6701_IsHealthy(void) { return healthy; }
+void MT6701_2_GetSnapshot(MT6701_2_Snapshot *out) {
+    *out=(MT6701_2_Snapshot){.healthy=1,.raw_angle=456};
+}
+uint8_t JerryFOC_isDriveReady(void) { return drive_ready && !hso_fault; }
+uint8_t JerryFOC_isHSOActive(void) { return hso_active; }
+uint8_t JerryFOC_hasHSOFault(void) { return hso_fault; }
+uint8_t JerryFOC_isHSOReturning(void) { return 0; }
+const char *JerryFOC_getFeedbackText(void) { return hso_active ? "HSO" : "ENCODER"; }
+const char *JerryFOC_getHSOFaultText(void) { return hso_fault ? "ANGLE" : "--"; }
+uint8_t JerryFOC_useHSO(uint8_t en) {
+    hso_active=en;
+    if(!en) { hso_fault=false; JerryFOC_Target_Iq=JerryFOC_Target_Velocity=0; }
+    return 1;
+}
+void StHso_GetSnapshot(StHsoSnapshot *out) { *out=(StHsoSnapshot){.state=ST_HSO_WAIT_PARAM}; }
+const char *StHso_StateText(StHsoState state) { (void)state; return "WAIT FLUX"; }
+const char *StHso_ReasonText(StHsoReason reason) { (void)reason; return "OK"; }
+float JerryFOC_getBusVoltage(void) { return bus_voltage; }
+const char *MotorSampling_GetStatusText(void) { return drive_ready ? "READY" : unready_status; }
+void MotorSampling_GetDiagnostics(MotorSamplingDiagnostics *out) {
+    *out=(MotorSamplingDiagnostics){.bus_fresh=bus_data,.bus_voltage=bus_voltage,.bus_raw=2707,.bus_samples=tick*2,.frame_samples=tick*10,
+        .current_raw={2047,2048,2049},.current_zero={2046,2047,2048},
+        .fault_current_raw={2047,0,2049},.fault_phase=2,.fault_during_zero=true,.silicon_revision=0x2002};
+}
 uint8_t AngleSrc_Encoder_IsAligned(void) { return aligned; }
 uint16_t MT6701_GetRawAngle(void) { return 123; }
 uint32_t MT6701_GetErrorCounter(void) { return 0; }
@@ -105,7 +136,9 @@ static void settle(void) { step(0,600); }
 static void back(void) { press(KK_UI_KEY_BACK); settle(); }
 static void reset(void) {
     memset(&settings,0,sizeof(settings)); settings.led_brightness=100;
-    healthy=true; aligned=true; mode=JERRYFOC_MODE_TORQUE;
+    healthy=true; aligned=true; drive_ready=true; bus_data=true; bus_voltage=24.0f; mode=JERRYFOC_MODE_TORQUE;
+    unready_status="FRAME TIMEOUT";
+    hso_active=hso_fault=false;
     JerryFOC_Target_Iq=JerryFOC_Target_Velocity=JerryFOC_Target_Position=0; angle=0; current_loop=0;
     OLED_Abort(); assert(OLED_Init()==OLED_OK); OLED_SetRotation(OLED_ROTATION_270);
     ui_app_reset(tick); assert(KK_UI_Init(ui_app_get())==KK_UI_OK); settle();
@@ -154,6 +187,12 @@ static void adjust_editor(int16_t delta) {
     assert(kk_ui.overlay.type==KK_UI_OVERLAY_INT && kk_ui.overlay.editing);
     assert(KK_UI_Update(tick,(KK_UI_Input){.encoder_delta=delta})==KK_UI_OK);
 }
+static const char *status_value(const char *name) {
+    const KK_UI_InfoPage *page=&ui_app_get()->info_pages[0];
+    for(unsigned i=0;i<page->row_count;++i)
+        if(strcmp(page->rows[i].name,name)==0) return page->rows[i].value;
+    assert(0); return "";
+}
 int main(void) {
     ui_input_init(); assert(ui_input_poll()==0);
     host_gpio.pins &= ~KEY2_Pin; assert(ui_input_poll()==KK_UI_KEY_BACK);
@@ -164,6 +203,23 @@ int main(void) {
         assert_home_continuity(KK_UI_KEY_RIGHT);
         settle(); assert_home_continuity(KK_UI_KEY_LEFT);
     }
+    reset();
+    assert(strcmp(status_value("Bus"),"24.0 V")==0);
+    assert(strcmp(status_value("Drive"),"READY")==0);
+    assert(strcmp(status_value("IU R/Z"),"2047 / 2046")==0);
+    assert(strcmp(status_value("IV R/Z"),"2048 / 2047")==0);
+    assert(strcmp(status_value("IW R/Z"),"2049 / 2048")==0);
+    assert(strcmp(status_value("I Trip"),"ZERO V 0")==0);
+    assert(strcmp(status_value("ChipRev"),"0x2002")==0);
+    assert(strcmp(status_value("Enc2"),"OK 456")==0);
+    assert(strcmp(status_value("Enc2Err"),"0")==0);
+    bus_voltage=0; drive_ready=false; unready_status="WAIT BUS"; settle();
+    assert(strcmp(status_value("Bus"),"0.0 V")==0 && strcmp(status_value("Drive"),"WAIT BUS")==0);
+    press(KK_UI_KEY_OK); settle(); snapshot("run-wait-bus");
+    press(KK_UI_KEY_UP); press(KK_UI_KEY_OK); assert(JerryFOC_Target_Iq==0);
+    bus_voltage=11.9f; unready_status="FRAME TIMEOUT"; settle();
+    assert(strcmp(status_value("Bus"),"11.9 V")==0 && strcmp(status_value("Drive"),"FRAME TIMEOUT")==0);
+    bus_data=false; settle(); assert(strcmp(status_value("Bus"),"NO DATA")==0);
     reset();
     for(unsigned i=0;i<12;++i) {
         assert_home_continuity(i<7 ? KK_UI_KEY_RIGHT : KK_UI_KEY_LEFT);
@@ -400,6 +456,13 @@ int main(void) {
     assert(JerryFOC_Target_Iq==0);
     healthy=true; press(KK_UI_KEY_OK);
     assert(fabsf(JerryFOC_Target_Iq-0.10f)<0.001f);
+    /* A lost ADC frame / VBUS stops Run, and a changed draft cannot restart it. */
+    drive_ready=false; step(0,1);
+    assert(mode==JERRYFOC_MODE_TORQUE && JerryFOC_Target_Iq==0);
+    press(KK_UI_KEY_UP); press(KK_UI_KEY_OK);
+    assert(JerryFOC_Target_Iq==0);
+    drive_ready=true; press(KK_UI_KEY_OK);
+    assert(fabsf(JerryFOC_Target_Iq-0.15f)<0.001f);
     /* Run Steps: repeat after settling and when the hold starts during entry. */
     for(unsigned early=0;early<2;++early) {
         reset(); press(KK_UI_KEY_RIGHT); press(KK_UI_KEY_OK); settle();
@@ -448,10 +511,32 @@ int main(void) {
     step(KK_UI_KEY_LEFT,1000); step(0,30); press(KK_UI_KEY_OK); settle();
     assert(settings.torque_step_x100==5);
     const KK_UI_InfoPage *status=&ui_app_get()->info_pages[0];
+    assert(strcmp(status_value("HSO"),"WAIT FLUX")==0);
+    assert(strcmp(status_value("H Flux"),"0 uWb")==0);
+    assert(strcmp(status_value("H Time"),"0 us / 0")==0);
+    assert(strcmp(status_value("H Gate"),"OK")==0);
+    assert(strcmp(status_value("Feedback"),"ENCODER")==0);
+    assert(strcmp(status_value("H Qual"),"0/200 ms 0/20")==0);
+    assert(strcmp(status_value("H Jitter"),"0/50 0/10")==0);
+    assert(strcmp(status_value("H Reset"),"0.0 deg")==0);
+    assert(strcmp(status_value("H Lost"),"--")==0);
     for(unsigned row=0;row<status->row_count;++row) {
         if(strcmp(status->rows[row].name,"DispErr")==0) assert(strcmp(status->rows[row].value,"2")==0);
         if(strcmp(status->rows[row].name,"KeyRpt")==0) assert(strcmp(status->rows[row].value,"0")!=0);
     }
+    /* HSO fault acknowledgement is explicit and never restarts the motor. */
+    reset(); press(KK_UI_KEY_OK); settle();
+    press(KK_UI_KEY_UP); press(KK_UI_KEY_OK); settle();
+    hso_active=hso_fault=true; settle();
+    assert(hso_fault && JerryFOC_Target_Iq==0);
+    assert(strcmp(status_value("H Lost"),"ANGLE")==0);
+    drive_ready=false; unready_status="M1 OVERLOAD"; settle();
+    assert(strcmp(status_value("Drive"),"M1 OVERLOAD")==0); /* Do not mask the root fault. */
+    drive_ready=true; settle();
+    press(KK_UI_KEY_OK); settle();
+    assert(!hso_fault && !hso_active && JerryFOC_Target_Iq==0);
+    press(KK_UI_KEY_OK); settle();
+    hso_active=true; back(); assert(!hso_active && JerryFOC_Target_Iq==0);
     /* Export the user's two exact home sequences and rapid reversals. */
     const char *record_paths[]={"home-forward.frames","home-reverse.frames","home-rapid.frames"};
     for(unsigned sequence=0;sequence<3;++sequence) {

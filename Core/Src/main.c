@@ -34,6 +34,8 @@
 #include "MT6701.h"
 #include "angle_src_encoder.h"
 #include "motor_params.h"
+#include "motor_sampling.h"
+#include "st_hso.h"
 #include "ws2812.h"
 #include "protocol.h"
 #include "app_storage.h"
@@ -97,7 +99,7 @@ void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
 }
 
 /* 单颗 WS2812 只显示状态：
- *   红   = 编码器异常
+ *   红   = 编码器或 ADC/母线采样异常
  *   黄   = 编码器正常但尚未完成零点标定
  *   绿   = 已标定、待机
  *   蓝   = 正在运行（有速度）
@@ -107,7 +109,7 @@ static void WS2812_UpdateStatus(void)
     static uint32_t last_color = 0xFFFFFFFFU;
     uint32_t color;
 
-    if (!MT6701_IsHealthy()) {
+    if (!MotorSampling_IsReady() || !MT6701_IsHealthy()) {
         color = (30U << 16);                                  /* 红 */
     } else if (!AngleSrc_Encoder_IsAligned()) {
         color = (30U << 16) | (15U << 8);                     /* 黄 */
@@ -195,6 +197,7 @@ int main(void)
   MX_I2C3_Init();
   MX_TIM2_Init();
   MX_USB_Device_Init();
+  MX_TIM6_Init();
   /* USER CODE BEGIN 2 */
   /* 0. SPI2/SPI3 使用软件 NSS，清除 CubeMX 默认生成的 NSSP 位 */
   CLEAR_BIT(SPI2->CR2, SPI_CR2_NSSP);
@@ -205,33 +208,22 @@ int main(void)
   DWT->CYCCNT = 0;
   DWT->CTRL |= DWT_CTRL_CYCCNTENA_Msk;
 
-  /* 2. 启动 TIM1 六路 PWM：CHxN 和 CHx 都要启动 */
-  HAL_TIMEx_PWMN_Start(&htim1, TIM_CHANNEL_1);
-  HAL_TIMEx_PWMN_Start(&htim1, TIM_CHANNEL_2);
-  HAL_TIMEx_PWMN_Start(&htim1, TIM_CHANNEL_3);
-  HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_1);
-  HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_2);
-  HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_3);
-
-  /* 3. MT6701 定频采样与串口接收 */
+  /* 2. MT6701 定频采样与串口接收 */
   MT6701_StartContinuous();
   HAL_UART_Receive_IT(&huart1, &rx_byte, 1U);
 
-  /* 4. ADC 上电自校准 */
-  HAL_ADCEx_Calibration_Start(&hadc1, ADC_SINGLE_ENDED);
-  HAL_ADCEx_Calibration_Start(&hadc2, ADC_SINGLE_ENDED);
-
-  /* 5. 角度源与电机 */
+  /* 3. 角度源与电机 */
   AngleSource *encoder_src = AngleSrc_Encoder_Init(MOTOR_2804.pole_pairs);
   JerryFOC_setAngleSource(encoder_src);
+  StHso_Init(&MOTOR_2804);
   JerryFOC_useCurrentLoop(0U);          /* 2804 默认电压模式 */
   JerryFOC_setMode(JERRYFOC_MODE_TORQUE);
   JerryFOC_setCurrent(0.0f);
 
-  /* 6. WS2812 状态灯 */
+  /* 4. WS2812 状态灯 */
   WS2812_Init();
 
-  /* 7. W25Q64 设置/日志与 KK_UI */
+  /* 5. W25Q64 设置/日志与 KK_UI */
   ui_input_init();
   (void)AppStorage_Init();
   if (AppStorage_IsReady()) {
@@ -253,12 +245,20 @@ int main(void)
   /* 8. 上电请求一次编码器零点标定 */
   g_need_align = 1U;
 
-  /* 9. 注入组：从机先启动，主机后启动 */
-  HAL_ADCEx_InjectedStart_IT(&hadc2);
-  HAL_ADCEx_InjectedStart_IT(&hadc1);
+  /* Acquisition runs even with no motor supply. Service enables M1 only
+   * after zero calibration and stable VBUS. M2 power remains disabled. */
+  if (!MotorSampling_Start()) {
+      /* A hardware/HAL startup failure keeps power disabled; 0 V is NOT a
+       * startup failure and continues to be measured until VBUS is connected. */
+      g_need_align = 0U;
+      if (ui_ok) (void)KK_UI_ShowToast(MotorSampling_GetStatusText(), 1800U);
+  }
 
   /* 10. 1 ms 速度/位置外环 */
-  HAL_TIM_Base_Start_IT(&htim2);
+  if (HAL_TIM_Base_Start_IT(&htim2) != HAL_OK) {
+      MotorSampling_Stop();
+      Error_Handler();
+  }
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -269,8 +269,11 @@ int main(void)
 
     /* USER CODE BEGIN 3 */
     uint32_t now = HAL_GetTick();
+    MotorSampling_Service();
     OLED_DriverService();
     AppStorage_Service(now);
+    MT6701_2_Service(HAL_GetTick());
+    now = HAL_GetTick();
     uint8_t ui_keys = ui_input_poll();
 
     if (ui_ok) {
@@ -287,7 +290,7 @@ int main(void)
         ui_app_process_events();
     }
 
-    if (g_need_align) {
+    if (g_need_align && MotorSampling_IsReady() && MotorSampling_IsCalibrated()) {
         g_need_align = 0U;
         JerryFOC_setMode(JERRYFOC_MODE_TORQUE);
         JerryFOC_setCurrent(0.0f);
@@ -303,7 +306,8 @@ int main(void)
     }
 
     /* 标定不阻塞主循环，期间按键和界面仍然可用 */
-    if (g_aligning && (now - g_align_start) >= ALIGN_TIME_MS) {
+    if (g_aligning && (!MotorSampling_IsReady() ||
+        (now - g_align_start) >= ALIGN_TIME_MS)) {
         g_aligning = 0U;
         JerryFOC_alignFinish();
         AppStorage_Log(APP_LOG_ALIGN_DONE,
@@ -379,6 +383,9 @@ void Error_Handler(void)
 {
   /* USER CODE BEGIN Error_Handler_Debug */
   /* User can add his own implementation to report the HAL error return state */
+  /* Also safe when initialization failed before timer clocks were enabled. */
+  if (htim1.Instance != NULL) __HAL_TIM_MOE_DISABLE_UNCONDITIONALLY(&htim1);
+  if (htim8.Instance != NULL) __HAL_TIM_MOE_DISABLE_UNCONDITIONALLY(&htim8);
   __disable_irq();
   while (1)
   {

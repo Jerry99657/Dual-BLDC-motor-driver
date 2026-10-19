@@ -169,7 +169,6 @@ static int8_t CDC_DeInit_FS(void)
 {
   /* USER CODE BEGIN 4 */
   g_usb_cdc_ready = 0U;
-  Protocol_UsbTxComplete();
   return (USBD_OK);
   /* USER CODE END 4 */
 }
@@ -184,6 +183,8 @@ static int8_t CDC_DeInit_FS(void)
 static int8_t CDC_Control_FS(uint8_t cmd, uint8_t* pbuf, uint16_t length)
 {
   /* USER CODE BEGIN 5 */
+  UNUSED(pbuf);
+  UNUSED(length);
   switch(cmd)
   {
     case CDC_SEND_ENCAPSULATED_COMMAND:
@@ -287,12 +288,23 @@ uint8_t CDC_Transmit_FS(uint8_t* Buf, uint16_t Len)
 {
   uint8_t result = USBD_OK;
   /* USER CODE BEGIN 7 */
-  USBD_CDC_HandleTypeDef *hcdc = (USBD_CDC_HandleTypeDef*)hUsbDeviceFS.pClassData;
-  if (hcdc->TxState != 0){
-    return USBD_BUSY;
+  /* Prevent reset/deinit from freeing pClassData between checking and use.
+   * No wait/retry here; motor control must never wait for the USB host. */
+  uint32_t primask = __get_PRIMASK();
+  __disable_irq();
+  if (!g_usb_cdc_ready || hUsbDeviceFS.dev_state != USBD_STATE_CONFIGURED ||
+      hUsbDeviceFS.pClassData == NULL || Buf == NULL || Len == 0U) {
+    result = USBD_FAIL;
+  } else {
+    USBD_CDC_HandleTypeDef *hcdc = (USBD_CDC_HandleTypeDef*)hUsbDeviceFS.pClassData;
+    if (hcdc->TxState != 0U) {
+      result = USBD_BUSY;
+    } else {
+      USBD_CDC_SetTxBuffer(&hUsbDeviceFS, Buf, Len);
+      result = USBD_CDC_TransmitPacket(&hUsbDeviceFS);
+    }
   }
-  USBD_CDC_SetTxBuffer(&hUsbDeviceFS, Buf, Len);
-  result = USBD_CDC_TransmitPacket(&hUsbDeviceFS);
+  __set_PRIMASK(primask);
   /* USER CODE END 7 */
   return result;
 }
@@ -316,13 +328,23 @@ static int8_t CDC_TransmitCplt_FS(uint8_t *Buf, uint32_t *Len, uint8_t epnum)
   UNUSED(Buf);
   UNUSED(Len);
   UNUSED(epnum);
-  Protocol_UsbTxComplete();
+  /* USBD_CDC_DataIn has already cleared TxState. No second busy flag. */
   /* USER CODE END 13 */
   return result;
 }
 
 /* USER CODE BEGIN PRIVATE_FUNCTIONS_IMPLEMENTATION */
-
+uint8_t CDC_TxReady_FS(void)
+{
+  uint32_t primask = __get_PRIMASK();
+  __disable_irq();
+  USBD_CDC_HandleTypeDef *hcdc = (USBD_CDC_HandleTypeDef*)hUsbDeviceFS.pClassData;
+  uint8_t ready = g_usb_cdc_ready &&
+      hUsbDeviceFS.dev_state == USBD_STATE_CONFIGURED &&
+      hcdc != NULL && hcdc->TxState == 0U;
+  __set_PRIMASK(primask);
+  return ready;
+}
 /* USER CODE END PRIVATE_FUNCTIONS_IMPLEMENTATION */
 
 /**
