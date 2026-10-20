@@ -9,8 +9,8 @@
 #define TWO_PI 6.28318530718f
 #define INV_TWO_PI 0.15915494309f
 #define Q30_SCALE 1073741824.0f
-#define VOLTAGE_SCALE 72.6f /* Twice 3.3 V * divider 11. */
-#define CURRENT_SCALE 6.6f /* Twice +/-3.3 A nominal measurement range. */
+#define VOLTAGE_SCALE 72.6f /* Fixed Q30 normalization in V, not live ADC VREF+. */
+#define CURRENT_SCALE 6.6f /* Fixed Q30 normalization in A, not the current limit. */
 #define FREQUENCY_SCALE 1000.0f
 #define MIN_ELECTRICAL_HZ 5.0f
 #define QUALIFY_SAMPLES 2000U

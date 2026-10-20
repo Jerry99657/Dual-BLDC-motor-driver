@@ -176,9 +176,21 @@ uint16_t MT6701_GetSampleAgeCycles(void)
 
 static MT6701_2_Snapshot second;
 static uint32_t second_poll_at, second_sample_at;
+/* Optional M2 encoder: a missing/broken device must not monopolize SPI2.
+ * Count actual failed transactions, not bus contention; reset only on a valid
+ * sample. Once stopped, leave SPI2 untouched until the next MCU reset. */
+#define MT6701_2_MAX_CONSECUTIVE_FAILURES 5U
+static uint8_t second_failures;
+
+static void MT6701_2_RecordFailure(void)
+{
+    ++second.errors;
+    if (second_failures < MT6701_2_MAX_CONSECUTIVE_FAILURES) ++second_failures;
+}
 
 void MT6701_2_Service(uint32_t now_ms)
 {
+    if (second_failures >= MT6701_2_MAX_CONSECUTIVE_FAILURES) return;
     if (now_ms - second_poll_at < 1U) return;
     second_poll_at = now_ms;
     if (hspi2.State != HAL_SPI_STATE_READY || (SPI2->SR & SPI_SR_BSY) ||
@@ -204,15 +216,16 @@ void MT6701_2_Service(uint32_t now_ms)
     uint16_t raw;
     uint8_t status;
     if (result != HAL_OK) {
-        ++second.errors;
+        MT6701_2_RecordFailure();
         return;
     }
     uint8_t valid = MT6701_Decode(rx, &raw, &status);
     second.status = status;
     if (!valid) {
-        ++second.errors;
+        MT6701_2_RecordFailure();
         return;
     }
+    second_failures = 0U;
     second.raw_angle = raw;
     second.angle = 2.0f * PI - 2.0f * PI * (float)raw / 16384.0f;
     ++second.samples;
@@ -223,5 +236,6 @@ void MT6701_2_GetSnapshot(MT6701_2_Snapshot *out)
 {
     if (out == NULL) return;
     *out = second;
-    out->healthy = second.samples != 0U && HAL_GetTick() - second_sample_at <= 5U;
+    out->healthy = second_failures < MT6701_2_MAX_CONSECUTIVE_FAILURES &&
+                   second.samples != 0U && HAL_GetTick() - second_sample_at <= 5U;
 }

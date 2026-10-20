@@ -26,7 +26,8 @@ typedef enum {
     MOTOR_SAMPLE_FAULT_BUS_RANGE,
     MOTOR_SAMPLE_FAULT_OVERCURRENT,
     MOTOR_SAMPLE_FAULT_CURRENT_RANGE,
-    MOTOR_SAMPLE_FAULT_OVERLOAD
+    MOTOR_SAMPLE_FAULT_OVERLOAD,
+    MOTOR_SAMPLE_FAULT_REFERENCE
 } MotorSamplingFault;
 
 typedef struct {
@@ -47,6 +48,13 @@ typedef struct {
     uint8_t fault_phase;          /* 0: none/vector fault; 1/2/3: U/V/W. */
     bool fault_during_zero;
     uint16_t silicon_revision;
+    float reference_voltage;     /* Filtered estimate of actual ADC VREF+. */
+    uint16_t reference_raw;       /* Latest VREFINT ADC code, not VREF+ code. */
+    uint16_t reference_cal;       /* Factory 12-bit code at 3.0 V VREF+. */
+    uint32_t reference_updates;
+    uint32_t reference_errors;
+    uint32_t reference_age_ms;
+    bool reference_fresh;
 } MotorSamplingDiagnostics;
 
 /* Starts continuous measurement even at 0 V. M1 power waits for current zero

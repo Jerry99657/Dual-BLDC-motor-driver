@@ -12,11 +12,13 @@ ADC_HandleTypeDef hadc1 = {.Instance=ADC1}, hadc2 = {.Instance=ADC2};
 TIM_TypeDef tim1, tim8, tim6;
 TIM_HandleTypeDef htim1 = {&tim1}, htim8 = {&tim8}, htim6 = {&tim6};
 uint32_t host_primask;
+uint16_t host_vrefint_cal=1650;
 static uint32_t tick, calls, fail_at;
 static bool dma, bus_timer, slave_armed, master_armed, publish_enabled, fault_after_arming;
 static bool model_bus_trigger;
 static unsigned bus_triggers;
 static uint16_t model_bus_raw;
+static uint16_t reference_raw=1500; /* 1650 * 3.0 / 1500 = 3.3 V. */
 static volatile uint16_t *buffer;
 static bool irq_on_tick;
 static void inject_irq(void);
@@ -29,7 +31,8 @@ uint32_t HAL_GetTick(void) {
 static HAL_StatusTypeDef status(void) { return ++calls == fail_at ? HAL_ERROR : HAL_OK; }
 static void publish(uint16_t raw) {
     assert(dma && buffer);
-    buffer[0] = buffer[1] = raw;
+    buffer[0] = buffer[2] = raw;
+    buffer[1] = buffer[3] = reference_raw;
     HAL_ADC_ConvHalfCpltCallback(&hadc1);
     HAL_ADC_ConvCpltCallback(&hadc1);
 }
@@ -44,7 +47,7 @@ HAL_StatusTypeDef HAL_ADCEx_Calibration_Start(ADC_HandleTypeDef *h, uint32_t mod
     return status();
 }
 HAL_StatusTypeDef HAL_ADC_Start_DMA(ADC_HandleTypeDef *h, uint32_t *p, uint32_t n) {
-    assert(h == &hadc1 && n == 2U);
+    assert(h == &hadc1 && n == 4U);
     if (status() != HAL_OK) return HAL_ERROR;
     buffer = (volatile uint16_t *)p; dma = true; return HAL_OK;
 }
@@ -101,6 +104,7 @@ static void reset(void) {
     tick = calls = fail_at = host_primask = 0U; publish_enabled = true; fault_after_arming = false;
     irq_on_tick=false; hadc1.ErrorCode=hadc2.ErrorCode=0;
     model_bus_trigger=false; bus_triggers=0; model_bus_raw=1354;
+    reference_raw=1500; host_vrefint_cal=1650;
 }
 static bool capture_with_bus(void) {
     bool ok=MotorSampling_Capture();
@@ -111,9 +115,11 @@ static bool capture_with_bus(void) {
         ++bus_triggers;
         if(model_bus_trigger && publish_enabled) {
             if(bus_triggers & 1U) {
-                buffer[0]=model_bus_raw; HAL_ADC_ConvHalfCpltCallback(&hadc1);
+                buffer[0]=model_bus_raw; buffer[1]=reference_raw;
+                HAL_ADC_ConvHalfCpltCallback(&hadc1);
             } else {
-                buffer[1]=model_bus_raw; HAL_ADC_ConvCpltCallback(&hadc1);
+                buffer[2]=model_bus_raw; buffer[3]=reference_raw;
+                HAL_ADC_ConvCpltCallback(&hadc1);
             }
         }
     }
@@ -176,7 +182,91 @@ static void clocked_ms(unsigned ms) {
         MotorSampling_Service();
     }
 }
+static void check_reference_estimation(void) {
+    reset(); reference_raw=1518; assert(MotorSampling_Start());
+    sample_ms(31,1354);
+    assert(!diagnostics().reference_fresh && diagnostics().reference_updates==0);
+    off();
+    sample_ms(1,1354);
+    const float measured=3.0f*1650.0f/1518.0f;
+    near(diagnostics().reference_voltage,measured);
+    assert(diagnostics().reference_fresh && diagnostics().reference_updates==1);
+    assert(diagnostics().reference_raw==1518 && diagnostics().reference_cal==1650);
+    sample_ms(268,1354); assert(MotorSampling_IsReady());
+    frame(100); assert(MotorSampling_Capture());
+    const MotorSampleFrame *f=MotorSampling_GetFrame();
+    const float amps_per_code=measured/4095.0f/0.5f;
+    near(f->m1_current[0],100*amps_per_code);
+    near(f->m1_current[1],-100*amps_per_code);
+    near(f->m1_current[2],200*amps_per_code);
+    near(f->m2_current[0],-200*amps_per_code);
+    near(f->m2_current[1],50*amps_per_code);
+    for(unsigned i=0;i<3;++i)
+        near(f->m1_voltage[i],(float)(1111*(i+1))*measured*11.0f/4095.0f);
+    near(MotorSampling_GetBusVoltage(),1354*measured*11.0f/4095.0f);
+    /* Reject individual rail/out-of-range samples without changing the gain. */
+    const uint16_t invalid[]={0,4095,1000,2000};
+    for(unsigned i=0;i<sizeof(invalid)/sizeof(*invalid);++i) {
+        reference_raw=invalid[i]; sample_ms(1,1354);
+        near(diagnostics().reference_voltage,measured);
+        assert(MotorSampling_IsReady());
+    }
+    assert(diagnostics().reference_errors==8);
+    uint32_t updates=diagnostics().reference_updates;
+    /* A complete jittering block has the same mean, not a jittering gain. */
+    for(unsigned i=0;i<32;++i) { reference_raw=(i&1U)?1517:1519; sample_ms(1,1354); }
+    near(diagnostics().reference_voltage,measured);
+    assert(diagnostics().reference_updates==updates+1U);
+    /* A real slow rail change is averaged first, then low-pass filtered. */
+    reference_raw=1650; sample_ms(31,1354);
+    near(diagnostics().reference_voltage,measured);
+    sample_ms(1,1354);
+    float expected=measured+0.125f*(3.0f-measured);
+    near(diagnostics().reference_voltage,expected);
+    sample_ms(32,1354); expected+=0.125f*(3.0f-expected);
+    near(diagnostics().reference_voltage,expected);
+    sample_ms(2400,1354); near(diagnostics().reference_voltage,3.0f);
+    frame(100); assert(MotorSampling_Capture());
+    near(f->m1_current[0],100*3.0f/4095.0f/0.5f);
+    near(f->m1_voltage[0],1111*3.0f*11.0f/4095.0f);
+    near(MotorSampling_GetBusVoltage(),1354*3.0f*11.0f/4095.0f);
+    frame(0); assert(MotorSampling_Capture());
+    near(f->m1_current[0],0); /* Keep zero in ADC code space; never fixed 1.65 V. */
+    /* A frozen valid gain must not silently authorize indefinite operation. */
+    reference_raw=0; sample_ms(201,1354); off();
+    assert(diagnostics().fault==MOTOR_SAMPLE_FAULT_REFERENCE);
+    assert(!diagnostics().reference_fresh && diagnostics().bus_fresh);
+    assert(strcmp(MotorSampling_GetStatusText(),"ADC REF")==0);
+    reference_raw=1518; sample_ms(300,1354); off();
+    assert(diagnostics().reference_fresh && diagnostics().fault==MOTOR_SAMPLE_FAULT_REFERENCE);
+    /* No first valid block: wait without enabling power, then latch a fault. */
+    reset(); reference_raw=0; assert(MotorSampling_Start());
+    sample_ms(1,1354); assert(strcmp(MotorSampling_GetStatusText(),"WAIT VREF")==0);
+    sample_ms(200,1354); off();
+    assert(!MotorSampling_IsCalibrated() && diagnostics().reference_updates==0);
+    assert(diagnostics().fault==MOTOR_SAMPLE_FAULT_REFERENCE);
+    /* Missing factory calibration must never fall back to a guessed scale. */
+    const uint16_t invalid_cal[]={0,65535};
+    for(unsigned i=0;i<2;++i) {
+        reset(); host_vrefint_cal=invalid_cal[i]; assert(!MotorSampling_Start());
+        off(); assert(calls==0 && diagnostics().fault==MOTOR_SAMPLE_FAULT_REFERENCE);
+    }
+    reset(); host_vrefint_cal=1500; reference_raw=1380;
+    assert(MotorSampling_Start()); sample_ms(32,1354);
+    near(diagnostics().reference_voltage,3.0f*1500.0f/1380.0f);
+    sample_ms(268,1354); assert(MotorSampling_IsReady());
+    /* Protection still trips at physical amperes with a non-3.3 V scale. */
+    float gain=diagnostics().reference_voltage/4095.0f/0.5f;
+    int below=(int)(MOTOR_2804.max_current/gain);
+    frame(0); adc1.JDR1=2000+below;
+    assert(MotorSampling_Capture() && MotorSampling_IsReady());
+    frame(0); adc1.JDR1=2000+below+1;
+    assert(MotorSampling_Capture()); off();
+    assert(diagnostics().fault==MOTOR_SAMPLE_FAULT_OVERCURRENT);
+    puts("PASS: VREFINT factory calibration, 64-sample averaging/IIR, first-block gate, shared current/phase/bus scale, outlier rejection, stale stop, latched recovery");
+}
 int main(void) {
+    check_reference_estimation();
     /* Drive the real scheduling through JEOS -> stopped TIM6 UPDATE -> DMA.
      * No asynchronous/manual bus publish: this must work before zeroing,
      * after late VBUS connection, and after an actual current fault. */

@@ -70,7 +70,11 @@ Debug 的 FOC 文件使用 -Og，保留调试信息并缩减 Flash 与高频中�
 
 ## 固件识别与连发诊断
 
-本轮固件在 `About` 首行 `FW` 显示 **UI-R20-USB**，用于确认板上已经运行当前构建。此次修复 USB 遥测发送状态竞争和活动缓冲区被覆盖的问题，见 [USB_CDC_tx_recovery.md](USB_CDC_tx_recovery.md)。HSO CONTROL 期间，高于实测 45rpm 的正常减速继续使用 HSO；目标低于边界或要求反转时先减至实测 45rpm，再平滑返回编码器。改速幅度不再触发提前返回，Speed 指令仍用 rad/s。真正失锁先停机，反馈健康时新 Speed 可直接起转。Run 页先提交模式再提交目标。Status 的 Feedback 显示当前反馈来源，完整恢复规则见 [HSO_recovery.md](HSO_recovery.md)。H Gate 为当前校验原因，H Qual 为资格/保持计数，H Jitter 为角度暂停预算，H Reset 为上次角度清零误差，H Lost 保留上次异常原因，H Actual 为观测磁链，见 [ST_HSO_integration.md](ST_HSO_integration.md)。手动加载过载预算见 [2804_current_limits.md](2804_current_limits.md)。Status 的 I Trip、IU/IV/IW R/Z 和 ChipRev，解释及同步采样修复见 [current_adc_diagnostics.md](current_adc_diagnostics.md)。旧版本的 FW 在列表下方，需要向下滚动才能看见；不能仅凭首屏未显示就判断固件版本。
+UI-R23-LCD 按用户提供的 BOE 屏幕示例将可见区偏移从 26/1 修正为 24/0，修复 270° 显示时顶部两行、右侧一列漏刷；开屏前完整清除 ST7735S GRAM，并将 SPI3 降至 10.625 MHz。根因、厂家地址与命令流测试见 [LCD_edge_stripes_fix.md](LCD_edge_stripes_fix.md)。
+
+当前版本增加了 VREFINT 平均与低通滤波，使用测得的 VREF+ 统一换算电流、母线和相电压。Status 新增 VREF（有效估算的电压）、RefState、Ref R/C、RefCnt、RefErr；显示精度不代表测量精度。首个有效平均值完成前不使能电机，参考估计超时锁存 ADC REF。CubeMX 工程和 ADC 初始化均已同步修改，配置、滤波参数与上板核对见 [VREFINT_reference_tracking.md](VREFINT_reference_tracking.md)。
+
+本轮固件在 `About` 首行 `FW` 显示 **UI-R23-LCD**，用于确认板上已经运行当前构建。ENC2 连续读取失败 5 次后停止探测并让出 SPI2，复位后才重新尝试，见 [ENC2_optional_probe.md](ENC2_optional_probe.md)。此前修复 USB 遥测发送状态竞争和活动缓冲区被覆盖的问题，见 [USB_CDC_tx_recovery.md](USB_CDC_tx_recovery.md)。HSO CONTROL 期间，高于实测 45rpm 的正常减速继续使用 HSO；目标低于边界或要求反转时先减至实测 45rpm，再平滑返回编码器。改速幅度不再触发提前返回，Speed 指令仍用 rad/s。真正失锁先停机，反馈健康时新 Speed 可直接起转。Run 页先提交模式再提交目标。Status 的 Feedback 显示当前反馈来源，完整恢复规则见 [HSO_recovery.md](HSO_recovery.md)。H Gate 为当前校验原因，H Qual 为资格/保持计数，H Jitter 为角度暂停预算，H Reset 为上次角度清零误差，H Lost 保留上次异常原因，H Actual 为观测磁链，见 [ST_HSO_integration.md](ST_HSO_integration.md)。手动加载过载预算见 [2804_current_limits.md](2804_current_limits.md)。Status 的 I Trip、IU/IV/IW R/Z 和 ChipRev，解释及同步采样修复见 [current_adc_diagnostics.md](current_adc_diagnostics.md)。旧版本的 FW 在列表下方，需要向下滚动才能看见；不能仅凭首屏未显示就判断固件版本。
 
 `Status → Bus` 为 ADC 实测母线电压。`Drive` 显示采样/电流零点的具体状态或锁存故障，编码器在线与对齐另看 Encoder / Aligned。BusRaw 是最新母线原始值，BusCnt / FrameCnt 是规则组样本数 / 完整注入帧数，正常约每秒增加 2000 / 10000；ADC1Err / ADC2Err 显示 HAL 错误码。Enc2 显示第二路 MT6701 的健康状态和原始角度，Enc2Err 为其错误累计值。第二路目前只有诊断采样，没有启用功率输出。
 
@@ -109,4 +113,4 @@ Run 在采样未就绪时显示具体原因并拒绝确认启动；运行中采�
 
 尚未烧录或连接电机验证。实屏帧率、物理按键电平、实际负载下三模式运行和电流环参数需要上板确认；主机模拟不代表这些项目已经验收。
 
-最终构建占用（2026-10-19，UI-R20-USB）：Debug Flash 113940 B / RAM 21344 B；Release Flash 112604 B / RAM 21048 B。Debug 保留 `-g3`，应用采用 `-Og`，HAL / USB / UI 等采用 `-Os`，HSO 适配与定点数学采用 `-O2`。固件分别为 `build/Debug/FOC_two.elf`、`build/Release/FOC_two.elf` 和各自同目录的 `FOC_two.bin`。HSO 的观察、磁链估算与接管操作见 [ST_HSO_integration.md](ST_HSO_integration.md)，铭牌电流修正及保护见 [2804_current_limits.md](2804_current_limits.md)。
+最终构建占用（2026-10-21，UI-R23-LCD）：Debug Flash 115092 B / RAM 21456 B；Release Flash 113684 B / RAM 21160 B。Debug 保留 `-g3`，应用采用 `-Og`，HAL / USB / UI 等采用 `-Os`，HSO 适配与定点数学采用 `-O2`。固件分别为 `build/Debug/FOC_two.elf`、`build/Release/FOC_two.elf` 和各自同目录的 `FOC_two.bin`。HSO 的观察、磁链估算与接管操作见 [ST_HSO_integration.md](ST_HSO_integration.md)，铭牌电流修正及保护见 [2804_current_limits.md](2804_current_limits.md)。

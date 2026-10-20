@@ -1,8 +1,14 @@
 # 双电机 ADC / PWM 配置核查
 
-核查日期：2026-10-19。对象为本工程当前 `FOC_two.ioc`、`Core/Src/adc.c`、`Core/Src/tim.c`、`Core/Src/main.c` 与 `mycode/JerryFOC.c`，以及用户提供的分配表和电压分压原理图。
+核查日期：2026-10-21。对象为本工程当前 `FOC_two.ioc`、`Core/Src/adc.c`、`Core/Src/tim.c`、`Core/Src/main.c` 与 `mycode/JerryFOC.c`，以及用户提供的分配表和电压分压原理图。
 
-## UI-R19-45RPM：HSO 减至机械速度边界（当前）
+## UI-R22-VREF：规则组增加内部参考（当前）
+
+ADC1 规则组改为 Rank1=VBUS/IN15、47.5 周期，Rank2=VREFINT/IN18、640.5 周期。DMA 为两组完整扫描，共 4 个半字。仍每五个注入帧在安全窗口中触发一次，约 2 kHz，总转换时间约 16.78 μs。每 64 个有效参考样本平均后反算 VREF+，再进行 alpha=0.125 的低通滤波，统一用于全部电流、相电压和母线换算；首个有效参考前禁用输出，参考超时锁存 ADC REF。注入组和 PWM 配置保持原样。详见 [VREFINT_reference_tracking.md](VREFINT_reference_tracking.md)。
+
+R21 的 ENC2 连续失败 5 次后停止探测、R20 的 USB TX 状态与缓冲修复继续保留。
+
+## UI-R19-45RPM：HSO 减至机械速度边界
 
 用户要求撤销大幅改速提前切换：HSO CONTROL 高于实测 45rpm 时正常改速仍由 HSO 控制，低速/停车/反转先由 HSO 减至边界后才切换编码器。45rpm=4.712389rad/s，7极对下为5.25Hz。HSO 减速参考限为50rad/s²，真正异常仍停机。ADC/PWM 与保护门限保持现有配置，见 [HSO_recovery.md](HSO_recovery.md)。
 

@@ -3,6 +3,7 @@
 #include <string.h>
 #include "MT6701.h"
 #include "w25q64.h"
+#include "app_storage.h"
 
 GPIO_TypeDef gpio_a={0xFFFFU},gpio_b={0xFFFFU};
 SPI_TypeDef spi1,spi2,spi3;
@@ -13,6 +14,9 @@ static unsigned reads, aborts, display_errors, dma_starts;
 static uint8_t preempt_on_tick;
 static uint8_t command, *dma_rx;
 static HAL_StatusTypeDef poll_result=HAL_OK;
+static uint8_t flash[3U*W25Q64_SECTOR_SIZE];
+static uint32_t flash_addr, flash_busy_until;
+static bool write_enabled;
 uint32_t HAL_GetTick(void) {
     if(preempt_on_tick) { preempt_on_tick=0; MT6701_Service(); }
     return tick;
@@ -22,6 +26,7 @@ void HAL_GPIO_WritePin(GPIO_TypeDef *p,uint16_t pin,GPIO_PinState state) {
     if(state==GPIO_PIN_RESET) {
         if(p==MT6701_CSN2_GPIO_Port && pin==MT6701_CSN2_Pin) assert(gpio_b.pins & W25_NSS_Pin);
         if(p==W25_NSS_GPIO_Port && pin==W25_NSS_Pin) assert(gpio_b.pins & MT6701_CSN2_Pin);
+        if(p==W25_NSS_GPIO_Port && pin==W25_NSS_Pin) command=0;
         p->pins &= ~pin;
     } else p->pins |= pin;
 }
@@ -34,21 +39,46 @@ HAL_StatusTypeDef HAL_SPI_TransmitReceive(SPI_HandleTypeDef *h,const uint8_t *tx
     assert(!(gpio_b.pins & MT6701_CSN2_Pin) && (gpio_b.pins & W25_NSS_Pin));
     assert((spi2.CR1 & (SPI_CR1_CPOL|SPI_CR1_CPHA|SPI_CR1_BR))==(SPI_PHASE_2EDGE|SPI_BAUDRATEPRESCALER_256));
     spi2.CR1 |= SPI_CR1_SPE; spi2.CR2 ^= 0x1000U; /* HAL modifies RX FIFO threshold. */
-    ++reads; receive_frame(rx); return poll_result;
+    ++reads; receive_frame(rx);
+    if(poll_result!=HAL_OK) hspi2.State=2; /* Abort must release HAL ownership too. */
+    return poll_result;
 }
 HAL_StatusTypeDef HAL_SPI_Transmit(SPI_HandleTypeDef *h,const uint8_t *p,uint16_t n,uint32_t timeout) {
-    (void)n; (void)timeout; assert(h==&hspi2);
+    (void)timeout; assert(h==&hspi2);
     assert(spi2.CR1==flash_cr1 && spi2.CR2==flash_cr2);
     assert(!(gpio_b.pins & W25_NSS_Pin) && (gpio_b.pins & MT6701_CSN2_Pin));
-    command=p[0]; return HAL_OK;
+    if(command==0) {
+        assert(n==1 || n==4); command=p[0];
+        if(n==4) flash_addr=((uint32_t)p[1]<<16)|((uint32_t)p[2]<<8)|p[3];
+        if(command==0x06U) { assert((int32_t)(tick-flash_busy_until)>=0); write_enabled=true; }
+        if(command==0x20U) {
+            assert(write_enabled && flash_addr+W25Q64_SECTOR_SIZE<=sizeof(flash));
+            assert(flash_addr%W25Q64_SECTOR_SIZE==0);
+            memset(flash+flash_addr,255,W25Q64_SECTOR_SIZE);
+            write_enabled=false; flash_busy_until=tick+40U;
+        }
+    } else {
+        assert(command==0x02U && write_enabled && flash_addr+n<=sizeof(flash));
+        assert(flash_addr%W25Q64_PAGE_SIZE+n<=W25Q64_PAGE_SIZE);
+        for(unsigned i=0;i<n;++i) flash[flash_addr+i]&=p[i];
+        write_enabled=false; flash_busy_until=tick+3U;
+    }
+    return HAL_OK;
 }
 HAL_StatusTypeDef HAL_SPI_Receive(SPI_HandleTypeDef *h,uint8_t *p,uint16_t n,uint32_t timeout) {
-    (void)h; (void)timeout;
+    (void)timeout; assert(h==&hspi2);
     memset(p,0,n); if(command==0x9FU) { assert(n==3); p[0]=0xEF; p[1]=0x40; p[2]=0x17; }
+    else if(command==0x05U) { assert(n==1); p[0]=(int32_t)(tick-flash_busy_until)<0; }
+    else if(command==0x03U) {
+        assert((int32_t)(tick-flash_busy_until)>=0 && flash_addr+n<=sizeof(flash));
+        memcpy(p,flash+flash_addr,n);
+    } else assert(0);
     return HAL_OK;
 }
 HAL_StatusTypeDef HAL_SPI_DMAStop(SPI_HandleTypeDef *h) { assert(h==&hspi1); return HAL_OK; }
-HAL_StatusTypeDef HAL_SPI_Abort(SPI_HandleTypeDef *h) { assert(h==&hspi2); ++aborts; return HAL_OK; }
+HAL_StatusTypeDef HAL_SPI_Abort(SPI_HandleTypeDef *h) {
+    assert(h==&hspi2); ++aborts; h->State=HAL_SPI_STATE_READY; return HAL_OK;
+}
 void OLED_DriverHandleSpiError(void) { ++display_errors; }
 static void poll(void) {
     MT6701_2_Service(tick);
@@ -56,9 +86,40 @@ static void poll(void) {
     assert(gpio_b.pins & MT6701_CSN2_Pin);
     assert(W25Q_ReadID()==0xEF4017U); /* A Flash transaction still uses its original mode. */
 }
-int main(void) {
+static void check_absent_encoder(const char *scenario) {
+    bool timeout=strcmp(scenario,"timeout")==0;
+    if(strcmp(scenario,"missing-wrap")==0) tick=UINT32_MAX-2U;
+    else assert(strcmp(scenario,"missing")==0 || timeout);
+    flash_busy_until=tick;
+    assert(AppStorage_Init());
+    AppStorage_Get()->speed_x10=123;
+    assert(AppStorage_RequestSave());
+    payload=0xFFFFFFU; poll_result=timeout?HAL_TIMEOUT:HAL_OK;
+    for(unsigned i=0;i<1000;++i) {
+        ++tick;
+        AppStorage_Service(tick); /* Same ordering as main.c. */
+        poll();
+    }
+    MT6701_2_Snapshot out; MT6701_2_GetSnapshot(&out);
+    assert(reads==5 && out.samples==0 && out.errors==5 && !out.healthy);
+    assert(aborts==(timeout?5U:0U) && hspi2.State==HAL_SPI_STATE_READY);
+    bool success; assert(AppStorage_PollSaveResult(&success) && success);
+    assert(AppStorage_Init() && AppStorage_Get()->speed_x10==123);
+    /* Another actual save/readback while ENC2 is latched off; no SPI2 reprobe. */
+    poll_result=HAL_OK; payload=0x0FA006U;
+    AppStorage_Get()->speed_x10=456;
+    assert(AppStorage_RequestSave());
+    for(unsigned i=0;i<100;++i) { ++tick; AppStorage_Service(tick); poll(); }
+    assert(reads==5);
+    assert(AppStorage_PollSaveResult(&success) && success);
+    assert(AppStorage_Init() && AppStorage_Get()->speed_x10==456);
+    printf("PASS: ENC2 %s stops after 5 failures; real W25Q64 + AppStorage saves/readback/reload, CS/HAL/mode release\n",scenario);
+}
+int main(int argc,char **argv) {
     flash_cr1=spi2.CR1=SPI_CR1_SPE | (2U<<3) | 0x300U;
     flash_cr2=spi2.CR2=0x700U;
+    memset(flash,255,sizeof(flash));
+    if(argc>1) { check_absent_encoder(argv[1]); return 0; }
     assert(W25Q_Init());
     MT6701_2_Snapshot out;
     MT6701_2_GetSnapshot(&out); assert(!out.healthy);
@@ -90,6 +151,27 @@ int main(void) {
     HAL_SPI_ErrorCallback(&hspi1); assert(MT6701_GetErrorCounter()==2);
     HAL_SPI_ErrorCallback(&hspi3); assert(display_errors==1);
     MT6701_StopContinuous(); assert(!MT6701_IsContinuous());
+    /* Valid samples reset consecutive failures, even after four failures. */
+    payload=0;
+    for(unsigned i=0;i<4;++i) { ++tick; poll(); }
+    payload=0x0FA006U; ++tick; poll();
+    MT6701_2_GetSnapshot(&out); assert(out.healthy);
+    /* A later unplug/CRC failure is also bounded. Bus contention does not
+     * count against these five actual failures. */
+    hspi2.State=2;
+    unsigned prior=reads;
+    for(unsigned i=0;i<20;++i) MT6701_2_Service(++tick);
+    assert(reads==prior); hspi2.State=HAL_SPI_STATE_READY;
+    uint32_t errors=out.errors;
+    payload=0xFFFFFFU;
+    for(unsigned i=0;i<5;++i) { ++tick; poll(); }
+    MT6701_2_GetSnapshot(&out);
+    assert(!out.healthy && out.errors==errors+5U && reads==prior+5U);
+    prior=reads;
+    payload=0x0FA006U;
+    for(unsigned i=0;i<100;++i) { ++tick; poll(); }
+    MT6701_2_GetSnapshot(&out);
+    assert(reads==prior && out.errors==errors+5U && !out.healthy);
     puts("PASS: M2 SPI2 CS/mode restoration, shared W25Q64 transactions, CRC, timeout/abort, stale input, M1 DMA regression");
     return 0;
 }

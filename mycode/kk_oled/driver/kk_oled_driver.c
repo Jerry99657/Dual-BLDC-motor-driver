@@ -16,11 +16,21 @@
 
 #define TFT_SPI_TIMEOUT_MS 100U
 
-/* 与参考工程同款 80x160 模组：列偏移 26、行偏移 1、BGR、INVERT */
-#define TFT_COL_OFFSET 26U
-#define TFT_ROW_OFFSET 1U
+/* User's BOE 0.96-inch ST7735S sample, address(), MADCTL=0x08:
+ * CASET 0x0018..0x0067 (24..103), RASET 0x0000..0x009F (0..159).
+ * With the application's software rotation 270, the old 26/1 offset left
+ * two top rows and one right column outside the refreshed visible area. */
+#define TFT_COL_OFFSET 24U
+#define TFT_ROW_OFFSET 0U
+#define TFT_GRAM_WIDTH  132U
+#define TFT_GRAM_HEIGHT 162U
 #define TFT_FG_COLOR   0xFFFFU
 #define TFT_BG_COLOR   0x0000U
+
+_Static_assert(TFT_COL_OFFSET + OLED_PHYSICAL_WIDTH <= TFT_GRAM_WIDTH,
+               "LCD columns exceed ST7735S GRAM");
+_Static_assert(TFT_ROW_OFFSET + OLED_PHYSICAL_HEIGHT <= TFT_GRAM_HEIGHT,
+               "LCD rows exceed ST7735S GRAM");
 
 /* 每块最多 8 行，1280 字节 RGB565，避免占用 25.6 KB 全屏缓冲 */
 #define TFT_CHUNK_ROWS 8U
@@ -118,14 +128,13 @@ static bool tft_cmd(uint8_t cmd, const uint8_t *data, uint16_t len)
     return ok;
 }
 
-/* 设置窗口并发送 RAMWR；成功后保持 CS 低，调用者继续发像素，最后拉高 CS。 */
-static bool tft_begin_window(uint16_t x0, uint16_t y0,
-                             uint16_t x1, uint16_t y1)
+/* Raw controller addresses, inclusive ends. This is also used to clear the
+ * ENTIRE GRAM before display-on: reset does not initialize pixel memory. */
+static bool tft_begin_gram_window(uint16_t x0, uint16_t y0,
+                                  uint16_t x1, uint16_t y1)
 {
-    x0 += TFT_COL_OFFSET;
-    x1 += TFT_COL_OFFSET;
-    y0 += TFT_ROW_OFFSET;
-    y1 += TFT_ROW_OFFSET;
+    if (x0 > x1 || y0 > y1 || x1 >= TFT_GRAM_WIDTH || y1 >= TFT_GRAM_HEIGHT)
+        return false;
 
     const uint8_t caset[4] = {
         (uint8_t)(x0 >> 8), (uint8_t)x0,
@@ -149,6 +158,17 @@ static bool tft_begin_window(uint16_t x0, uint16_t y0,
     if (!tft_write_cmd(CMD_RAMWR)) return false;
     TFT_DC_DATA();
     return true;
+}
+
+/* Panel coordinates -> controller addresses. Software canvas rotation is
+ * already handled by graphics; do not swap dimensions/offsets a second time. */
+static bool tft_begin_window(uint16_t x0, uint16_t y0,
+                             uint16_t x1, uint16_t y1)
+{
+    if (x0 > x1 || y0 > y1 || x1 >= OLED_PHYSICAL_WIDTH || y1 >= OLED_PHYSICAL_HEIGHT)
+        return false;
+    return tft_begin_gram_window(x0 + TFT_COL_OFFSET, y0 + TFT_ROW_OFFSET,
+                                 x1 + TFT_COL_OFFSET, y1 + TFT_ROW_OFFSET);
 }
 
 /* 从核心的 1-bit 页缓冲取矩形，转换为 RGB565 行块。 */
@@ -238,22 +258,25 @@ OLED_Status OLED_DriverInit(void)
     if (!tft_cmd(CMD_MADCTL, &madctl, 1U)) return OLED_ERROR;
     if (!tft_cmd(CMD_INVON, NULL, 0U)) return OLED_ERROR;
 
-    /* 用背景色填满屏幕，和核心初始全 0 帧保持一致 */
-    if (!tft_begin_window(0U, 0U,
-                          OLED_PHYSICAL_WIDTH - 1U,
-                          OLED_PHYSICAL_HEIGHT - 1U)) {
+    /* Clear all 132x162 pixels, including GRAM outside the 80x160 UI window.
+     * ST7735S power-on memory is random and SW/HW reset does not clear it;
+     * clearing only the UI rectangle leaves persistent colored edge garbage.
+     * Reuse the small staging buffer and keep the panel off until finished. */
+    if (!tft_begin_gram_window(0U, 0U, TFT_GRAM_WIDTH - 1U, TFT_GRAM_HEIGHT - 1U)) {
         TFT_CS_HIGH();
         return OLED_ERROR;
     }
     for (uint16_t i = 0U; i < sizeof(s_chunk) / sizeof(s_chunk[0]); i++) {
         s_chunk[i] = s_bg;
     }
-    for (uint16_t y = 0U; y < OLED_PHYSICAL_HEIGHT; y += TFT_CHUNK_ROWS) {
-        uint16_t bytes = (uint16_t)(OLED_PHYSICAL_WIDTH * TFT_CHUNK_ROWS * 2U);
+    uint32_t remaining = TFT_GRAM_WIDTH * TFT_GRAM_HEIGHT * 2U;
+    while (remaining != 0U) {
+        uint16_t bytes = remaining > sizeof(s_chunk) ? (uint16_t)sizeof(s_chunk) : (uint16_t)remaining;
         if (!tft_write_data((const uint8_t *)s_chunk, bytes)) {
             TFT_CS_HIGH();
             return OLED_ERROR;
         }
+        remaining -= bytes;
     }
     TFT_CS_HIGH();
 

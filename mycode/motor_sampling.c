@@ -7,9 +7,13 @@
 #include <math.h>
 
 #define OFFSET_SAMPLES 2000U
-#define ADC_VOLTS (3.3f / 4095.0f)
-#define CURRENT_AMPS (ADC_VOLTS / (0.01f * 50.0f))
-#define VOLTAGE_VOLTS (ADC_VOLTS * 11.0f)
+#define ADC_FULL_SCALE 4095.0f
+#define REFERENCE_START_VOLTS 3.26f /* Provisional scale; power waits for a valid block. */
+#define REFERENCE_MIN_VOLTS 2.7f   /* Board uses a nominal 3.3 V analog rail. */
+#define REFERENCE_MAX_VOLTS 3.6f
+#define REFERENCE_AVERAGE_SAMPLES 64U
+#define REFERENCE_FILTER_ALPHA 0.125f /* ~0.24 s time constant at 2 kHz / 64. */
+#define REFERENCE_TIMEOUT_MS 200U
 #define SAMPLE_TIMEOUT_MS 5U
 #define BUS_SETTLE_MS 100U
 #define BUS_FRAME_DIVIDER 5U
@@ -24,7 +28,16 @@ static MotorSampleFrame s_frame;
 static uint32_t s_offset_sum[5];
 static float s_offsets[5];
 static volatile uint32_t s_offset_count;
-static volatile uint16_t s_bus_dma[2] __attribute__((aligned(4)));
+/* Two complete [VBUS, VREFINT] scans; half/full callbacks never split a scan. */
+static volatile uint16_t s_bus_dma[4] __attribute__((aligned(4)));
+/* Publish a SINGLE aligned float: each ISR snapshots it once and derives both
+ * its current and voltage coefficients, so an update cannot tear the pair. */
+static volatile float s_adc_volts = REFERENCE_START_VOLTS / ADC_FULL_SCALE;
+static uint32_t s_reference_sum;
+static uint16_t s_reference_count, s_reference_cal;
+static volatile uint16_t s_reference_raw;
+static volatile uint32_t s_reference_at, s_reference_updates, s_reference_errors;
+static volatile bool s_reference_valid;
 static volatile float s_bus_voltage;
 static volatile uint32_t s_bus_at, s_frame_at;
 static volatile uint32_t s_started_at, s_bus_good_at, s_bus_samples;
@@ -47,7 +60,7 @@ static void trigger_bus_after_injected(void)
      * TIM6 never free-runs. Issue its UPDATE/TRGO only after both injected
      * sequences finish, every fifth frame. With the current PWM1 CH4=1
      * rising edge near CNT=0, the first half of up-counting leaves >75 us
-     * before the next injected trigger (VBUS conversion takes ~1.42 us).
+     * before the next injected trigger (VBUS + VREFINT take ~16.78 us).
      * Skip a late ISR rather than start a conversion near the next trigger.
      * This also runs during calibration, at 0 V and after a latched trip. */
     uint32_t direction = htim1.Instance->CR1 & TIM_CR1_DIR;
@@ -98,10 +111,17 @@ static bool bus_fresh(void)
     return seen && HAL_GetTick() - at <= SAMPLE_TIMEOUT_MS;
 }
 
+static bool reference_fresh(void)
+{
+    bool valid = s_reference_valid;
+    uint32_t at = s_reference_at;
+    return valid && HAL_GetTick() - at <= REFERENCE_TIMEOUT_MS;
+}
+
 bool MotorSampling_IsReady(void)
 {
     return s_running && s_power_enabled && s_fault == MOTOR_SAMPLE_FAULT_NONE &&
-           s_bus_valid && bus_fresh() && frame_fresh();
+           s_bus_valid && bus_fresh() && frame_fresh() && reference_fresh();
 }
 
 bool MotorSampling_IsCalibrated(void)
@@ -135,6 +155,13 @@ void MotorSampling_GetDiagnostics(MotorSamplingDiagnostics *out)
     out->fault_phase = s_fault_phase;
     out->fault_during_zero = s_fault_during_zero;
     out->silicon_revision = (uint16_t)HAL_GetREVID();
+    out->reference_voltage = s_adc_volts * ADC_FULL_SCALE;
+    out->reference_raw = s_reference_raw;
+    out->reference_cal = s_reference_cal;
+    out->reference_updates = s_reference_updates;
+    out->reference_errors = s_reference_errors;
+    bool reference_valid = s_reference_valid;
+    uint32_t reference_at = s_reference_at;
     bool seen = s_bus_seen;
     uint32_t bus_at = s_bus_at, frame_at = s_frame_at;
     __set_PRIMASK(primask);
@@ -142,6 +169,8 @@ void MotorSampling_GetDiagnostics(MotorSamplingDiagnostics *out)
     out->bus_age_ms = seen ? now - bus_at : UINT32_MAX;
     out->frame_age_ms = now - frame_at;
     out->bus_fresh = seen && out->bus_age_ms <= SAMPLE_TIMEOUT_MS;
+    out->reference_age_ms = reference_valid ? now - reference_at : UINT32_MAX;
+    out->reference_fresh = reference_valid && out->reference_age_ms <= REFERENCE_TIMEOUT_MS;
 }
 
 const char *MotorSampling_GetStatusText(void)
@@ -161,19 +190,52 @@ const char *MotorSampling_GetStatusText(void)
         return s_fault_during_zero ? zero[s_fault_phase] : run[s_fault_phase];
     }
     case MOTOR_SAMPLE_FAULT_OVERLOAD:      return "M1 OVERLOAD";
+    case MOTOR_SAMPLE_FAULT_REFERENCE:     return "ADC REF";
     default: break;
     }
     if (!s_running) return "STOPPED";
     if (!bus_fresh()) return "WAIT ADC";
     if (!s_bus_valid) return s_bus_raw >= 4095U ? "BUS RANGE" : "WAIT BUS";
+    if (!reference_fresh()) return "WAIT VREF";
     if (!MotorSampling_IsCalibrated()) return "ZERO CAL";
     if (!s_power_enabled) return "BUS SETTLE";
     return "READY";
 }
 
-static void publish_bus(uint16_t raw)
+static void publish_reference(uint16_t raw)
 {
-    float voltage = (float)raw * VOLTAGE_VOLTS;
+    s_reference_raw = raw;
+    /* Avoid division by zero and stop isolated invalid/rail readings from
+     * becoming a conversion coefficient. Reject the partial average too. */
+    float numerator = (float)s_reference_cal * ((float)VREFINT_CAL_VREF * 0.001f);
+    if (raw == 0U || raw >= 4095U ||
+        numerator < REFERENCE_MIN_VOLTS * (float)raw ||
+        numerator > REFERENCE_MAX_VOLTS * (float)raw) {
+        ++s_reference_errors;
+        s_reference_sum = 0U;
+        s_reference_count = 0U;
+        return;
+    }
+    s_reference_sum += raw;
+    if (++s_reference_count < REFERENCE_AVERAGE_SAMPLES) return;
+    float estimate = numerator * (float)REFERENCE_AVERAGE_SAMPLES / (float)s_reference_sum;
+    float filtered = s_reference_valid ? s_adc_volts * ADC_FULL_SCALE : estimate;
+    filtered += REFERENCE_FILTER_ALPHA * (estimate - filtered);
+    /* The first complete block seeds the filter, never a hardcoded 3.3 V.
+     * Motor power is inhibited until a measured reference is available. */
+    s_adc_volts = filtered / ADC_FULL_SCALE;
+    s_reference_at = HAL_GetTick();
+    s_reference_valid = true;
+    ++s_reference_updates;
+    s_reference_sum = 0U;
+    s_reference_count = 0U;
+}
+
+static void publish_regular(const volatile uint16_t *scan)
+{
+    uint16_t raw = scan[0], reference_raw = scan[1];
+    publish_reference(reference_raw);
+    float voltage = (float)raw * (s_adc_volts * 11.0f);
     /* 这是测量有效性判断，不替代硬件过压/过流保护。 */
     /* DMA IRQ can be preempted by ADC JEOS. Publish one coherent value. */
     uint32_t primask = __get_PRIMASK();
@@ -197,12 +259,12 @@ static void publish_bus(uint16_t raw)
 
 void HAL_ADC_ConvHalfCpltCallback(ADC_HandleTypeDef *hadc)
 {
-    if (hadc->Instance == ADC1) publish_bus(s_bus_dma[0]);
+    if (hadc->Instance == ADC1) publish_regular(&s_bus_dma[0]);
 }
 
 void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef *hadc)
 {
-    if (hadc->Instance == ADC1) publish_bus(s_bus_dma[1]);
+    if (hadc->Instance == ADC1) publish_regular(&s_bus_dma[2]);
 }
 
 void HAL_ADC_ErrorCallback(ADC_HandleTypeDef *hadc)
@@ -227,6 +289,7 @@ void MotorSampling_Stop(void)
     (void)HAL_ADC_Stop_DMA(&hadc1);
     s_bus_valid = false;
     s_bus_seen = false;
+    s_reference_valid = false;
 }
 
 bool MotorSampling_Start(void)
@@ -241,6 +304,12 @@ bool MotorSampling_Start(void)
     s_bus_samples = 0U;
     s_bus_raw = 0U;
     s_bus_voltage = 0.0f;
+    s_adc_volts = REFERENCE_START_VOLTS / ADC_FULL_SCALE;
+    s_reference_valid = false;
+    s_reference_sum = s_reference_count = 0U;
+    s_reference_at = s_reference_updates = s_reference_errors = 0U;
+    s_reference_raw = 0U;
+    s_reference_cal = *VREFINT_CAL_ADDR;
     s_offset_count = 0U;
     s_overload_energy = 0.0f;
     s_fault_phase = 0U;
@@ -281,9 +350,13 @@ bool MotorSampling_Start(void)
     SET_BIT(htim1.Instance->CCER, TIM_CCER_CC4E);
     SET_BIT(htim8.Instance->CCER, PHASE_CHANNELS);
 
+    if (s_reference_cal < 1000U || s_reference_cal > 2000U) {
+        trip(MOTOR_SAMPLE_FAULT_REFERENCE);
+        goto failed;
+    }
     if (HAL_ADCEx_Calibration_Start(&hadc1, ADC_SINGLE_ENDED) != HAL_OK ||
         HAL_ADCEx_Calibration_Start(&hadc2, ADC_SINGLE_ENDED) != HAL_OK ||
-        HAL_ADC_Start_DMA(&hadc1, (uint32_t *)(void *)s_bus_dma, 2U) != HAL_OK) goto failed;
+        HAL_ADC_Start_DMA(&hadc1, (uint32_t *)(void *)s_bus_dma, 4U) != HAL_OK) goto failed;
 
     /* VBUS may be 0 V or absent for an arbitrary time. Keep acquisition alive
      * and start the injected group with both power stages disabled. */
@@ -319,6 +392,8 @@ void MotorSampling_Service(void)
     if (!frame_fresh()) trip(MOTOR_SAMPLE_FAULT_FRAME_TIMEOUT);
     if (!bus_fresh() && HAL_GetTick() - s_started_at > SAMPLE_TIMEOUT_MS)
         trip(MOTOR_SAMPLE_FAULT_BUS_TIMEOUT);
+    if (!reference_fresh() && HAL_GetTick() - s_started_at > REFERENCE_TIMEOUT_MS)
+        trip(MOTOR_SAMPLE_FAULT_REFERENCE);
 
     /* First power-up only. A fault remains latched, but measurements continue
      * so a restored supply is visible without silently restarting the motor. */
@@ -327,7 +402,8 @@ void MotorSampling_Service(void)
     uint32_t good_at = s_bus_good_at;
     if (s_fault == MOTOR_SAMPLE_FAULT_NONE && !s_power_enabled &&
         MotorSampling_IsCalibrated() && frame_fresh() && bus_fresh() &&
-        s_bus_valid && s_bus_good_tracking && HAL_GetTick() - good_at >= BUS_SETTLE_MS) {
+        s_bus_valid && s_bus_good_tracking && reference_fresh() &&
+        HAL_GetTick() - good_at >= BUS_SETTLE_MS) {
         SET_BIT(htim1.Instance->CCER, PHASE_CHANNELS);
         s_power_enabled = true;
         __HAL_TIM_MOE_ENABLE(&htim1);
@@ -344,6 +420,10 @@ bool MotorSampling_Capture(void)
         return false;
     }
     if (s_power_enabled && !bus_fresh()) trip(MOTOR_SAMPLE_FAULT_BUS_TIMEOUT);
+    if (s_power_enabled && !reference_fresh()) trip(MOTOR_SAMPLE_FAULT_REFERENCE);
+    float adc_volts = s_adc_volts;
+    float current_amps = adc_volts / (0.01f * 50.0f);
+    float voltage_volts = adc_volts * 11.0f;
     s_frame.m1_current_raw[0] = (uint16_t)ADC1->JDR1;
     s_frame.m1_current_raw[1] = (uint16_t)ADC2->JDR1;
     s_frame.m1_current_raw[2] = (uint16_t)ADC1->JDR2;
@@ -368,12 +448,12 @@ bool MotorSampling_Capture(void)
     uint32_t good_at = s_bus_good_at;
     /* A late-connected motor supply may also power the analog front end.
      * Do not use its unpowered/settling output as the current zero offset. */
-    bool collect_zero = calibrating && valid_bus && s_bus_good_tracking &&
+    bool collect_zero = calibrating && valid_bus && reference_fresh() && s_bus_good_tracking &&
                         HAL_GetTick() - good_at >= BUS_SETTLE_MS;
     for (unsigned i = 0U; i < 5U; ++i) {
         if (collect_zero) s_offset_sum[i] += raw[i];
         float amps = calibrating ? 0.0f :
-                     ((float)raw[i] - s_offsets[i]) * CURRENT_AMPS;
+                     ((float)raw[i] - s_offsets[i]) * current_amps;
         if (i < 3U) s_frame.m1_current[i] = amps;
         else s_frame.m2_current[i - 3U] = amps;
     }
@@ -409,7 +489,7 @@ bool MotorSampling_Capture(void)
         }
     }
     for (unsigned i = 0U; i < 3U; ++i)
-        s_frame.m1_voltage[i] = (float)s_frame.m1_voltage_raw[i] * VOLTAGE_VOLTS;
+        s_frame.m1_voltage[i] = (float)s_frame.m1_voltage_raw[i] * voltage_volts;
     ++s_frame.sequence;
     s_frame_at = HAL_GetTick();
     return true;

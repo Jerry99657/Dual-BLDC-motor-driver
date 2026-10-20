@@ -84,6 +84,8 @@ static char s_txt_bus_count[16];
 static char s_txt_frame_count[16];
 static char s_txt_adc1_error[16];
 static char s_txt_adc2_error[16];
+static char s_txt_reference[16], s_txt_ref_state[16], s_txt_ref_raw[16];
+static char s_txt_ref_count[16], s_txt_ref_errors[16];
 static char s_txt_repeat[16];
 static char s_txt_display_errors[16];
 static char s_txt_hso[16], s_txt_hso_speed[24], s_txt_hso_error[24];
@@ -235,6 +237,18 @@ static void refresh_texts(void)
 
     MotorSamplingDiagnostics adc;
     MotorSampling_GetDiagnostics(&adc);
+    unsigned reference_mv = (unsigned)(adc.reference_voltage * 1000.0f + 0.5f);
+    if (adc.reference_updates != 0U)
+        snprintf(s_txt_reference, sizeof(s_txt_reference), "%u.%03u V",
+                 reference_mv / 1000U, reference_mv % 1000U);
+    else
+        snprintf(s_txt_reference, sizeof(s_txt_reference), "NO DATA");
+    snprintf(s_txt_ref_state, sizeof(s_txt_ref_state), "%s",
+             adc.reference_fresh ? "OK" : (adc.reference_updates ? "STALE" : "WAIT"));
+    snprintf(s_txt_ref_raw, sizeof(s_txt_ref_raw), "%u / %u",
+             (unsigned)adc.reference_raw, (unsigned)adc.reference_cal);
+    snprintf(s_txt_ref_count, sizeof(s_txt_ref_count), "%lu", (unsigned long)adc.reference_updates);
+    snprintf(s_txt_ref_errors, sizeof(s_txt_ref_errors), "%lu", (unsigned long)adc.reference_errors);
     snprintf(s_txt_adc_revision, sizeof(s_txt_adc_revision), "0x%04X", (unsigned)adc.silicon_revision);
     for (unsigned i = 0U; i < 3U; ++i) {
         snprintf(s_txt_current_adc[i], sizeof(s_txt_current_adc[i]), "%u / %u",
@@ -291,6 +305,8 @@ static const KK_UI_MenuPage menu_pages[] = {
 static const KK_UI_InfoRow status_rows[] = {
     {"Mode",    s_txt_mode},
     {"Bus",     s_txt_bus},
+    {"VREF",    s_txt_reference},
+    {"RefState",s_txt_ref_state},
     {"Drive",   s_txt_drive},
     {"I Trip",  s_txt_current_trip},
     {"IU R/Z",  s_txt_current_adc[0]},
@@ -316,6 +332,9 @@ static const KK_UI_InfoRow status_rows[] = {
     {"FrameCnt",s_txt_frame_count},
     {"ADC1Err", s_txt_adc1_error},
     {"ADC2Err", s_txt_adc2_error},
+    {"Ref R/C", s_txt_ref_raw},
+    {"RefCnt",  s_txt_ref_count},
+    {"RefErr",  s_txt_ref_errors},
     {"Enc2",    s_txt_enc2},
     {"Enc2Err", s_txt_enc2_err},
     {"HSO",     s_txt_hso},
@@ -333,7 +352,7 @@ static const KK_UI_InfoRow status_rows[] = {
 };
 
 static const KK_UI_InfoRow about_rows[] = {
-    {"FW",      "UI-R20-USB"},
+    {"FW",      "UI-R23-LCD"},
     {"MCU",     "STM32G431"},
     {"Motor",   "2804 BLDC"},
     {"Control", "10kHz FOC"},

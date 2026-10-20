@@ -18,6 +18,7 @@ static uint32_t tick, dma_done;
 static bool dma_busy, healthy = true, aligned = true, drive_ready = true;
 static bool hso_active, hso_fault;
 static bool bus_data = true;
+static bool reference_data = true, reference_seen = true;
 static float bus_voltage = 24.0f;
 static const char *unready_status = "FRAME TIMEOUT";
 static unsigned submissions, frame_changes;
@@ -61,7 +62,9 @@ const char *MotorSampling_GetStatusText(void) { return drive_ready ? "READY" : u
 void MotorSampling_GetDiagnostics(MotorSamplingDiagnostics *out) {
     *out=(MotorSamplingDiagnostics){.bus_fresh=bus_data,.bus_voltage=bus_voltage,.bus_raw=2707,.bus_samples=tick*2,.frame_samples=tick*10,
         .current_raw={2047,2048,2049},.current_zero={2046,2047,2048},
-        .fault_current_raw={2047,0,2049},.fault_phase=2,.fault_during_zero=true,.silicon_revision=0x2002};
+        .fault_current_raw={2047,0,2049},.fault_phase=2,.fault_during_zero=true,.silicon_revision=0x2002,
+        .reference_voltage=3.26f,.reference_raw=1518,.reference_cal=1650,
+        .reference_updates=reference_seen?1+tick/32:0,.reference_fresh=reference_data};
 }
 uint8_t AngleSrc_Encoder_IsAligned(void) { return aligned; }
 uint16_t MT6701_GetRawAngle(void) { return 123; }
@@ -520,6 +523,16 @@ int main(void) {
     assert(strcmp(status_value("H Jitter"),"0/50 0/10")==0);
     assert(strcmp(status_value("H Reset"),"0.0 deg")==0);
     assert(strcmp(status_value("H Lost"),"--")==0);
+    assert(strcmp(status_value("VREF"),"3.260 V")==0);
+    assert(strcmp(status_value("RefState"),"OK")==0);
+    assert(strcmp(status_value("Ref R/C"),"1518 / 1650")==0);
+    reference_data=false; step(0,501);
+    assert(strcmp(status_value("RefState"),"STALE")==0);
+    assert(strcmp(status_value("VREF"),"3.260 V")==0); /* Mark retained estimate stale. */
+    reference_seen=false; step(0,501);
+    assert(strcmp(status_value("RefState"),"WAIT")==0);
+    assert(strcmp(status_value("VREF"),"NO DATA")==0); /* Never show a guessed value as measured. */
+    reference_data=reference_seen=true; step(0,501);
     for(unsigned row=0;row<status->row_count;++row) {
         if(strcmp(status->rows[row].name,"DispErr")==0) assert(strcmp(status->rows[row].value,"2")==0);
         if(strcmp(status->rows[row].name,"KeyRpt")==0) assert(strcmp(status->rows[row].value,"0")!=0);

@@ -7,6 +7,9 @@ extern ADC_TypeDef adc1, adc2;
 extern ADC_HandleTypeDef hadc1, hadc2;
 #define ADC1 (&adc1)
 #define ADC2 (&adc2)
+extern uint16_t host_vrefint_cal;
+#define VREFINT_CAL_ADDR (&host_vrefint_cal)
+#define VREFINT_CAL_VREF 3000UL
 #define ADC_SINGLE_ENDED 0U
 #define ADC_FLAG_JEOC (1U << 5)
 #define ADC_FLAG_JEOS (1U << 6)

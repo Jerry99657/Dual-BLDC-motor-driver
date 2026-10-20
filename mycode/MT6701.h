@@ -31,6 +31,8 @@ uint16_t MT6701_GetSampleAgeCycles(void);
 
 /* M2 diagnostic input on SPI2 / MT6701_CSN2 (PB12). SPI2 is shared with
  * W25Q64: call Service ONLY from the same main loop as AppStorage_Service.
+ * Five consecutive invalid frames/HAL failures stop polling until MCU reset.
+ * Valid frames reset the streak; a busy SPI2/W25Q64 does not count as a failure.
  * This input is not yet the real-time angle source of an M2 FOC controller. */
 typedef struct {
     uint16_t raw_angle;

@@ -1,4 +1,6 @@
-# ST HSO 接入与试运行（UI-R19-45RPM）
+# ST HSO 接入与试运行（UI-R22-VREF）
+
+R22 使用 VREFINT 平均及低通滤波估算 VREF+，校正 HSO 输入电流、电压的物理量；ST 库的固定归一化尺度保持不变。规则组采样窗口、参考诊断与验证范围见 [VREFINT_reference_tracking.md](VREFINT_reference_tracking.md)。R21 的可选 ENC2 停止探测、R20 的 USB 发送修复也继续保留，HSO 控制策略仍为下述 R19 规则。
 
 R19 按用户要求改为实测 45rpm 机械速度边界：高于边界的正常减速保持 HSO，目标低于边界时先
 用 HSO 减到边界再返回编码器。撤销大幅改速提前返回；HSO 减速参考斜率为 50rad/s²。
