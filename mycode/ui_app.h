@@ -14,6 +14,8 @@ enum {
     UI_PAGE_ABOUT,
     UI_PAGE_RUN_STEPS,
     UI_PAGE_MOTOR,
+    UI_PAGE_SYSTEM,
+    UI_PAGE_WORK,
 };
 
 const KK_UI_App *ui_app_get(void);

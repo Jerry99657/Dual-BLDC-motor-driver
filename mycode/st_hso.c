@@ -67,7 +67,8 @@ static bool valid_config(const StHsoConfig *c)
         fabsf(c->sample_delay_cycles) <= 0.25f;
 }
 
-void StHso_Init(const MotorParams *motor)
+/* Main-loop configuration entries may favor size; the 10kHz observer stays O2. */
+__attribute__((optimize("Os"))) void StHso_Init(const MotorParams *motor)
 {
     __HAL_RCC_CORDIC_CLK_ENABLE();
     /* Also used on a live motor-profile change: no qualification/learned
@@ -87,7 +88,7 @@ void StHso_Init(const MotorParams *motor)
     live.reason = live.entry_reason = ST_HSO_REASON_PARAM;
 }
 
-bool StHso_SetConfig(const StHsoConfig *config)
+__attribute__((optimize("Os"))) bool StHso_SetConfig(const StHsoConfig *config)
 {
     if (!valid_config(config)) return false;
     uint32_t mask = __get_PRIMASK();
@@ -113,6 +114,7 @@ void StHso_Enable(bool enable)
     uint32_t mask = __get_PRIMASK();
     __disable_irq();
     enabled = enable;
+    if (!enable) { live.state=ST_HSO_OFF; was_ready=false; }
     config_pending = true;
     reject_now(enable ? ST_HSO_REASON_PARAM : ST_HSO_REASON_OFF);
     learn_requested = false;

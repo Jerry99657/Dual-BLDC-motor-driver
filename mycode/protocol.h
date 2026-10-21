@@ -11,6 +11,10 @@ void Protocol_Feed(uint8_t source, const uint8_t *data, uint32_t len);
 void Protocol_HandleLine(char *line);
 /* Last HSO command: 1=accepted, -1=unknown, -2=invalid parameter, -3=not ready. */
 int8_t Protocol_GetHsoResult(void);
+/* Configuration executes in main context; motor commands remain bounded ISR
+ * operations. Result: 1 accepted, 0 queued, -1 rejected, -2 syntax, -3 busy. */
+void Protocol_Service(void);
+int8_t Protocol_GetControlResult(void);
 
 /* 遥测输出：USART1 立即发送，USB CDC 由主循环发送 */
 void Telemetry_Send(const uint8_t *data, uint16_t len);

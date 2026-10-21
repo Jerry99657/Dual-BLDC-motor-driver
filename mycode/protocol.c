@@ -3,6 +3,8 @@
 #include "usart.h"
 #include "JerryFOC.h"
 #include "st_hso.h"
+#include "motor_control.h"
+#include "app_storage.h"
 #include "usbd_cdc_if.h"
 #include <stdlib.h>
 #include <string.h>
@@ -38,6 +40,12 @@ static bool parse_hso_values(const char *text, float *values, unsigned count)
 static void handle_hso(const char *command)
 {
     hso_result = 1;
+    if (!MotorControl_HsoAllowed()) {
+        if (!strcmp(command,"Off")) { StHso_Enable(false); return; }
+        if (strcmp(command,"Encoder") || MotorControl_GetWork()!=MOTOR_WORK_SINGLE_M1) {
+            hso_result=-3; return;
+        }
+    }
     if (strcmp(command, "On") == 0) {
         if (JerryFOC_isHSOActive()) { hso_result = -3; return; }
         StHso_Enable(true);
@@ -103,11 +111,87 @@ void Protocol_Feed(uint8_t source, const uint8_t *data, uint32_t len)
     }
 }
 
+static char config_queue[4][PROTO_LINE_MAX];
+static volatile uint8_t config_head,config_count;
+static volatile bool config_applying;
+static volatile int8_t control_result;
+static bool config_save;
+int8_t Protocol_GetControlResult(void) { return control_result; }
+static bool is_configuration(const char *s)
+{
+    return !strncmp(s,"Work:",5) || !strncmp(s,"Motor1:",7) || !strncmp(s,"Motor2:",7) ||
+           !strncmp(s,"Feedback:",9) || !strncmp(s,"Gear:",5) || !strncmp(s,"Align:",6) || !strncmp(s,"Focus:",6);
+}
+static bool apply_configuration(char *s)
+{
+    if (!strncmp(s,"Work:",5)) {
+        static const char *const names[]={"SingleM1","SingleM2","Independent","SyncSpeed","SyncPosition","MasterM1","MasterM2"};
+        for (unsigned i=0;i<MOTOR_WORK_COUNT;++i)
+            if (!strcmp(s+5,names[i])) return MotorControl_SelectWork((MotorWorkMode)i);
+    } else if (!strncmp(s,"Motor1:",7) || !strncmp(s,"Motor2:",7)) {
+        MotorAxis a=s[5]=='1' ? MOTOR_AXIS_1 : MOTOR_AXIS_2;
+        if (!strcmp(s+7,"2804")) return MotorControl_SelectProfile(a,MOTOR_PROFILE_2804);
+        if (!strcmp(s+7,"4015")) return MotorControl_SelectProfile(a,MOTOR_PROFILE_4015);
+    } else if (!strncmp(s,"Feedback:",9)) {
+        if (!strcmp(s+9,"Encoder")) return MotorControl_SelectFeedback(false);
+        if (!strcmp(s+9,"HSO")) return MotorControl_SelectFeedback(true);
+    } else if (!strncmp(s,"Gear:",5)) {
+        float v[2];
+        if (parse_hso_values(s+5,v,2) && fabsf(v[0])>=0.01f && fabsf(v[0])<=10.0f && fabsf(v[1])<=62.83f)
+            return MotorControl_SetGear((int32_t)roundf(v[0]*100),(int32_t)roundf(v[1]*100));
+    } else if (!strncmp(s,"Align:",6) || !strncmp(s,"Focus:",6)) {
+        bool view=s[0]=='F';
+        if (!strcmp(s+6,"M1") || !strcmp(s+6,"M2")) {
+            MotorAxis a=s[7]=='1' ? MOTOR_AXIS_1 : MOTOR_AXIS_2;
+            if (view) { MotorControl_SetFocus(a); return true; }
+            return MotorControl_RequestAlign(a);
+        }
+    }
+    return false;
+}
+void Protocol_Service(void)
+{
+    /* Drain the bounded batch before main services automatic alignment. */
+    for (unsigned i=0;i<4;++i) {
+        char line[PROTO_LINE_MAX];
+        uint32_t mask=__get_PRIMASK(); __disable_irq();
+        if (!config_count) { __set_PRIMASK(mask); break; }
+        config_applying=true;
+        memcpy(line,config_queue[config_head],sizeof(line));
+        config_head=(config_head+1U)%4U; --config_count;
+        __set_PRIMASK(mask);
+        bool ok=apply_configuration(line);
+        control_result=ok ? 1 : -1;
+        if (ok && strncmp(line,"Focus:",6) && strncmp(line,"Align:",6)) config_save=true;
+    }
+    config_applying=false;
+    if (config_save && AppStorage_RequestSave()) config_save=false;
+}
+
 void Protocol_HandleLine(char *line)
 {
+    if (is_configuration(line)) {
+        if (strlen(line)>=PROTO_LINE_MAX) { control_result=-2; return; }
+        uint32_t mask=__get_PRIMASK(); __disable_irq();
+        if (config_count>=4U) control_result=-3;
+        else {
+            strcpy(config_queue[(config_head+config_count)%4U],line);
+            ++config_count; control_result=0;
+        }
+        __set_PRIMASK(mask); return;
+    }
+    MotorWorkMode work=MotorControl_GetWork();
+    MotorAxis axis=work==MOTOR_WORK_SINGLE_M1 ? MOTOR_AXIS_1 :
+                   work==MOTOR_WORK_SINGLE_M2 ? MOTOR_AXIS_2 : MotorControl_GetFocus();
+    bool explicit_axis=false;
+    if (!strncmp(line,"M1:",3) || !strncmp(line,"M2:",3)) {
+        axis=line[1]=='1' ? MOTOR_AXIS_1 : MOTOR_AXIS_2; line+=3; explicit_axis=true;
+    }
+    if ((config_count || config_applying) && strcmp(line,"Stop")) { control_result=-3; return; }
     if (strncmp(line, "HSO:", 4) == 0) {
         /* Parse outside the existing control critical section. The adapter
          * queues configuration for ADC1; never call ST library code here. */
+        if (axis!=MOTOR_AXIS_1) { hso_result=-3; return; }
         handle_hso(line + 4);
         return;
     }
@@ -118,25 +202,28 @@ void Protocol_HandleLine(char *line)
     bool torque_cmd = strncmp(line, "Torque:", 7) == 0;
     bool open_cmd = strncmp(line, "OpenLoop:", 9) == 0;
     if ((speed_cmd || angle_cmd || torque_cmd) &&
-        !parse_hso_values(line + (torque_cmd ? 7 : 6), command_values, 1U)) return;
+        !parse_hso_values(line + (torque_cmd ? 7 : 6), command_values, 1U)) { control_result=-2; return; }
     if (open_cmd && !parse_hso_values(line + 9, command_values,
-                                     strchr(line + 9, ',') ? 2U : 1U)) return;
+                                     strchr(line + 9, ',') ? 2U : 1U)) { control_result=-2; return; }
     uint32_t primask = __get_PRIMASK();
     __disable_irq();
 
-    if (strncmp(line, "Speed:", 6) == 0) {
-        g_openloop_debug = 0U;
-        JerryFOC_setMode(JERRYFOC_MODE_VELOCITY);
-        JerryFOC_setVelocity(command_values[0]);
-    } else if (strncmp(line, "Angle:", 6) == 0) {
-        g_openloop_debug = 0U;
-        JerryFOC_setMode(JERRYFOC_MODE_POSITION);
-        JerryFOC_setPosition(command_values[0], 0.0f);
-    } else if (strncmp(line, "Torque:", 7) == 0) {
-        g_openloop_debug = 0U;
-        JerryFOC_setMode(JERRYFOC_MODE_TORQUE);
-        JerryFOC_setCurrent(command_values[0]);
+    if (!strcmp(line,"Follow")) {
+        control_result=MotorControl_StartFollow() ? 1 : -1;
+    } else if (speed_cmd || angle_cmd || torque_cmd) {
+        JerryFOC_ControlMode mode=speed_cmd ? JERRYFOC_MODE_VELOCITY :
+                                  angle_cmd ? JERRYFOC_MODE_POSITION : JERRYFOC_MODE_TORQUE;
+        uint32_t flags=axis==MOTOR_AXIS_1 ? AppStorage_Get()->flags : AppStorage_Get()->axis2_flags;
+        float value=command_values[0];
+        if (angle_cmd && !MotorControl_IsCoupled()) {
+            MotorAxisSnapshot state; MotorControl_GetAxis(axis,&state);
+            value+=floorf(state.position/(2.0f*PI))*(2.0f*PI);
+        }
+        control_result=MotorControl_Command(axis,mode,value,0,(flags & APP_FLAG_CURRENT_LOOP)!=0U) ? 1 : -1;
     } else if (strncmp(line, "OpenLoop:", 9) == 0) {
+        if (MotorControl_GetWork()!=MOTOR_WORK_SINGLE_M1 || axis!=MOTOR_AXIS_1 || !JerryFOC_isDriveReady()) {
+            control_result=-1; __set_PRIMASK(primask); return;
+        }
         if (JerryFOC_isHSOActive() || JerryFOC_hasHSOFault()) (void)JerryFOC_useHSO(0U);
         /* 纯开环诊断：OpenLoop:速度,电压，例如 OpenLoop:30,6 */
         float speed = command_values[0];
@@ -160,9 +247,10 @@ void Protocol_HandleLine(char *line)
         g_openloop_angle = 0.0f;
     } else if (strcmp(line, "Stop") == 0) {
         if (JerryFOC_isHSOActive() || JerryFOC_hasHSOFault()) (void)JerryFOC_useHSO(0U);
-        JerryFOC_stop();
+        if (explicit_axis) MotorControl_Stop(axis); else MotorControl_StopAll();
+        control_result=1;
     }
-    if (speed_cmd || angle_cmd || torque_cmd || open_cmd) (void)JerryFOC_startOutput();
+    if (open_cmd) control_result=JerryFOC_startOutput() ? 1 : -1;
 
     if (!primask) {
         __enable_irq();

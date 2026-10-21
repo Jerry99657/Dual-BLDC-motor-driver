@@ -13,6 +13,8 @@ extern GPIO_TypeDef host_gpio;
 #define KEY_OK_Pin (1U << 12)
 #define KEY_Left_Pin (1U << 11)
 #define KEY_Right_Pin (1U << 9)
+#define KEY1_GPIO_Port (&host_gpio)
+#define KEY1_Pin (1U << 13)
 #define KEY2_Pin (1U << 14)
 #define KEY_Up_GPIO_Port (&host_gpio)
 #define KEY_Down_GPIO_Port (&host_gpio)

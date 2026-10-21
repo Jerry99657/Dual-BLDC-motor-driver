@@ -2,6 +2,7 @@
 
 #include "main.h"
 #include "spi.h"
+#include "MT6701.h"
 
 #define W25_CS_LOW()  HAL_GPIO_WritePin(W25_NSS_GPIO_Port, W25_NSS_Pin, GPIO_PIN_RESET)
 #define W25_CS_HIGH() HAL_GPIO_WritePin(W25_NSS_GPIO_Port, W25_NSS_Pin, GPIO_PIN_SET)
@@ -34,10 +35,12 @@ static bool w25_send_cmd_addr(uint8_t cmd, uint32_t addr)
 static bool w25_write_enable(void)
 {
     uint8_t cmd = W25_CMD_WRITE_ENABLE;
+    if (!MT6701_2_FlashBegin()) return false;
     W25_CS_LOW();
     bool ok = HAL_SPI_Transmit(&hspi2, &cmd, 1,
                                W25_SPI_TIMEOUT_MS) == HAL_OK;
     W25_CS_HIGH();
+    MT6701_2_FlashEnd();
     return ok;
 }
 
@@ -46,10 +49,12 @@ bool W25Q_PollBusy(bool *busy)
     uint8_t cmd = W25_CMD_READ_STATUS1;
     uint8_t status;
     if (busy == NULL) return false;
+    if (!MT6701_2_FlashBegin()) return false;
     W25_CS_LOW();
     bool ok = HAL_SPI_Transmit(&hspi2, &cmd, 1U, W25_SPI_TIMEOUT_MS) == HAL_OK;
     if (ok) ok = HAL_SPI_Receive(&hspi2, &status, 1U, W25_SPI_TIMEOUT_MS) == HAL_OK;
     W25_CS_HIGH();
+    MT6701_2_FlashEnd();
     if (ok) *busy = (status & 1U) != 0U;
     return ok;
 }
@@ -83,6 +88,7 @@ uint32_t W25Q_ReadID(void)
     uint8_t cmd = W25_CMD_JEDEC_ID;
     uint8_t id[3] = {0U, 0U, 0U};
 
+    if (!MT6701_2_FlashBegin()) return false;
     W25_CS_LOW();
     bool ok = HAL_SPI_Transmit(&hspi2, &cmd, 1,
                                W25_SPI_TIMEOUT_MS) == HAL_OK;
@@ -91,6 +97,7 @@ uint32_t W25Q_ReadID(void)
                              W25_SPI_TIMEOUT_MS) == HAL_OK;
     }
     W25_CS_HIGH();
+    MT6701_2_FlashEnd();
 
     if (!ok) {
         return 0U;
@@ -106,6 +113,7 @@ bool W25Q_Read(uint32_t addr, uint8_t *buf, uint32_t len)
         return false;
     }
 
+    if (!MT6701_2_FlashBegin()) return false;
     W25_CS_LOW();
     bool ok = w25_send_cmd_addr(W25_CMD_READ_DATA, addr);
     if (ok) {
@@ -113,6 +121,7 @@ bool W25Q_Read(uint32_t addr, uint8_t *buf, uint32_t len)
                              W25_SPI_TIMEOUT_MS) == HAL_OK;
     }
     W25_CS_HIGH();
+    MT6701_2_FlashEnd();
     return ok;
 }
 
@@ -128,6 +137,7 @@ bool W25Q_BeginPageProgram(uint32_t addr, const uint8_t *data, uint16_t len)
         return false;
     }
 
+    if (!MT6701_2_FlashBegin()) return false;
     W25_CS_LOW();
     bool ok = w25_send_cmd_addr(W25_CMD_PAGE_PROGRAM, addr);
     if (ok) {
@@ -135,6 +145,7 @@ bool W25Q_BeginPageProgram(uint32_t addr, const uint8_t *data, uint16_t len)
                               W25_SPI_TIMEOUT_MS) == HAL_OK;
     }
     W25_CS_HIGH();
+    MT6701_2_FlashEnd();
 
     return ok;
 }
@@ -145,9 +156,11 @@ bool W25Q_BeginSectorErase(uint32_t addr)
         return false;
     }
 
+    if (!MT6701_2_FlashBegin()) return false;
     W25_CS_LOW();
     bool ok = w25_send_cmd_addr(W25_CMD_SECTOR_ERASE, addr);
     W25_CS_HIGH();
+    MT6701_2_FlashEnd();
 
     return ok;
 }

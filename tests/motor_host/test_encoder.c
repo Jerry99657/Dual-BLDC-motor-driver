@@ -12,13 +12,16 @@ uint32_t host_primask;
 static uint32_t tick, payload=0x0FA006U, flash_cr1, flash_cr2;
 static unsigned reads, aborts, display_errors, dma_starts;
 static uint8_t preempt_on_tick;
-static uint8_t command, *dma_rx;
+static uint8_t command, *dma_rx, *dma2_rx;
+static unsigned dma2_starts;
+static bool early2,preempt2,flash_probe;
 static HAL_StatusTypeDef poll_result=HAL_OK;
 static HAL_StatusTypeDef dma_result=HAL_OK;
 static uint8_t flash[3U*W25Q64_SECTOR_SIZE];
 static uint32_t flash_addr, flash_busy_until;
 static bool write_enabled;
 uint32_t HAL_GetTick(void) {
+    if(preempt2) { preempt2=false; MT6701_2_FastService(); }
     if(preempt_on_tick) { preempt_on_tick=0; MT6701_Service(); }
     return tick;
 }
@@ -27,13 +30,25 @@ void HAL_GPIO_WritePin(GPIO_TypeDef *p,uint16_t pin,GPIO_PinState state) {
     if(state==GPIO_PIN_RESET) {
         if(p==MT6701_CSN2_GPIO_Port && pin==MT6701_CSN2_Pin) assert(gpio_b.pins & W25_NSS_Pin);
         if(p==W25_NSS_GPIO_Port && pin==W25_NSS_Pin) assert(gpio_b.pins & MT6701_CSN2_Pin);
-        if(p==W25_NSS_GPIO_Port && pin==W25_NSS_Pin) command=0;
+        if(p==W25_NSS_GPIO_Port && pin==W25_NSS_Pin) {
+            command=0;
+            if (flash_probe) { unsigned before=dma2_starts; MT6701_2_FastService(); assert(dma2_starts==before); }
+        }
         p->pins &= ~pin;
     } else p->pins |= pin;
 }
 static void receive_frame(uint8_t *p) { p[0]=payload>>16; p[1]=payload>>8; p[2]=payload; }
 HAL_StatusTypeDef HAL_SPI_TransmitReceive_DMA(SPI_HandleTypeDef *h,const uint8_t *tx,uint8_t *rx,uint16_t n) {
-    (void)tx; assert(h==&hspi1 && n==3); dma_rx=rx; ++dma_starts; return dma_result;
+    (void)tx; assert(n==3);
+    if (h==&hspi2) {
+        assert(!(gpio_b.pins & MT6701_CSN2_Pin) && (gpio_b.pins & W25_NSS_Pin));
+        assert((spi2.CR1 & (SPI_CR1_CPOL|SPI_CR1_CPHA|SPI_CR1_BR))==(SPI_PHASE_2EDGE|SPI_BAUDRATEPRESCALER_256));
+        dma2_rx=rx; ++dma2_starts; h->State=2;
+        spi2.CR2 ^= 0x1000U;
+        if (early2) { receive_frame(rx); h->State=HAL_SPI_STATE_READY; HAL_SPI_TxRxCpltCallback(h); }
+        return dma_result;
+    }
+    assert(h==&hspi1); dma_rx=rx; ++dma_starts; return dma_result;
 }
 HAL_StatusTypeDef HAL_SPI_TransmitReceive(SPI_HandleTypeDef *h,const uint8_t *tx,uint8_t *rx,uint16_t n,uint32_t timeout) {
     (void)tx; assert(h==&hspi2 && n==3 && timeout==1);
@@ -76,7 +91,7 @@ HAL_StatusTypeDef HAL_SPI_Receive(SPI_HandleTypeDef *h,uint8_t *p,uint16_t n,uin
     } else assert(0);
     return HAL_OK;
 }
-HAL_StatusTypeDef HAL_SPI_DMAStop(SPI_HandleTypeDef *h) { assert(h==&hspi1); return HAL_OK; }
+HAL_StatusTypeDef HAL_SPI_DMAStop(SPI_HandleTypeDef *h) { assert(h==&hspi1 || h==&hspi2); return HAL_OK; }
 HAL_StatusTypeDef HAL_SPI_Abort(SPI_HandleTypeDef *h) {
     assert(h==&hspi2); ++aborts; h->State=HAL_SPI_STATE_READY; return HAL_OK;
 }
@@ -201,6 +216,54 @@ int main(int argc,char **argv) {
     for(unsigned i=0;i<100;++i) { ++tick; poll(); }
     MT6701_2_GetSnapshot(&out);
     assert(reads==prior && out.errors==errors+5U && !out.healthy);
+    /* Real M2 DMA, including a callback before DMA-start returns. */
+    MT6701_2_Retry(); MT6701_2_SetRealtime(true); payload=0x0FA006U;
+    MT6701_2_FastService(); assert(dma2_starts==1 && dma2_rx);
+    assert(!MT6701_2_FlashBegin());
+    MT6701_2_Retry(); /* Explicit retry does not release an in-flight CS. */
+    assert(!(gpio_b.pins & MT6701_CSN2_Pin));
+    receive_frame(dma2_rx); hspi2.State=HAL_SPI_STATE_READY;
+    unsigned before2=dma2_starts; preempt2=true;
+    HAL_SPI_TxRxCpltCallback(&hspi2); assert(dma2_starts==before2);
+    assert(spi2.CR1==flash_cr1 && spi2.CR2==flash_cr2);
+    MT6701_2_GetSnapshot(&out); assert(out.healthy && out.raw_angle==1000);
+    early2=true; MT6701_2_FastService(); early2=false;
+    assert(spi2.CR1==flash_cr1 && spi2.CR2==flash_cr2);
+    assert(MT6701_2_Reserve(true));
+    assert(!MT6701_2_FlashBegin());
+    MT6701_2_Reserve(false);
+    assert(MT6701_2_FlashBegin());
+    assert(!MT6701_2_Reserve(true));
+    before2=dma2_starts; MT6701_2_FastService(); assert(dma2_starts==before2);
+    MT6701_2_FlashEnd();
+    /* Save defers while real-time output is reserved, then resumes unchanged. */
+    flash_probe=true; assert(AppStorage_Init());
+    AppStorage_Get()->control_config=18; AppStorage_Get()->axis2_speed_x10=321;
+    assert(AppStorage_RequestSave()); assert(MT6701_2_Reserve(true));
+    for(unsigned i=0;i<100;++i) AppStorage_Service(++tick);
+    bool saved; assert(AppStorage_IsDeferred() && !AppStorage_PollSaveResult(&saved));
+    MT6701_2_Reserve(false);
+    for(unsigned i=0;i<100;++i) AppStorage_Service(++tick);
+    assert(AppStorage_PollSaveResult(&saved) && saved);
+    assert(AppStorage_Init());
+    assert(AppStorage_Get()->control_config==18 && AppStorage_Get()->axis2_speed_x10==321);
+    /* A hung DMA is cleaned up in main and releases CS/mode/HAL state. */
+    MT6701_2_FastService(); assert(!(gpio_b.pins & MT6701_CSN2_Pin));
+    unsigned old_aborts=aborts;
+    for(unsigned i=0;i<4;++i) MT6701_2_FastService();
+    MT6701_2_Service(++tick); assert(aborts==old_aborts+1);
+    assert(spi2.CR1==flash_cr1 && spi2.CR2==flash_cr2);
+    /* Five invalid frames stop requests until an explicit retry. */
+    early2=true; payload=0;
+    for(unsigned i=0;i<5;++i) MT6701_2_FastService();
+    before2=dma2_starts;
+    for(unsigned i=0;i<100;++i) MT6701_2_FastService();
+    MT6701_2_GetSnapshot(&out); assert(out.stopped && dma2_starts==before2);
+    assert(W25Q_ReadID()==0xEF4017U);
+    MT6701_2_Retry(); payload=0x0FA006U; MT6701_2_FastService();
+    MT6701_2_GetSnapshot(&out); assert(out.healthy && !out.stopped);
+    early2=false; MT6701_2_SetRealtime(false);
+    puts("PASS: real M2 10kHz DMA, early/preempted completion, Flash mutual exclusion, deferred saves, hung-DMA cleanup, five-failure stop and explicit retry");
     puts("PASS: M2 SPI2 CS/mode restoration, shared W25Q64 transactions, CRC, timeout/abort, stale input, M1 DMA regression");
     return 0;
 }

@@ -44,13 +44,21 @@ static volatile uint32_t s_started_at, s_bus_good_at, s_bus_samples;
 static volatile uint16_t s_bus_raw;
 static volatile bool s_bus_seen, s_bus_valid, s_running, s_power_enabled;
 static volatile bool s_bus_good_tracking;
-static volatile bool s_output_requested = true;
-static volatile uint8_t s_output_arm_frames;
+static volatile bool s_requested[2] = {true, false};
+static bool s_monitored[2] = {true, false};
+static volatile MotorSamplingFault s_axis_fault[2];
+#define s_output_requested s_requested[0]
+static volatile uint8_t s_arm_frames[2];
+#define s_output_arm_frames s_arm_frames[0]
 static volatile MotorSamplingFault s_fault;
-static float s_overload_energy;
-static uint16_t s_fault_current_raw[3];
-static uint8_t s_fault_phase;
-static bool s_fault_during_zero;
+static float s_energy[2];
+#define s_overload_energy s_energy[0]
+static uint16_t s_trip_raw[2][3];
+#define s_fault_current_raw s_trip_raw[0]
+static uint8_t s_trip_phase[2];
+#define s_fault_phase s_trip_phase[0]
+static bool s_zero_fault[2];
+#define s_fault_during_zero s_zero_fault[0]
 static uint8_t s_bus_divider;
 
 static void trigger_bus_after_injected(void)
@@ -85,17 +93,27 @@ static void trip(MotorSamplingFault fault)
     __set_PRIMASK(primask);
 }
 
-static void trip_current(MotorSamplingFault fault, unsigned phase, bool during_zero)
+static TIM_HandleTypeDef *axis_timer(MotorAxis axis)
 {
-    uint32_t primask = __get_PRIMASK();
+    return axis == MOTOR_AXIS_1 ? &htim1 : &htim8;
+}
+
+static void trip_axis(MotorAxis axis, MotorSamplingFault fault, unsigned phase, bool zero)
+{
+    uint32_t mask = __get_PRIMASK();
     __disable_irq();
-    if (s_fault == MOTOR_SAMPLE_FAULT_NONE) {
-        memcpy(s_fault_current_raw, s_frame.m1_current_raw, sizeof(s_fault_current_raw));
-        s_fault_phase = (uint8_t)phase;
-        s_fault_during_zero = during_zero;
+    if (s_axis_fault[axis] == MOTOR_SAMPLE_FAULT_NONE) {
+        for (unsigned i=0; i<3; ++i)
+            s_trip_raw[axis][i] = axis == MOTOR_AXIS_1 ? s_frame.m1_current_raw[i] :
+                                  (i<2 ? s_frame.m2_current_raw[i] : 0U);
+        s_trip_phase[axis] = (uint8_t)phase;
+        s_zero_fault[axis] = zero;
+        s_axis_fault[axis] = fault;
     }
-    trip(fault);
-    __set_PRIMASK(primask);
+    CLEAR_BIT(axis_timer(axis)->Instance->CCER, PHASE_CHANNELS);
+    if (axis==MOTOR_AXIS_2) __HAL_TIM_MOE_DISABLE_UNCONDITIONALLY(&htim8);
+    s_arm_frames[axis] = 0U;
+    __set_PRIMASK(mask);
 }
 
 static bool frame_fresh(void)
@@ -120,42 +138,52 @@ static bool reference_fresh(void)
     return valid && HAL_GetTick() - at <= REFERENCE_TIMEOUT_MS;
 }
 
-bool MotorSampling_IsReady(void)
+bool MotorSampling_IsAxisReady(MotorAxis axis)
 {
-    return s_running && s_power_enabled && s_fault == MOTOR_SAMPLE_FAULT_NONE &&
+    return (unsigned)axis < MOTOR_AXIS_COUNT && s_running && s_power_enabled &&
+           s_fault == MOTOR_SAMPLE_FAULT_NONE && s_axis_fault[axis] == MOTOR_SAMPLE_FAULT_NONE &&
            s_bus_valid && bus_fresh() && frame_fresh() && reference_fresh();
 }
 
-bool MotorSampling_IsCalibrated(void)
+bool MotorSampling_IsReady(void) { return MotorSampling_IsAxisReady(MOTOR_AXIS_1); }
+bool MotorSampling_IsCalibrated(void) { return s_offset_count >= OFFSET_SAMPLES; }
+bool MotorSampling_IsAxisOutputRequested(MotorAxis axis)
 {
-    return s_offset_count >= OFFSET_SAMPLES;
+    return (unsigned)axis < MOTOR_AXIS_COUNT && s_requested[axis];
 }
-
-bool MotorSampling_IsOutputRequested(void) { return s_output_requested; }
-
-bool MotorSampling_IsOutputEnabled(void)
+bool MotorSampling_IsOutputRequested(void) { return s_requested[0]; }
+bool MotorSampling_IsAxisOutputEnabled(MotorAxis axis)
 {
-    return s_power_enabled && s_fault == MOTOR_SAMPLE_FAULT_NONE &&
-           (htim1.Instance->CCER & PHASE_CHANNELS) == PHASE_CHANNELS;
+    return MotorSampling_IsAxisReady(axis) &&
+           (axis_timer(axis)->Instance->CCER & PHASE_CHANNELS) == PHASE_CHANNELS &&
+           (axis_timer(axis)->Instance->BDTR & TIM_BDTR_MOE) != 0U;
 }
+bool MotorSampling_IsOutputEnabled(void) { return MotorSampling_IsAxisOutputEnabled(MOTOR_AXIS_1); }
 
-bool MotorSampling_SetOutputEnabled(bool enable)
+bool MotorSampling_SetAxisOutputEnabled(MotorAxis axis, bool enable)
 {
+    if ((unsigned)axis >= MOTOR_AXIS_COUNT) return false;
     uint32_t mask = __get_PRIMASK();
     __disable_irq();
     bool ok = true;
     if (!enable) {
-        s_output_requested = false;
-        s_output_arm_frames = 0U;
-        CLEAR_BIT(htim1.Instance->CCER, PHASE_CHANNELS);
-    } else if (!MotorSampling_IsReady() || !MotorSampling_IsCalibrated()) {
-        ok = false; /* A failed request must never become a delayed restart. */
-    } else if (!s_output_requested) {
-        s_output_requested = true;
-        s_output_arm_frames = 2U;
+        s_requested[axis] = false;
+        s_arm_frames[axis] = 0U;
+        CLEAR_BIT(axis_timer(axis)->Instance->CCER, PHASE_CHANNELS);
+        if (axis==MOTOR_AXIS_2) __HAL_TIM_MOE_DISABLE_UNCONDITIONALLY(&htim8);
+    } else if (!MotorSampling_IsAxisReady(axis) || !MotorSampling_IsCalibrated()) {
+        ok = false;
+    } else if (!s_requested[axis]) {
+        s_requested[axis] = true;
+        s_monitored[axis] = true;
+        s_arm_frames[axis] = 2U;
     }
     __set_PRIMASK(mask);
     return ok;
+}
+bool MotorSampling_SetOutputEnabled(bool enable)
+{
+    return MotorSampling_SetAxisOutputEnabled(MOTOR_AXIS_1, enable);
 }
 
 float MotorSampling_GetBusVoltage(void)
@@ -163,26 +191,28 @@ float MotorSampling_GetBusVoltage(void)
     return bus_fresh() ? s_bus_voltage : 0.0f;
 }
 
-void MotorSampling_GetDiagnostics(MotorSamplingDiagnostics *out)
+void MotorSampling_GetAxisDiagnostics(MotorAxis axis, MotorSamplingDiagnostics *out)
 {
-    if (out == NULL) return;
+    if (out == NULL || (unsigned)axis >= MOTOR_AXIS_COUNT) return;
     uint32_t primask = __get_PRIMASK();
     __disable_irq();
-    out->fault = s_fault;
+    out->fault = s_fault != MOTOR_SAMPLE_FAULT_NONE ? s_fault : s_axis_fault[axis];
     out->bus_raw = s_bus_raw;
     out->bus_samples = s_bus_samples;
     out->frame_samples = s_frame.sequence;
     out->adc1_error = hadc1.ErrorCode;
     out->adc2_error = hadc2.ErrorCode;
     out->bus_voltage = s_bus_voltage;
-    out->power_enabled = s_power_enabled;
+    out->power_enabled = s_power_enabled && out->fault == MOTOR_SAMPLE_FAULT_NONE;
     for (unsigned i = 0U; i < 3U; ++i) {
-        out->current_raw[i] = s_frame.m1_current_raw[i];
-        out->current_zero[i] = (uint16_t)(s_offsets[i] + 0.5f);
-        out->fault_current_raw[i] = s_fault_current_raw[i];
+        out->current_raw[i] = axis == MOTOR_AXIS_1 ? s_frame.m1_current_raw[i] :
+                              (i<2 ? s_frame.m2_current_raw[i] : 0U);
+        out->current_zero[i] = axis == MOTOR_AXIS_1 ? (uint16_t)(s_offsets[i]+0.5f) :
+                               (i<2 ? (uint16_t)(s_offsets[i+3]+0.5f) : 0U);
+        out->fault_current_raw[i] = s_trip_raw[axis][i];
     }
-    out->fault_phase = s_fault_phase;
-    out->fault_during_zero = s_fault_during_zero;
+    out->fault_phase = s_trip_phase[axis];
+    out->fault_during_zero = s_zero_fault[axis];
     out->silicon_revision = (uint16_t)HAL_GetREVID();
     out->reference_voltage = s_adc_volts * ADC_FULL_SCALE;
     out->reference_raw = s_reference_raw;
@@ -202,9 +232,25 @@ void MotorSampling_GetDiagnostics(MotorSamplingDiagnostics *out)
     out->reference_fresh = reference_valid && out->reference_age_ms <= REFERENCE_TIMEOUT_MS;
 }
 
+void MotorSampling_GetDiagnostics(MotorSamplingDiagnostics *out)
+{
+    MotorSampling_GetAxisDiagnostics(MOTOR_AXIS_1, out);
+}
 const char *MotorSampling_GetStatusText(void)
 {
-    switch (s_fault) {
+    return MotorSampling_GetAxisStatusText(MOTOR_AXIS_1);
+}
+const char *MotorSampling_GetAxisStatusText(MotorAxis axis)
+{
+    if ((unsigned)axis >= MOTOR_AXIS_COUNT) return "INVALID AXIS";
+    MotorSamplingFault fault = s_fault != MOTOR_SAMPLE_FAULT_NONE ? s_fault : s_axis_fault[axis];
+    if (axis == MOTOR_AXIS_2) {
+        if (fault == MOTOR_SAMPLE_FAULT_OVERCURRENT) return "M2 OVERCURRENT";
+        if (fault == MOTOR_SAMPLE_FAULT_OVERLOAD) return "M2 OVERLOAD";
+        if (fault == MOTOR_SAMPLE_FAULT_CURRENT_RANGE)
+            return s_zero_fault[axis] ? "M2 ZERO ADC" : "M2 CURRENT ADC";
+    }
+    switch (fault) {
     case MOTOR_SAMPLE_FAULT_INIT:          return "INIT ERROR";
     case MOTOR_SAMPLE_FAULT_ADC:           return "ADC ERROR";
     case MOTOR_SAMPLE_FAULT_PAIR:          return "ADC PAIR";
@@ -326,6 +372,13 @@ bool MotorSampling_Start(void)
     if (s_running) MotorSampling_Stop();
     s_running = false;
     s_fault = MOTOR_SAMPLE_FAULT_NONE;
+    memset((void *)s_axis_fault, 0, sizeof(s_axis_fault));
+    memset(s_energy, 0, sizeof(s_energy));
+    memset(s_trip_raw, 0, sizeof(s_trip_raw));
+    memset(s_trip_phase, 0, sizeof(s_trip_phase));
+    memset(s_zero_fault, 0, sizeof(s_zero_fault));
+    memset((void *)s_arm_frames, 0, sizeof(s_arm_frames));
+    s_requested[1] = s_monitored[1] = false;
     s_bus_valid = false;
     s_bus_seen = false;
     s_bus_good_tracking = false;
@@ -377,7 +430,7 @@ bool MotorSampling_Start(void)
      * for the timer's internal trigger path. */
     CLEAR_BIT(htim1.Instance->CCER, PHASE_CHANNELS);
     SET_BIT(htim1.Instance->CCER, TIM_CCER_CC4E);
-    SET_BIT(htim8.Instance->CCER, PHASE_CHANNELS);
+    CLEAR_BIT(htim8.Instance->CCER, PHASE_CHANNELS);
 
     if (s_reference_cal < 1000U || s_reference_cal > 2000U) {
         trip(MOTOR_SAMPLE_FAULT_REFERENCE);
@@ -433,7 +486,8 @@ void MotorSampling_Service(void)
         MotorSampling_IsCalibrated() && frame_fresh() && bus_fresh() &&
         s_bus_valid && s_bus_good_tracking && reference_fresh() &&
         HAL_GetTick() - good_at >= BUS_SETTLE_MS) {
-        if (s_output_requested) SET_BIT(htim1.Instance->CCER, PHASE_CHANNELS);
+        if (s_output_requested && s_axis_fault[0] == MOTOR_SAMPLE_FAULT_NONE)
+            SET_BIT(htim1.Instance->CCER, PHASE_CHANNELS);
         s_power_enabled = true;
         __HAL_TIM_MOE_ENABLE(&htim1);
     }
@@ -491,38 +545,46 @@ bool MotorSampling_Capture(void)
             s_offsets[i] = (float)s_offset_sum[i] / (float)OFFSET_SAMPLES;
         for (unsigned i = 0U; i < 3U; ++i) {
             if (s_offsets[i] <= 10.0f || s_offsets[i] >= 4085.0f)
-                trip_current(MOTOR_SAMPLE_FAULT_CURRENT_RANGE, i + 1U, true);
+                trip_axis(MOTOR_AXIS_1, MOTOR_SAMPLE_FAULT_CURRENT_RANGE, i + 1U, true);
         }
     }
-    /* M1 only: M2 power remains disabled. Check unfiltered phase samples so
-     * voltage mode, diagnostic open loop and alignment cannot bypass this.
-     * This is a sampled software trip, not hardware cycle-by-cycle limiting. */
+    /* A missing M2 front end must not prevent M1 operation. Its own zero
+     * validation still rejects enabling M2 until valid offsets exist. */
+    if (!calibrating) {
+        for (unsigned i=3; i<5; ++i)
+            if (s_offsets[i]<=10.0f || s_offsets[i]>=4085.0f)
+                trip_axis(MOTOR_AXIS_2, MOTOR_SAMPLE_FAULT_CURRENT_RANGE, i-2U, true);
+    }
     if (s_power_enabled && !calibrating) {
-        const MotorParams *motor = MotorParams_GetActive();
-        for (unsigned i = 0U; i < 3U; ++i) {
-            if (raw[i] <= 10U || raw[i] >= 4085U)
-                trip_current(MOTOR_SAMPLE_FAULT_CURRENT_RANGE, i + 1U, false);
-            else if (fabsf(s_frame.m1_current[i]) >= motor->max_current)
-                trip_current(MOTOR_SAMPLE_FAULT_OVERCURRENT, i + 1U, false);
-        }
-        if (s_power_enabled) {
-            float iu = s_frame.m1_current[0], iv = s_frame.m1_current[1];
-            float iw = s_frame.m1_current[2];
-            /* For balanced phases this equals Id^2+Iq^2 (peak convention).
-             * Compare all three measured phases; no square root/filter delay. */
-            float current_squared = (2.0f / 3.0f) * (iu * iu + iv * iv + iw * iw);
-            float reference_squared = motor->overload_current * motor->overload_current;
-            s_overload_energy += current_squared - reference_squared;
-            if (s_overload_energy < 0.0f) s_overload_energy = 0.0f;
-            if (s_overload_energy >= reference_squared * CURRENT_SAMPLE_HZ * motor->overload_budget_s)
-                trip_current(MOTOR_SAMPLE_FAULT_OVERLOAD, 0U, false);
+        for (unsigned a=0; a<MOTOR_AXIS_COUNT; ++a) {
+            if (!s_monitored[a] || s_axis_fault[a] != MOTOR_SAMPLE_FAULT_NONE) continue;
+            const MotorParams *motor = MotorParams_GetAxis((MotorAxis)a);
+            float iu = a == 0 ? s_frame.m1_current[0] : s_frame.m2_current[0];
+            float iv = a == 0 ? s_frame.m1_current[1] : s_frame.m2_current[1];
+            float iw = a == 0 ? s_frame.m1_current[2] : -(iu+iv);
+            float currents[3] = {iu, iv, iw};
+            for (unsigned i=0; i<3; ++i) {
+                uint16_t code = a == 0 ? raw[i] : (i<2 ? raw[i+3] : 2048U);
+                if (code<=10U || code>=4085U)
+                    trip_axis((MotorAxis)a, MOTOR_SAMPLE_FAULT_CURRENT_RANGE, i+1U, false);
+                else if (fabsf(currents[i]) >= motor->max_current)
+                    trip_axis((MotorAxis)a, MOTOR_SAMPLE_FAULT_OVERCURRENT, i+1U, false);
+            }
+            float squared = (2.0f/3.0f)*(iu*iu+iv*iv+iw*iw);
+            float reference = motor->overload_current * motor->overload_current;
+            s_energy[a] = fmaxf(0.0f, s_energy[a]+squared-reference);
+            if (s_energy[a] >= reference * CURRENT_SAMPLE_HZ * motor->overload_budget_s)
+                trip_axis((MotorAxis)a, MOTOR_SAMPLE_FAULT_OVERLOAD, 0U, false);
         }
     }
-    /* Wait one full PWM period with fresh compare preloads before reconnecting
-     * the bridge. Protection above can cancel this; CH4 was never stopped. */
-    if (s_output_requested && s_power_enabled && s_fault == MOTOR_SAMPLE_FAULT_NONE &&
-        s_output_arm_frames != 0U && --s_output_arm_frames == 0U)
-        SET_BIT(htim1.Instance->CCER, PHASE_CHANNELS);
+    for (unsigned a=0; a<MOTOR_AXIS_COUNT; ++a) {
+        if (s_requested[a] && s_power_enabled && s_fault == MOTOR_SAMPLE_FAULT_NONE &&
+            s_axis_fault[a] == MOTOR_SAMPLE_FAULT_NONE && s_arm_frames[a] != 0U &&
+            --s_arm_frames[a] == 0U) {
+            __HAL_TIM_MOE_ENABLE(axis_timer((MotorAxis)a));
+            SET_BIT(axis_timer((MotorAxis)a)->Instance->CCER, PHASE_CHANNELS);
+        }
+    }
     for (unsigned i = 0U; i < 3U; ++i)
         s_frame.m1_voltage[i] = (float)s_frame.m1_voltage_raw[i] * voltage_volts;
     ++s_frame.sequence;

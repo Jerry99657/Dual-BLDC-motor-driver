@@ -12,6 +12,8 @@
 #include "motor_sampling.h"
 #include "st_hso.h"
 #include "app_storage.h"
+#include "motor_control.h"
+#include "ui_fonts.h"
 
 GPIO_TypeDef host_gpio = {0xFFFFU};
 static uint32_t tick, dma_done;
@@ -33,7 +35,8 @@ static float velocity, angle, iq;
 static uint8_t current_loop;
 static bool output_requested=true;
 static bool aligning;
-static MT6701Diagnostics enc_diag;
+static MT6701Diagnostics enc_diag,enc2_diag;
+extern void ControlStub_SetSecondState(MotorAxisSnapshot s);
 volatile float JerryFOC_Target_Velocity, JerryFOC_Target_Position, JerryFOC_Target_Iq;
 volatile uint8_t g_openloop_debug;
 static AppSettings settings;
@@ -74,6 +77,7 @@ uint8_t JerryFOC_isAligning(void) { return aligning; }
 uint16_t MT6701_GetRawAngle(void) { return 123; }
 uint32_t MT6701_GetErrorCounter(void) { return enc_diag.errors; }
 void MT6701_GetDiagnostics(MT6701Diagnostics *out) { *out=enc_diag; }
+void MT6701_2_GetDiagnostics(MT6701Diagnostics *out) { *out=enc2_diag; }
 const char *MT6701_ErrorText(MT6701Error error) {
     const char *names[]={"--","NO FRAME","CRC","FIELD","TRACK","SPI"};
     return names[error];
@@ -585,12 +589,12 @@ int main(void) {
     assert(mode==JERRYFOC_MODE_VELOCITY && JerryFOC_Target_Velocity>0);
     enc_diag=(MT6701Diagnostics){.errors=443,.crc_errors=443,.age_cycles=4,.max_age_cycles=4,.last_error=MT6701_ERROR_CRC};
     healthy=false; step(0,1);
-    assert(strcmp(status_value("Run Stop"),"ENCODER LOST")==0);
+    assert(strcmp(status_value("Run Stop"),"ENCODER1 LOST")==0);
     assert(strcmp(status_value("Stop Age"),"4")==0 && strcmp(status_value("Stop Err"),"443")==0);
     assert(JerryFOC_Target_Velocity==0 && JerryFOC_Target_Iq==0);
     healthy=true; enc_diag.age_cycles=1; enc_diag.errors=444; settle();
     assert(strcmp(status_value("Drive"),"READY")==0 && strcmp(status_value("Encoder"),"OK")==0);
-    assert(strcmp(status_value("Run Stop"),"ENCODER LOST")==0);
+    assert(strcmp(status_value("Run Stop"),"ENCODER1 LOST")==0);
     assert(strcmp(status_value("Stop Err"),"443")==0);
     assert(strcmp(status_value("Enc CRC"),"443")==0 && strcmp(status_value("Enc Age"),"1 / 4")==0);
     assert(strcmp(status_value("Enc Last"),"CRC")==0);
@@ -695,6 +699,125 @@ int main(void) {
         step(0,200); fclose(record_file); record_file=NULL;
         assert(kk_ui.current.selected==(sequence==0?1U:2U));
     }
+    /* Per-model/per-axis Pos Speed range tracks Speed Limit, including values
+     * above 63, lowering the cap, switching views, and reloading settings. */
+    for(unsigned a=0;a<2;++a) for(unsigned p=0;p<2;++p) {
+        reset(); MotorControl_StopAll(); MotorControl_SetFocus((MotorAxis)a);
+        MotorParams_SelectAxis((MotorAxis)a,(MotorProfile)p);
+        unsigned maximum=p==MOTOR_PROFILE_4015 ? 120U : 600U;
+        uint32_t flags=(maximum<<APP_SPEED_LIMIT_SHIFT)|AppSettings_EncodePositionSpeed(30);
+        if(a==0) settings.flags=flags|(p ? APP_FLAG_MOTOR_4015 : 0U);
+        else settings.axis2_flags=flags;
+        ui_app_reset(tick); assert(KK_UI_Init(ui_app_get())==KK_UI_OK); settle();
+        press(KK_UI_KEY_RIGHT); press(KK_UI_KEY_OK); settle();
+        select_setting("Pos Speed"); press(KK_UI_KEY_OK); settle();
+        adjust_editor(-1000); assert(kk_ui.overlay.draft==(int32_t)maximum);
+        press(KK_UI_KEY_OK); press(KK_UI_KEY_OK); settle();
+        flags=a ? settings.axis2_flags : settings.flags;
+        assert(AppSettings_GetPositionSpeed(flags)==maximum);
+        assert((flags & APP_SPEED_LIMIT_MASK)==(maximum<<APP_SPEED_LIMIT_SHIFT));
+        if(!a) assert(((flags & APP_FLAG_MOTOR_4015)!=0)==(p!=0));
+        select_setting("Speed Limit"); press(KK_UI_KEY_OK); settle();
+        adjust_editor((int16_t)(maximum-17));
+        press(KK_UI_KEY_OK); press(KK_UI_KEY_OK); settle();
+        assert(AppSettings_GetPositionSpeed(a ? settings.axis2_flags : settings.flags)==17);
+        select_setting("Pos Speed"); press(KK_UI_KEY_OK); settle();
+        adjust_editor(-1000); assert(kk_ui.overlay.draft==17); back();
+        ui_app_reset(tick); assert(KK_UI_Init(ui_app_get())==KK_UI_OK); settle();
+        press(KK_UI_KEY_RIGHT); press(KK_UI_KEY_OK); settle();
+        select_setting("Pos Speed"); press(KK_UI_KEY_OK); settle(); assert(kk_ui.overlay.draft==17); back();
+    }
+    MotorControl_SetFocus(MOTOR_AXIS_1);
+    puts("PASS: M1/M2 2804/4015 Pos Speed dynamic range 1..Speed Limit, 600/120 persistence and downward clamping");
+    /* New System route, independent drafts and KEY1 without stopping M1. */
+    reset(); press(KK_UI_KEY_RIGHT); press(KK_UI_KEY_OK); settle();
+    select_setting("System"); press(KK_UI_KEY_OK); settle();
+    assert(KK_UI_GetCurrentPage()==UI_PAGE_SYSTEM);
+    snapshot("system-dual");
+    press(KK_UI_KEY_OK); settle(); assert(KK_UI_GetCurrentPage()==UI_PAGE_WORK);
+    press(KK_UI_KEY_DOWN); press(KK_UI_KEY_DOWN); press(KK_UI_KEY_OK); settle();
+    assert(MotorControl_GetWork()==MOTOR_WORK_INDEPENDENT);
+    back(); back(); back(); press(KK_UI_KEY_LEFT); press(KK_UI_KEY_OK); settle();
+    assert(KK_UI_GetCurrentPage()==UI_PAGE_RUN);
+    press(KK_UI_KEY_UP); press(KK_UI_KEY_OK); assert(output_requested);
+    assert(fabsf(JerryFOC_Target_Iq-0.05f)<0.001f);
+    /* Bounce <20ms is ignored; a held KEY1 produces exactly one axis change. */
+    for(unsigned i=0;i<10;++i) {
+        host_gpio.pins &= ~KEY1_Pin; ui_input_poll(); ++tick;
+        host_gpio.pins |= KEY1_Pin; ui_input_poll(); ++tick;
+    }
+    ui_app_update(tick); assert(MotorControl_GetFocus()==MOTOR_AXIS_1);
+    for(unsigned i=0;i<1000;++i) {
+        ++tick; host_gpio.pins &= ~KEY1_Pin; ui_input_poll(); ui_app_update(tick);
+    }
+    assert(MotorControl_GetFocus()==MOTOR_AXIS_2 && output_requested);
+    host_gpio.pins |= KEY1_Pin;
+    for(unsigned i=0;i<30;++i) { ++tick; ui_input_poll(); ui_app_update(tick); }
+    press(KK_UI_KEY_RIGHT); press(KK_UI_KEY_UP); press(KK_UI_KEY_OK);
+    MotorAxisSnapshot second; MotorControl_GetAxis(MOTOR_AXIS_2,&second);
+    assert(second.active && second.mode==JERRYFOC_MODE_VELOCITY && second.target_velocity==0.5f);
+    assert(output_requested && fabsf(JerryFOC_Target_Iq-0.05f)<0.001f);
+    settle(); snapshot("run-dual-m2");
+    OLED_SetFont(ui_font_body); assert(OLED_GetUTF8Width("OK:Stop K1:Axis K2:Back")<=152);
+    for(unsigned i=0;i<30;++i) { ++tick; host_gpio.pins &= ~KEY1_Pin; ui_input_poll(); ui_app_update(tick); }
+    assert(MotorControl_GetFocus()==MOTOR_AXIS_1 && output_requested);
+    host_gpio.pins |= KEY1_Pin;
+    for(unsigned i=0;i<30;++i) { ++tick; ui_input_poll(); ui_app_update(tick); }
+    press(KK_UI_KEY_OK); assert(!output_requested); /* Unchanged M1 target toggles M1 only. */
+    MotorControl_GetAxis(MOTOR_AXIS_2,&second); assert(second.active);
+    back(); MotorControl_GetAxis(MOTOR_AXIS_2,&second); assert(!second.active);
+    settle(); step(0,2500);
+    assert(settings.voltage_x100==5 && settings.axis2_speed_x10==5);
+    MotorControl_SelectWork(MOTOR_WORK_SINGLE_M1); MotorControl_SetFocus(MOTOR_AXIS_1);
+    /* Manual follow: UI watches the powered follower, not the free master. */
+    reset(); MotorControl_StopAll(); MotorControl_SelectWork(MOTOR_WORK_MASTER_M1);
+    aligned=false; /* M1 is deliberately unaligned and must remain unpowered. */
+    press(KK_UI_KEY_OK); settle();
+    assert(MotorControl_GetFocus()==MOTOR_AXIS_2);
+    press(KK_UI_KEY_OK); settle(); MotorControl_GetAxis(MOTOR_AXIS_2,&second);
+    assert(MotorControl_IsGroupActive() && !output_requested && second.active && second.mode==JERRYFOC_MODE_POSITION);
+    press(KK_UI_KEY_UP); press(KK_UI_KEY_RIGHT); settle();
+    assert(MotorControl_IsGroupActive() && !output_requested);
+    snapshot("run-hand-follow");
+    OLED_SetFont(ui_font_body); assert(OLED_GetUTF8Width("OK:Follow K2:Back")<=152);
+    press(KK_UI_KEY_OK); MotorControl_GetAxis(MOTOR_AXIS_2,&second);
+    assert(!MotorControl_IsGroupActive() && !second.active);
+    press(KK_UI_KEY_OK); assert(MotorControl_IsGroupActive());
+    back(); MotorControl_GetAxis(MOTOR_AXIS_2,&second);
+    assert(!MotorControl_IsGroupActive() && !second.active && !output_requested);
+    MotorControl_SelectWork(MOTOR_WORK_MASTER_M2); aligned=true;
+    press(KK_UI_KEY_OK); settle(); assert(MotorControl_GetFocus()==MOTOR_AXIS_1);
+    press(KK_UI_KEY_OK); settle(); MotorControl_GetAxis(MOTOR_AXIS_2,&second);
+    assert(MotorControl_IsGroupActive() && output_requested && !second.active && mode==JERRYFOC_MODE_POSITION);
+    back(); assert(!output_requested && !MotorControl_IsGroupActive());
+    MotorControl_SelectWork(MOTOR_WORK_SINGLE_M1); MotorControl_SetFocus(MOTOR_AXIS_1);
+    /* The Run view is M2, but the first loss may have come from either axis.
+     * Both sensors can be unhealthy by the time the slower UI observes it. */
+    for(unsigned lost=0;lost<2;++lost) {
+        reset(); MotorControl_StopAll(); MotorControl_SelectWork(MOTOR_WORK_MASTER_M1);
+        MotorControl_GetAxis(MOTOR_AXIS_2,&second);
+        second.healthy=second.aligned=second.ready=true; second.status="READY";
+        ControlStub_SetSecondState(second);
+        press(KK_UI_KEY_OK); settle(); press(KK_UI_KEY_OK); settle();
+        assert(MotorControl_IsGroupActive() && MotorControl_GetFocus()==MOTOR_AXIS_2);
+        enc_diag=(MT6701Diagnostics){.errors=111,.age_cycles=4};
+        enc2_diag=(MT6701Diagnostics){.errors=222,.age_cycles=6};
+        MotorControl_StopAll(); MotorControl_GetAxis(MOTOR_AXIS_2,&second);
+        second.healthy=false; healthy=false;
+        second.status=MotorControl_EncoderLostText((MotorAxis)lost);
+        ControlStub_SetSecondState(second); step(0,1);
+        assert(!strcmp(status_value("Run Stop"),lost ? "ENCODER2 LOST" : "ENCODER1 LOST"));
+        assert(!strcmp(status_value("Stop Age"),lost ? "6" : "4"));
+        assert(!strcmp(status_value("Stop Err"),lost ? "222" : "111"));
+        settle(); snapshot(lost ? "run-encoder2-stop" : "run-encoder1-group-stop");
+        OLED_SetFont(ui_font_body); assert(OLED_GetUTF8Width(second.status)<=152);
+        healthy=true; second.healthy=true; second.status="READY";
+        ControlStub_SetSecondState(second); settle();
+        assert(!strcmp(status_value("Run Stop"),lost ? "ENCODER2 LOST" : "ENCODER1 LOST"));
+        back();
+    }
+    MotorControl_SelectWork(MOTOR_WORK_SINGLE_M1); MotorControl_SetFocus(MOTOR_AXIS_1);
+    puts("PASS: System/work routes, independent M1/M2 confirmed targets, KEY1 bounce/hold/view-only switching and KEY2 group stop");
     printf("PASS: GPIO, axes, bounce, repeat, Back/cancel, run modes, speed range, stop, fault, position origin, wrap, animations, async DMA (%u submissions)\n",submissions);
     return 0;
 }

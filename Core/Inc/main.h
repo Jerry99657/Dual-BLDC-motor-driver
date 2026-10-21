@@ -53,6 +53,11 @@ extern "C" {
 void Error_Handler(void);
 
 /* USER CODE BEGIN EFP */
+/* Debugger-visible startup progress and the error handler's entry LR.
+ * LR may name an enclosing caller when a generated init tail-calls error. */
+extern volatile uint32_t g_boot_stage;
+extern volatile uint32_t g_error_return_address;
+void Error_Handler(void) __attribute__((noinline));
 
 /* USER CODE END EFP */
 

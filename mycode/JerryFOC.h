@@ -63,6 +63,7 @@ void JerryFOC_playStartupSound(void);
  * ongoing alignment rejects a live switch. Sampling faults remain latched. */
 uint8_t JerryFOC_selectMotor(MotorProfile profile);
 uint8_t JerryFOC_needsAlignment(void);
+void JerryFOC_requestAlignment(void);
 uint8_t JerryFOC_isAligning(void);
 /* Coast with all six gates disabled. All ADC trips remain active. */
 void JerryFOC_stop(void);
@@ -77,6 +78,10 @@ void JerryFOC_alignSensor(void);
 void JerryFOC_alignStart(void);
 void JerryFOC_alignFinish(void);
 void JerryFOC_setPhaseVoltage(float Uq, float Ud, float angle_el);
+/* Shared modulator: axis-specific timer, voltage ceiling and applied dq for
+ * anti-windup. M2 calls do not overwrite M1's HSO voltage history. */
+void JerryFOC_setAxisVoltage(MotorAxis axis, float Uq, float Ud, float angle_el,
+                            float *applied_q, float *applied_d);
 
 /* PID 与滤波计算 */
 float JerryFOC_LPF_Calc(LowPassFilter* filter, float x);

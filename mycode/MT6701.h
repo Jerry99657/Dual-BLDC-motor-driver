@@ -4,6 +4,7 @@
 #include "main.h"
 #include "spi.h"
 #include <math.h>
+#include <stdbool.h>
 
 #ifndef PI
 #define PI 3.14159265358979323846f
@@ -49,11 +50,12 @@ typedef struct {
 void MT6701_GetDiagnostics(MT6701Diagnostics *out);
 const char *MT6701_ErrorText(MT6701Error error);
 
-/* M2 diagnostic input on SPI2 / MT6701_CSN2 (PB12). SPI2 is shared with
- * W25Q64: call Service ONLY from the same main loop as AppStorage_Service.
- * Five consecutive invalid frames/HAL failures stop polling until MCU reset.
+/* M2 encoder on SPI2 / MT6701_CSN2 (PB12). SPI2 is shared with W25Q64:
+ * FastService schedules DMA at 10 kHz when M2 is enabled; main Service owns
+ * abort/recovery and optional 1 kHz diagnostics when M2 is disabled.
+ * Five consecutive failures stop polling until stopped-axis Retry or reset.
  * Valid frames reset the streak; a busy SPI2/W25Q64 does not count as a failure.
- * This input is not yet the real-time angle source of an M2 FOC controller. */
+ * Reserved output/align intervals defer Flash; every CS interval owns SPI2. */
 typedef struct {
     uint16_t raw_angle;
     uint8_t status;
@@ -61,8 +63,18 @@ typedef struct {
     uint32_t samples;
     uint32_t errors;
     float angle;
+    uint16_t age_cycles;
+    uint8_t stopped;
 } MT6701_2_Snapshot;
 void MT6701_2_Service(uint32_t now_ms);
 void MT6701_2_GetSnapshot(MT6701_2_Snapshot *out);
+void MT6701_2_GetDiagnostics(MT6701Diagnostics *out);
+void MT6701_2_SetRealtime(bool enable);
+void MT6701_2_FastService(void);
+void MT6701_2_Retry(void); /* Explicit stopped-axis retry, never automatic. */
+bool MT6701_2_Reserve(bool active); /* Refuses a live Flash/diagnostic CS. */
+bool MT6701_2_StorageBlocked(void);
+bool MT6701_2_FlashBegin(void);
+void MT6701_2_FlashEnd(void);
 
 #endif /* __MT6701_H_ */

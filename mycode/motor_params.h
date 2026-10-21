@@ -5,6 +5,14 @@
 
 /* 电机参数结构体 */
 typedef struct {
+    float accel, decel;         /* Reference acceleration limits, rad/s^2. */
+    float P, damping;           /* Position correction and filtered speed damping. */
+    float response;             /* Reference response, 1/s. */
+    uint8_t fast_tracking;       /* Bounded position tracking; low-lag speed observer. */
+    float velocity_P;           /* Maximum fast-follow speed P, A/(rad/s). */
+} MotorFollowParams;
+
+typedef struct {
     const char *name;           /* 电机标识名 */
     int pole_pairs;             /* 极对数 */
 
@@ -32,6 +40,8 @@ typedef struct {
     /* === 速度环 PI === */
     float vel_P;
     float vel_I;
+    float vel_current_P;        /* Speed PI outputs A with current loop enabled. */
+    float vel_current_I;
     float vel_limit;            /* 输出限幅 (V)，通常 = bus_voltage / sqrt(3) */
     float vel_ramp;             /* 输出变化率限幅 (V/s) */
     float vel_filter_Tf;        /* 速度 LPF 时间常数 (s) */
@@ -40,6 +50,10 @@ typedef struct {
     float pos_P;
     float pos_limit;            /* 输出限幅 (rad/s) */
     float pos_ramp;
+
+    /* Current and voltage actuators have different dynamics. Choose using
+     * the running controller's mode, not an unconfirmed settings draft. */
+    MotorFollowParams follow_voltage, follow_current;
 } MotorParams;
 
 typedef enum {
@@ -48,9 +62,23 @@ typedef enum {
     MOTOR_PROFILE_COUNT
 } MotorProfile;
 
+/* Physical bridge/encoder identity, independent of the attached motor model. */
+typedef enum {
+    MOTOR_AXIS_1 = 0,
+    MOTOR_AXIS_2,
+    MOTOR_AXIS_COUNT
+} MotorAxis;
+
 extern const MotorParams MOTOR_2804;
 extern const MotorParams MOTOR_4015;
 const MotorParams *MotorParams_GetProfile(MotorProfile profile);
+/* Invalid axes return NULL / MOTOR_PROFILE_COUNT and cannot change either
+ * axis. These functions publish configuration only: the controller must stop
+ * the affected axis, reload its PI/limits and invalidate alignment itself. */
+const MotorParams *MotorParams_GetAxis(MotorAxis axis);
+MotorProfile MotorParams_GetAxisProfile(MotorAxis axis);
+uint8_t MotorParams_SelectAxis(MotorAxis axis, MotorProfile profile);
+/* Legacy single-motor interface always addresses M1, never the UI focus. */
 const MotorParams *MotorParams_GetActive(void);
 MotorProfile MotorParams_GetActiveProfile(void);
 /* Application changes must go through JerryFOC_selectMotor(), which stops

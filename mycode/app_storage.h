@@ -8,7 +8,21 @@
 #define APP_FLAG_LED_ENABLE   (1UL << 1)
 /* 在既有 flags 的空闲位保存位置模式速度上限，兼容 version 1 的旧记录。 */
 #define APP_POSITION_SPEED_SHIFT 8U
-#define APP_POSITION_SPEED_MASK (0x3FUL << APP_POSITION_SPEED_SHIFT)
+/* Keep the legacy low six bits; extend into previously unused flags[28:25].
+ * Existing v1/v2/v3 records decode unchanged. Never overlap speed/model flags. */
+#define APP_POSITION_SPEED_LOW_MASK (0x3FUL << APP_POSITION_SPEED_SHIFT)
+#define APP_POSITION_SPEED_HIGH_SHIFT 25U
+#define APP_POSITION_SPEED_MASK (APP_POSITION_SPEED_LOW_MASK | (0xFUL << APP_POSITION_SPEED_HIGH_SHIFT))
+static inline uint32_t AppSettings_GetPositionSpeed(uint32_t flags)
+{
+    return ((flags & APP_POSITION_SPEED_LOW_MASK) >> APP_POSITION_SPEED_SHIFT) |
+           (((flags >> APP_POSITION_SPEED_HIGH_SHIFT) & 0xFU) << 6U);
+}
+static inline uint32_t AppSettings_EncodePositionSpeed(uint32_t speed)
+{
+    return ((speed & 0x3FU) << APP_POSITION_SPEED_SHIFT) |
+           (((speed >> 6U) & 0xFU) << APP_POSITION_SPEED_HIGH_SHIFT);
+}
 /* 速度模式目标上限，单位 rad/s；旧记录的空闲位为 0 时采用默认值。 */
 #define APP_SPEED_LIMIT_SHIFT 14U
 #define APP_SPEED_LIMIT_MASK (0x3FFUL << APP_SPEED_LIMIT_SHIFT)
@@ -30,6 +44,16 @@ typedef struct {
     int32_t speed_step_x10;       /* 1..100: 0.1..10.0 rad/s */
     int32_t torque_step_x100;     /* 1..100: 0.01..1.00 V or A */
     int32_t position_step_x100;   /* 1..100: 0.01..1.00 rad */
+    uint32_t control_config;     /* work mode[2:0], HSO[3], M2 4015[4] */
+    int32_t gear_ratio_x100;     /* Signed mechanical follower ratio; default 100. */
+    int32_t gear_offset_x100;    /* Relative position offset, 0.01 rad. */
+    uint32_t axis2_flags;        /* Current loop and per-axis speed limits. */
+    int32_t axis2_speed_x10;
+    int32_t axis2_voltage_x100;
+    int32_t axis2_position_x100;
+    int32_t axis2_speed_step_x10;
+    int32_t axis2_torque_step_x100;
+    int32_t axis2_position_step_x100;
     uint32_t crc;
 } AppSettings;
 
@@ -49,6 +73,7 @@ AppSettings *AppStorage_Get(void);
 void AppStorage_Load(void);
 bool AppStorage_Save(void); /* 同步保存，仅用于启动/维护阶段。 */
 bool AppStorage_RequestSave(void);
+bool AppStorage_IsDeferred(void); /* M2 real-time sampling currently owns SPI2. */
 void AppStorage_Service(uint32_t now_ms);
 bool AppStorage_PollSaveResult(bool *success);
 /* 只恢复 RAM，应用通过 RequestSave 延迟持久化。 */

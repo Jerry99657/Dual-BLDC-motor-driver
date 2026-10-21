@@ -9,6 +9,7 @@
 #include "st_hso.h"
 #include "protocol.h"
 #include "arm_math.h"
+#include "motor_control.h"
 
 /* 定义放入 RAM 执行的宏（链接脚本已把 .RamFunc 放进 .data） */
 #ifndef __RAM_FUNC
@@ -104,7 +105,8 @@ const MotorParams* JerryFOC_getMotorParams(void)
 
 uint8_t JerryFOC_isDriveReady(void)
 {
-    return MotorSampling_IsReady() && MotorSampling_IsCalibrated() && !hso_feedback_fault;
+    return MotorControl_MotionAllowed(MOTOR_AXIS_1) && MotorSampling_IsReady() &&
+           MotorSampling_IsCalibrated() && !hso_feedback_fault;
 }
 
 uint8_t JerryFOC_isHSOActive(void) { return hso_feedback; }
@@ -134,6 +136,7 @@ uint8_t JerryFOC_useHSO(uint8_t enable)
     uint32_t mask = __get_PRIMASK();
     __disable_irq();
     if (enable) {
+        if (!MotorControl_HsoAllowed()) { __set_PRIMASK(mask); return 0U; }
         float mechanical_speed = encoder_feedback_healthy() ? angle_source->getVelocity() : 0.0f;
         if (!foc_fast_loop_enabled || !MotorSampling_IsOutputRequested() ||
             !JerryFOC_isDriveReady() || hso_returning || hso_stop_inhibit ||
@@ -184,6 +187,8 @@ void JerryFOC_useCurrentLoop(uint8_t enable)
     __disable_irq();
     /* 速度环输出在电压模式下是 V，电流模式下是 A，限幅也必须切换。 */
     vel_loop_M0.limit = enable ? active_motor->rated_current : active_motor->vel_limit;
+    vel_loop_M0.P = enable ? active_motor->vel_current_P : active_motor->vel_P;
+    vel_loop_M0.I = enable ? active_motor->vel_current_I : active_motor->vel_I;
     vel_loop_M0.integral_prev = vel_loop_M0.output_prev = vel_loop_M0.error_prev = 0.0f;
     iq_loop_M0.integral_prev = iq_loop_M0.output_prev = iq_loop_M0.error_prev = 0.0f;
     id_loop_M0.integral_prev = id_loop_M0.output_prev = id_loop_M0.error_prev = 0.0f;
@@ -211,7 +216,7 @@ LowPassFilter M0_Curr_Flt = { .Tf = 0.0001f, .y_prev = 0.0f };
 
 /* 位置外环 P */
 PIDController pos_loop_M0 = {
-    .P = 2.0f, .I = 0.0f, .D = 0.0f,
+    .P = 6.0f, .I = 0.0f, .D = 0.0f,
     .output_ramp = 0.0f, .limit = 30.0f,
     .error_prev = 0.0f, .output_prev = 0.0f, .integral_prev = 0.0f
 };
@@ -237,6 +242,11 @@ PIDController iq_loop_M0 = {
 
 /* ================= 工具函数 ================= */
 uint8_t JerryFOC_needsAlignment(void) { return motor_alignment_pending; }
+void JerryFOC_requestAlignment(void)
+{
+    JerryFOC_stop();
+    motor_alignment_pending=1U;
+}
 uint8_t JerryFOC_isAligning(void) { return !foc_fast_loop_enabled; }
 
 uint8_t JerryFOC_selectMotor(MotorProfile profile)
@@ -331,26 +341,35 @@ __RAM_FUNC float JerryFOC_PID_Calc(PIDController* pid, float error)
 }
 
 /* ================= 底层 FOC 换相 ================= */
-__RAM_FUNC static void setPwm(float da, float db, float dc)
+__RAM_FUNC static void setAxisPwm(MotorAxis axis, float da, float db, float dc)
 {
     float dc_a = _constrain(da, 0.0f, 1.0f);
     float dc_b = _constrain(db, 0.0f, 1.0f);
     float dc_c = _constrain(dc, 0.0f, 1.0f);
 
-    uint32_t arr = __HAL_TIM_GET_AUTORELOAD(&htim1);
+    TIM_HandleTypeDef *timer = axis == MOTOR_AXIS_1 ? &htim1 : &htim8;
+    uint32_t arr = __HAL_TIM_GET_AUTORELOAD(timer);
 
-    __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_1, (uint32_t)(dc_a * (float)arr));
-    __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_2, (uint32_t)(dc_b * (float)arr));
-    __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_3, (uint32_t)(dc_c * (float)arr));
+    __HAL_TIM_SET_COMPARE(timer, TIM_CHANNEL_1, (uint32_t)(dc_a * (float)arr));
+    __HAL_TIM_SET_COMPARE(timer, TIM_CHANNEL_2, (uint32_t)(dc_b * (float)arr));
+    __HAL_TIM_SET_COMPARE(timer, TIM_CHANNEL_3, (uint32_t)(dc_c * (float)arr));
 }
 
-__RAM_FUNC void JerryFOC_setPhaseVoltage(float Uq, float Ud, float angle_el)
+__RAM_FUNC void JerryFOC_setAxisVoltage(MotorAxis axis, float Uq, float Ud, float angle_el,
+                                       float *applied_q, float *applied_d)
 {
+    if ((unsigned)axis >= MOTOR_AXIS_COUNT) return;
+    const MotorParams *motor=MotorParams_GetAxis(axis);
     float bus_voltage = MotorSampling_GetBusVoltage();
-    if (!JerryFOC_isDriveReady() || bus_voltage < 1.0f) {
-        setPwm(0.5f, 0.5f, 0.5f);
-        g_shared_prev_Ualpha = g_shared_prev_Ubeta = 0.0f;
-        g_shared_prev_Ud = g_shared_prev_Uq = 0.0f;
+    if (!MotorSampling_IsAxisReady(axis) || bus_voltage < 1.0f ||
+        !isfinite(Uq) || !isfinite(Ud) || !isfinite(angle_el)) {
+        setAxisPwm(axis,0.5f,0.5f,0.5f);
+        if (applied_q) *applied_q=0.0f;
+        if (applied_d) *applied_d=0.0f;
+        if (axis==MOTOR_AXIS_1) {
+            g_shared_prev_Ualpha=g_shared_prev_Ubeta=0.0f;
+            g_shared_prev_Ud=g_shared_prev_Uq=0.0f;
+        }
         return;
     }
     angle_el = _normalizeAngle(angle_el);
@@ -358,7 +377,7 @@ __RAM_FUNC void JerryFOC_setPhaseVoltage(float Uq, float Ud, float angle_el)
     /* d/q 电压矢量限幅，保留 5% 裕量给死区和母线波动。 */
     /* Measured VBUS sets duty scaling. Retain the configured motor voltage
      * ceiling when a 12 V motor is operated from a higher supply. */
-    float voltage_limit = fminf(bus_voltage, active_motor->bus_voltage) *
+    float voltage_limit = fminf(bus_voltage, motor->bus_voltage) *
                           0.548482756f; /* 0.95/sqrt(3) */
     float voltage_sq = Uq * Uq + Ud * Ud;
     float voltage_limit_sq = voltage_limit * voltage_limit;
@@ -406,16 +425,25 @@ __RAM_FUNC void JerryFOC_setPhaseVoltage(float Uq, float Ud, float angle_el)
     float Ua_actual = (da - duty_common) * bus_voltage;
     float Ub_actual = (db - duty_common) * bus_voltage;
     float Uc_actual = (dc - duty_common) * bus_voltage;
-    g_shared_prev_Ualpha = Ua_actual;
-    g_shared_prev_Ubeta = (Ub_actual - Uc_actual) * 0.5773502692f;
-    g_shared_prev_Ud = g_shared_prev_Ualpha * cos_angle +
-                       g_shared_prev_Ubeta * sin_angle;
-    g_shared_prev_Uq = g_shared_prev_Ubeta * cos_angle -
-                       g_shared_prev_Ualpha * sin_angle;
-
-    setPwm(da, db, dc);
+    float actual_alpha=Ua_actual;
+    float actual_beta=(Ub_actual-Uc_actual)*0.5773502692f;
+    float actual_d=actual_alpha*cos_angle+actual_beta*sin_angle;
+    float actual_q=actual_beta*cos_angle-actual_alpha*sin_angle;
+    if (applied_q) *applied_q=actual_q;
+    if (applied_d) *applied_d=actual_d;
+    if (axis==MOTOR_AXIS_1) {
+        g_shared_prev_Ualpha=actual_alpha; g_shared_prev_Ubeta=actual_beta;
+        g_shared_prev_Ud=actual_d; g_shared_prev_Uq=actual_q;
+    }
+    setAxisPwm(axis,da,db,dc);
 
     (void)start_cycles;
+}
+
+__RAM_FUNC void JerryFOC_setPhaseVoltage(float Uq, float Ud, float angle_el)
+{
+    if (!JerryFOC_isDriveReady()) Uq=Ud=0.0f;
+    JerryFOC_setAxisVoltage(MOTOR_AXIS_1,Uq,Ud,angle_el,NULL,NULL);
 }
 
 /* ================= 传感器标定 ================= */
@@ -502,7 +530,7 @@ void JerryFOC_stop(void)
     reset_pid_state(&iq_loop_M0);
     sensored_velocity_reference = filtered_velocity_global;
     g_shared_prev_Uq = g_shared_prev_Ud = g_shared_prev_Ualpha = g_shared_prev_Ubeta = 0.0f;
-    setPwm(0.5f, 0.5f, 0.5f); /* Neutral preloads, with outputs disconnected. */
+    setAxisPwm(MOTOR_AXIS_1,0.5f,0.5f,0.5f); /* Neutral preloads, with outputs disconnected. */
     __set_PRIMASK(mask);
 }
 
@@ -629,6 +657,11 @@ static float update_velocity_reference(float command)
     float desired = command;
     float rate = SENSORED_ACCEL_LIMIT;
     float deceleration = hso_feedback && !hso_returning ? HSO_DECEL_LIMIT : SENSORED_DECEL_LIMIT;
+    if (MotorControl_IsFastFollow(MOTOR_AXIS_1)) {
+        sensored_velocity_reference=MotorControl_SpeedReference(MOTOR_AXIS_1,
+            sensored_velocity_reference,command);
+        return sensored_velocity_reference;
+    }
     if (sensored_velocity_reference * command < 0.0f &&
         fabsf(sensored_velocity_reference) > 1.0e-4f) {
         desired = 0.0f;
@@ -911,16 +944,19 @@ void HAL_ADCEx_InjectedConvCpltCallback(ADC_HandleTypeDef *hadc)
         if (!MotorSampling_Capture()) return;
         /* SPI DMA 不再在完成中断里自触发；由 ADC 节拍固定为 10 kHz。 */
         MT6701_Service();
+        MT6701_2_FastService();
         const MotorSampleFrame *frame = MotorSampling_GetFrame();
         bool encoder_ready = angle_source && MT6701_IsHealthy() &&
             AngleSrc_Encoder_IsAligned() && AngleSrc_Encoder_IsSource(angle_source);
-        StHso_Process(frame, MotorSampling_IsReady() && MotorSampling_IsCalibrated(),
+        if (MotorControl_HsoAllowed()) StHso_Process(frame, MotorSampling_IsReady() && MotorSampling_IsCalibrated(),
                       encoder_ready ? angle_source->getElectricalAngle() : 0.0f,
                       encoder_ready ? angle_source->getVelocity() : 0.0f, encoder_ready);
         if (foc_fast_loop_enabled) {
             JerryFOC_run();
         }
+        MotorControl_Fast();
         StHso_RecordControlCycles(DWT->CYCCNT - control_start);
+        MotorControl_RecordCycles(DWT->CYCCNT - control_start);
         service_hso_feedback();
     }
 }
@@ -971,6 +1007,8 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
         current_mechanical_angle = angle_source->getMechanicalAngle();
     }
 
+    MotorControl_PrepareOuter();
+
     if (!MotorSampling_IsOutputRequested() ||
         (!g_openloop_debug && (!control_ready || hso_stop_inhibit))) {
         /* 编码器异常时清空外环状态，防止恢复后误差一次性施加到电机。 */
@@ -982,18 +1020,21 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
         /* 开环诊断：目标电压由协议命令直接设置，外环不介入 */
     } else if (current_control_mode == JERRYFOC_MODE_POSITION) {
         float error_pos = JerryFOC_Target_Position - current_mechanical_angle;
-        JerryFOC_Target_Velocity = JerryFOC_PID_Calc(&pos_loop_M0, error_pos);
+        JerryFOC_Target_Velocity = _constrain(MotorControl_PositionVelocity(
+            MOTOR_AXIS_1, &pos_loop_M0, error_pos), -pos_loop_M0.limit, pos_loop_M0.limit);
 
         float velocity_reference =
             update_velocity_reference(JerryFOC_Target_Velocity);
-        float error_vel = velocity_reference - filtered_velocity_global;
-        JerryFOC_Target_Iq = JerryFOC_PID_Calc(&vel_loop_M0, error_vel);
+        JerryFOC_Target_Iq = MotorControl_VelocityControl(MOTOR_AXIS_1,&vel_loop_M0,
+            velocity_reference,filtered_velocity_global);
     } else if (current_control_mode == JERRYFOC_MODE_VELOCITY) {
         float velocity_reference =
             update_velocity_reference(JerryFOC_Target_Velocity);
         float error_vel = velocity_reference - filtered_velocity_global;
         JerryFOC_Target_Iq = JerryFOC_PID_Calc(&vel_loop_M0, error_vel);
     }
+
+    MotorControl_Outer();
 
     /* 每 10 ms 通过 USART1 + USB CDC 发送一帧 JustFloat */
     static int print_counter = 0;
@@ -1033,6 +1074,7 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
         frame.fdata[22] = (float)hso.max_control_cycles / 170.0f;
         frame.fdata[23] = hso_feedback_fault ? -1.0f : (float)hso_feedback;
         frame.fdata[24] = (float)Protocol_GetHsoResult();
+        MotorControl_Telemetry(frame.fdata);
 
         frame.tail[0] = 0x00;
         frame.tail[1] = 0x00;

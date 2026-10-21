@@ -23,8 +23,23 @@ static const InputPin s_pins[] = {
     {KEY2_GPIO_Port, KEY2_Pin, KK_UI_KEY_BACK},
 };
 
+static bool axis_raw,axis_stable,axis_pending;
+static uint32_t axis_changed_at;
+
+bool ui_input_take_axis_change(void)
+{
+    bool result=axis_pending; axis_pending=false; return result;
+}
+
 void ui_input_init(void)
 {
+#ifdef KEY1_Pin
+    GPIO_InitTypeDef axis_pin={0};
+    axis_pin.Pin=KEY1_Pin; axis_pin.Mode=GPIO_MODE_INPUT; axis_pin.Pull=GPIO_PULLUP;
+    HAL_GPIO_Init(KEY1_GPIO_Port,&axis_pin);
+    axis_raw=axis_stable=HAL_GPIO_ReadPin(KEY1_GPIO_Port,KEY1_Pin)==GPIO_PIN_RESET;
+#endif
+    axis_pending=false; axis_changed_at=HAL_GetTick();
     for (unsigned i = 0U; i < sizeof(s_pins) / sizeof(s_pins[0]); ++i) {
         GPIO_InitTypeDef init = {0};
         init.Pin = s_pins[i].pin;
@@ -37,6 +52,15 @@ void ui_input_init(void)
 
 uint8_t ui_input_poll(void)
 {
+#ifdef KEY1_Pin
+    bool pressed=HAL_GPIO_ReadPin(KEY1_GPIO_Port,KEY1_Pin)==GPIO_PIN_RESET;
+    uint32_t now=HAL_GetTick();
+    if (pressed!=axis_raw) { axis_raw=pressed; axis_changed_at=now; }
+    if (axis_stable!=axis_raw && now-axis_changed_at>=20U) {
+        axis_stable=axis_raw;
+        if (axis_stable) axis_pending=true;
+    }
+#endif
     uint8_t keys = 0U;
     for (unsigned i = 0U; i < sizeof(s_pins) / sizeof(s_pins[0]); ++i) {
         bool high = HAL_GPIO_ReadPin(s_pins[i].port, s_pins[i].pin) == GPIO_PIN_SET;

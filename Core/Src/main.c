@@ -35,6 +35,7 @@
 #include "angle_src_encoder.h"
 #include "motor_params.h"
 #include "motor_sampling.h"
+#include "motor_control.h"
 #include "st_hso.h"
 #include "ws2812.h"
 #include "protocol.h"
@@ -71,6 +72,8 @@ static volatile uint8_t g_need_align = 0U;
 static uint8_t ui_ok = 0U;
 static uint8_t g_aligning = 0U;
 static uint32_t g_align_start = 0U;
+volatile uint32_t g_boot_stage;
+volatile uint32_t g_error_return_address;
 
 #define ALIGN_TIME_MS 3000U
 /* USER CODE END PV */
@@ -109,11 +112,16 @@ static void WS2812_UpdateStatus(void)
     static uint32_t last_color = 0xFFFFFFFFU;
     uint32_t color;
 
-    if (!MotorSampling_IsReady() || !MT6701_IsHealthy()) {
+    MotorAxisSnapshot m1,m2;
+    MotorControl_GetAxis(MOTOR_AXIS_1,&m1);
+    MotorControl_GetAxis(MOTOR_AXIS_2,&m2);
+    bool a1=MotorControl_AxisEnabled(MOTOR_AXIS_1), a2=MotorControl_AxisEnabled(MOTOR_AXIS_2);
+    if ((a1 && (!m1.ready || !m1.healthy)) || (a2 && (!m2.ready || !m2.healthy))) {
         color = (30U << 16);                                  /* 红 */
-    } else if (!AngleSrc_Encoder_IsAligned()) {
+    } else if ((a1 && !MotorControl_IsPassive(MOTOR_AXIS_1) && !m1.aligned) ||
+               (a2 && !MotorControl_IsPassive(MOTOR_AXIS_2) && !m2.aligned)) {
         color = (30U << 16) | (15U << 8);                     /* 黄 */
-    } else if (fabsf(JerryFOC_getVelocity()) > 1.0f) {
+    } else if ((a1 && fabsf(m1.velocity)>1.0f) || (a2 && fabsf(m2.velocity)>1.0f)) {
         color = 30U;                                          /* 蓝 */
     } else {
         color = (30U << 8);                                   /* 绿 */
@@ -150,16 +158,16 @@ int main(void)
 {
 
   /* USER CODE BEGIN 1 */
-
+   g_boot_stage = 1U;
   /* USER CODE END 1 */
 
   /* MCU Configuration--------------------------------------------------------*/
 
-  /* Reset of all peripherals, Initializes the Flash interface and the Systick. */
-  HAL_Init();
+  /* Reset peripherals, initialize the Flash interface and SysTick. */
+  if (HAL_Init() != HAL_OK) Error_Handler();
 
   /* USER CODE BEGIN Init */
-
+  g_boot_stage = 2U;
   /* USER CODE END Init */
 
   /* Configure the system clock */
@@ -179,6 +187,7 @@ int main(void)
     pInit.HSI48CalibrationValue = 32;
     HAL_RCCEx_CRSConfig(&pInit);
   }
+  g_boot_stage = 3U;
   /* USER CODE END SysInit */
 
   /* Initialize all configured peripherals */
@@ -199,6 +208,7 @@ int main(void)
   MX_USB_Device_Init();
   MX_TIM6_Init();
   /* USER CODE BEGIN 2 */
+  g_boot_stage = 4U;
   /* 0. SPI2/SPI3 使用软件 NSS，清除 CubeMX 默认生成的 NSSP 位 */
   CLEAR_BIT(SPI2->CR2, SPI_CR2_NSSP);
   CLEAR_BIT(SPI3->CR2, SPI_CR2_NSSP);
@@ -215,8 +225,7 @@ int main(void)
   /* Load the selected motor before ADC protection, alignment or FOC starts.
    * This also works when LCD initialization fails. */
   (void)AppStorage_Init();
-  (void)JerryFOC_selectMotor((AppStorage_Get()->flags & APP_FLAG_MOTOR_4015) ?
-                           MOTOR_PROFILE_4015 : MOTOR_PROFILE_2804);
+  MotorControl_Init();
 
   /* 4. WS2812 状态灯 */
   WS2812_Init();
@@ -244,6 +253,7 @@ int main(void)
 
   /* Acquisition runs even with no motor supply. Service enables M1 only
    * after zero calibration and stable VBUS. M2 power remains disabled. */
+  g_boot_stage = 5U;
   if (!MotorSampling_Start()) {
       /* A hardware/HAL startup failure keeps power disabled; 0 V is NOT a
        * startup failure and continues to be measured until VBUS is connected. */
@@ -252,10 +262,12 @@ int main(void)
   }
 
   /* 10. 1 ms 速度/位置外环 */
+  g_boot_stage = 6U;
   if (HAL_TIM_Base_Start_IT(&htim2) != HAL_OK) {
       MotorSampling_Stop();
       Error_Handler();
   }
+  g_boot_stage = 7U;
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -267,9 +279,11 @@ int main(void)
     /* USER CODE BEGIN 3 */
     uint32_t now = HAL_GetTick();
     MotorSampling_Service();
+    Protocol_Service();
     OLED_DriverService();
     AppStorage_Service(now);
     MT6701_2_Service(HAL_GetTick());
+    MotorControl_Service(HAL_GetTick());
     now = HAL_GetTick();
     uint8_t ui_keys = ui_input_poll();
 
@@ -287,7 +301,8 @@ int main(void)
         ui_app_process_events();
     }
 
-    if ((g_need_align || JerryFOC_needsAlignment()) && !g_aligning &&
+    if (MotorControl_MotionAllowed(MOTOR_AXIS_1) &&
+        (g_need_align || JerryFOC_needsAlignment()) && !g_aligning &&
         MotorSampling_IsReady() && MotorSampling_IsCalibrated() && MT6701_IsHealthy()) {
         g_need_align = 0U;
         JerryFOC_setMode(JERRYFOC_MODE_TORQUE);
@@ -381,6 +396,7 @@ void Error_Handler(void)
 {
   /* USER CODE BEGIN Error_Handler_Debug */
   /* User can add his own implementation to report the HAL error return state */
+  g_error_return_address = (uint32_t)(uintptr_t)__builtin_return_address(0);
   /* Also safe when initialization failed before timer clocks were enabled. */
   if (htim1.Instance != NULL) __HAL_TIM_MOE_DISABLE_UNCONDITIONALLY(&htim1);
   if (htim8.Instance != NULL) __HAL_TIM_MOE_DISABLE_UNCONDITIONALLY(&htim8);

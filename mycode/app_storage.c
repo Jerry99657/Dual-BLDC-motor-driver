@@ -1,4 +1,5 @@
 #include "app_storage.h"
+#include "MT6701.h"
 #include "w25q64.h"
 #include "main.h"
 
@@ -6,7 +7,7 @@
 #include <string.h>
 
 #define APP_SETTINGS_MAGIC 0x464F4331UL  /* "FOC1" */
-#define APP_SETTINGS_VER   2U
+#define APP_SETTINGS_VER   3U
 #define APP_SETTINGS_ADDR_A 0x00000000UL
 #define APP_SETTINGS_ADDR_B 0x00001000UL
 #define APP_LOG_ADDR        0x00002000UL
@@ -61,6 +62,17 @@ static uint32_t crc32_bytes(const uint8_t *data, uint32_t len)
     return ~crc;
 }
 
+static void extended_defaults(AppSettings *s)
+{
+    s->control_config=0U;
+    s->gear_ratio_x100=100;
+    s->gear_offset_x100=0;
+    s->axis2_flags=(30UL<<APP_POSITION_SPEED_SHIFT) |
+                  ((uint32_t)APP_SPEED_LIMIT_DEFAULT<<APP_SPEED_LIMIT_SHIFT);
+    s->axis2_speed_x10=s->axis2_voltage_x100=s->axis2_position_x100=0;
+    s->axis2_speed_step_x10=s->axis2_torque_step_x100=s->axis2_position_step_x100=5;
+}
+
 static void settings_set_defaults(void)
 {
     memset(&s_settings, 0, sizeof(s_settings));
@@ -77,6 +89,7 @@ static void settings_set_defaults(void)
     s_settings.flags = APP_FLAG_LED_ENABLE | (30UL << APP_POSITION_SPEED_SHIFT) |
                        ((uint32_t)APP_SPEED_LIMIT_DEFAULT << APP_SPEED_LIMIT_SHIFT);
     s_settings.led_brightness = 100U;
+    extended_defaults(&s_settings);
     s_settings.crc = crc32_bytes((const uint8_t *)&s_settings,
                                  (uint32_t)offsetof(AppSettings, crc));
 }
@@ -97,18 +110,21 @@ static bool settings_read(uint32_t addr, AppSettings *out)
     if (!W25Q_Read(addr, (uint8_t *)out, sizeof(*out))) {
         return false;
     }
-    /* version 1 的 CRC 位于新增步长字段之前；校验旧记录后在 RAM 中迁移，
-     * 不丢失原有目标、LED、位置速度上限和序号。下次保存才写 version 2。 */
-    const uint32_t legacy_crc_offset = (uint32_t)offsetof(AppSettings, speed_step_x10);
-    if (out->magic == APP_SETTINGS_MAGIC && out->version == 1U &&
-        out->size == legacy_crc_offset + sizeof(uint32_t)) {
+    if (out->magic == APP_SETTINGS_MAGIC &&
+        (out->version == 1U || out->version == 2U)) {
+        uint32_t old_crc = out->version == 1U ?
+            (uint32_t)offsetof(AppSettings,speed_step_x10) :
+            (uint32_t)offsetof(AppSettings,control_config);
         uint32_t stored_crc;
-        memcpy(&stored_crc, (const uint8_t *)out + legacy_crc_offset, sizeof(stored_crc));
-        if (stored_crc != crc32_bytes((const uint8_t *)out, legacy_crc_offset)) return false;
-        out->version = APP_SETTINGS_VER;
-        out->size = sizeof(*out);
-        out->speed_step_x10 = out->torque_step_x100 = out->position_step_x100 = 5;
-        out->crc = crc32_bytes((const uint8_t *)out, (uint32_t)offsetof(AppSettings, crc));
+        if (out->size != old_crc+sizeof(uint32_t)) return false;
+        memcpy(&stored_crc,(const uint8_t *)out+old_crc,sizeof(stored_crc));
+        if (stored_crc != crc32_bytes((const uint8_t *)out,old_crc)) return false;
+        if (out->version == 1U)
+            out->speed_step_x10=out->torque_step_x100=out->position_step_x100=5;
+        extended_defaults(out);
+        out->version=APP_SETTINGS_VER;
+        out->size=sizeof(*out);
+        out->crc=crc32_bytes((const uint8_t *)out,(uint32_t)offsetof(AppSettings,crc));
     }
     return settings_is_valid(out);
 }
@@ -254,7 +270,7 @@ void AppStorage_Load(void)
 
 bool AppStorage_Save(void)
 {
-    if (!s_ready || s_store_state != STORE_IDLE || s_save_pending) {
+    if (MT6701_2_StorageBlocked() || !s_ready || s_store_state != STORE_IDLE || s_save_pending) {
         return false;
     }
 
@@ -301,7 +317,8 @@ void AppStorage_Log(uint16_t event, uint32_t value)
 
 bool AppStorage_RequestSave(void)
 {
-    if (!s_ready || s_save_pending || s_save_result_ready) return false;
+    if (!s_ready || s_save_pending) return false;
+    s_save_result_ready=false;
     s_save_snapshot = s_settings;
     s_save_snapshot.magic = APP_SETTINGS_MAGIC;
     s_save_snapshot.version = APP_SETTINGS_VER;
@@ -343,7 +360,9 @@ static void store_complete(bool success)
     s_store_state = STORE_IDLE;
 }
 
-void AppStorage_Service(uint32_t now_ms)
+bool AppStorage_IsDeferred(void) { return MT6701_2_StorageBlocked(); }
+
+static void storage_step(uint32_t now_ms)
 {
     if (!s_ready || now_ms == s_service_at) return;
     s_service_at = now_ms;
@@ -401,6 +420,13 @@ void AppStorage_Service(uint32_t now_ms)
         break;
     }
     if (!ok) store_complete(false);
+}
+
+void AppStorage_Service(uint32_t now_ms)
+{
+    if (MT6701_2_StorageBlocked() || !MT6701_2_FlashBegin()) return;
+    storage_step(now_ms);
+    MT6701_2_FlashEnd();
 }
 
 bool AppStorage_LedEnabled(void)

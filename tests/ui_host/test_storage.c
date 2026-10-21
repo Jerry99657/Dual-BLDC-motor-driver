@@ -10,6 +10,9 @@ static uint8_t flash[3*W25Q64_SECTOR_SIZE];
 static uint32_t tick, busy_until;
 static unsigned sync_calls;
 static bool fail_program, corrupt_read;
+bool MT6701_2_StorageBlocked(void) { return false; }
+bool MT6701_2_FlashBegin(void) { return true; }
+void MT6701_2_FlashEnd(void) {}
 uint32_t HAL_GetTick(void) { return tick; }
 bool W25Q_Init(void) { return true; }
 uint32_t W25Q_ReadID(void) { return 0xEF4017; }
@@ -111,6 +114,20 @@ int main(void) {
         assert(AppStorage_Init());
         assert(((AppStorage_Get()->flags & APP_SPEED_LIMIT_MASK)>>APP_SPEED_LIMIT_SHIFT)==limits[i]);
     }
+    /* Extended position speed must preserve the independent flags and survive
+     * real NOR save/reload, including the old six-bit boundary. */
+    const unsigned positions[]={1,60,63,64,100,120,600};
+    for(unsigned i=0;i<sizeof(positions)/sizeof(positions[0]);++i) {
+        AppStorage_Get()->flags=APP_FLAG_CURRENT_LOOP|APP_FLAG_LED_ENABLE|APP_FLAG_MOTOR_4015|
+            (600UL<<APP_SPEED_LIMIT_SHIFT)|AppSettings_EncodePositionSpeed(positions[i]);
+        AppStorage_Get()->axis2_flags=(120UL<<APP_SPEED_LIMIT_SHIFT)|AppSettings_EncodePositionSpeed(120);
+        assert(AppStorage_RequestSave()); service(60); assert(result()); service(20);
+        assert(AppStorage_Init());
+        assert(AppSettings_GetPositionSpeed(AppStorage_Get()->flags)==positions[i]);
+        assert(AppSettings_GetPositionSpeed(AppStorage_Get()->axis2_flags)==120);
+        assert((AppStorage_Get()->flags & APP_SPEED_LIMIT_MASK)==(600UL<<APP_SPEED_LIMIT_SHIFT));
+        assert((AppStorage_Get()->flags & 3U)==3U && (AppStorage_Get()->flags & APP_FLAG_MOTOR_4015));
+    }
     /* Original version 1 settings remain readable after adding step fields. */
     struct Legacy {
         uint32_t magic; uint16_t version,size; uint32_t seq;
@@ -121,13 +138,41 @@ int main(void) {
     service(20); memset(flash,255,sizeof(flash)); memcpy(flash,&legacy,sizeof(legacy));
     assert(AppStorage_Init());
     const AppSettings *migrated=AppStorage_Get();
-    assert(migrated->version==2 && migrated->speed_x10==-123 && migrated->voltage_x100==250 && migrated->led_brightness==35);
+    assert(migrated->version==3 && migrated->speed_x10==-123 && migrated->voltage_x100==250 && migrated->led_brightness==35);
     assert(migrated->speed_step_x10==5 && migrated->torque_step_x100==5 && migrated->position_step_x100==5);
     assert((migrated->flags & APP_SPEED_LIMIT_MASK)==0); /* UI supplies default for old records. */
     assert(!(migrated->flags & APP_FLAG_MOTOR_4015));
     assert(AppStorage_RequestSave()); service(60); assert(result()); service(20);
     assert(AppStorage_Init() && AppStorage_Get()->speed_x10==-123);
     assert((AppStorage_Get()->flags & APP_SPEED_LIMIT_MASK)==0); /* Existing version 2 layout. */
-    printf("PASS: async save/log, A/B recovery, failure paths, step/speed-limit persistence, version 1 migration\n");
+    struct Legacy2 {
+        uint32_t magic; uint16_t version,size; uint32_t seq;
+        int32_t speed,voltage,position; uint32_t flags,brightness;
+        int32_t speed_step,torque_step,position_step; uint32_t crc;
+    } legacy2={0x464F4331UL,2,sizeof(legacy2),32,456,300,-100,
+               APP_FLAG_MOTOR_4015|APP_FLAG_CURRENT_LOOP,65,8,9,10,0};
+    legacy2.crc=crc32(&legacy2,offsetof(struct Legacy2,crc));
+    service(20); memset(flash,255,sizeof(flash)); memcpy(flash,&legacy2,sizeof(legacy2));
+    assert(AppStorage_Init()); migrated=AppStorage_Get();
+    assert(migrated->version==3 && migrated->speed_x10==456 && migrated->position_x100==-100);
+    assert((migrated->flags & APP_FLAG_MOTOR_4015) && migrated->torque_step_x100==9);
+    assert(migrated->gear_ratio_x100==100 && migrated->control_config==0);
+    assert(migrated->axis2_speed_step_x10==5 && migrated->axis2_speed_x10==0);
+    AppStorage_Get()->control_config=18; AppStorage_Get()->gear_ratio_x100=-125;
+    AppStorage_Get()->axis2_speed_x10=432; AppStorage_Get()->axis2_position_step_x100=12;
+    assert(AppStorage_RequestSave()); service(80); assert(result());
+    assert(AppStorage_Init()); migrated=AppStorage_Get();
+    assert(migrated->control_config==18 && migrated->gear_ratio_x100==-125);
+    assert(migrated->axis2_speed_x10==432 && migrated->axis2_position_step_x100==12);
+    /* An actual pre-extension v3 record uses only bits[13:8] for Pos Speed. */
+    AppSettings legacy3=*migrated;
+    legacy3.seq=100; legacy3.flags=APP_FLAG_MOTOR_4015|(120UL<<APP_SPEED_LIMIT_SHIFT)|(60UL<<8);
+    legacy3.axis2_flags=APP_FLAG_CURRENT_LOOP|(110UL<<APP_SPEED_LIMIT_SHIFT)|(47UL<<8);
+    legacy3.crc=crc32(&legacy3,offsetof(AppSettings,crc));
+    service(20); memset(flash,255,sizeof(flash)); memcpy(flash,&legacy3,sizeof(legacy3));
+    assert(AppStorage_Init());
+    assert(AppSettings_GetPositionSpeed(AppStorage_Get()->flags)==60);
+    assert(AppSettings_GetPositionSpeed(AppStorage_Get()->axis2_flags)==47);
+    printf("PASS: async save/log, A/B recovery, failure paths, step/speed-limit persistence, versions 1/2 migration and dual-axis v3 persistence\n");
     return 0;
 }

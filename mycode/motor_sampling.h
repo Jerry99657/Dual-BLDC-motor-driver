@@ -3,6 +3,7 @@
 
 #include <stdbool.h>
 #include <stdint.h>
+#include "motor_params.h"
 
 /* 固定对应当前 CubeMX 注入组，保留原始值供 HSO/第二路控制使用。 */
 typedef struct {
@@ -57,8 +58,8 @@ typedef struct {
     bool reference_fresh;
 } MotorSamplingDiagnostics;
 
-/* Starts continuous measurement even at 0 V. M1 power waits for current zero
- * calibration and stable VBUS; M2 power always stays off. */
+/* Starts continuous measurement even at 0 V. Both bridges wait for current
+ * zero calibration and stable VBUS; the axis controllers explicitly arm them. */
 bool MotorSampling_Start(void);
 void MotorSampling_Stop(void);
 void MotorSampling_Service(void);
@@ -69,6 +70,14 @@ bool MotorSampling_IsCalibrated(void);
 bool MotorSampling_SetOutputEnabled(bool enable);
 bool MotorSampling_IsOutputRequested(void);
 bool MotorSampling_IsOutputEnabled(void);
+/* Axis current faults are independent; shared ADC/bus/reference faults stop
+ * both bridges. M2 W current is reconstructed from its two measured phases. */
+bool MotorSampling_IsAxisReady(MotorAxis axis);
+bool MotorSampling_SetAxisOutputEnabled(MotorAxis axis, bool enable);
+bool MotorSampling_IsAxisOutputRequested(MotorAxis axis);
+bool MotorSampling_IsAxisOutputEnabled(MotorAxis axis);
+void MotorSampling_GetAxisDiagnostics(MotorAxis axis, MotorSamplingDiagnostics *out);
+const char *MotorSampling_GetAxisStatusText(MotorAxis axis);
 float MotorSampling_GetBusVoltage(void);
 void MotorSampling_GetDiagnostics(MotorSamplingDiagnostics *out);
 const char *MotorSampling_GetStatusText(void);

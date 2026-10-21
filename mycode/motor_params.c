@@ -1,4 +1,5 @@
 #include "motor_params.h"
+#include <stddef.h>
 
 /*
  * 2804 云台电机，参数按当前电机铭牌。
@@ -21,9 +22,12 @@ const MotorParams MOTOR_2804 = {
     .cur_P = 0.215f,     .cur_I = 575.0f,
     .cur_limit = 12.0f,  .cur_ramp = 100000.0f,
     .vel_P = 0.05f,      .vel_I = 0.5f,
+    .vel_current_P = 0.05f, .vel_current_I = 0.5f,
     .vel_limit = 6.93f,  .vel_ramp = 0.0f,
     .vel_filter_Tf = 0.005f,
-    .pos_P = 2.0f,       .pos_limit = 30.0f,   .pos_ramp = 0.0f,
+    .pos_P = 6.0f,       .pos_limit = 30.0f,   .pos_ramp = 0.0f,
+    .follow_voltage = {.accel=40, .decel=40, .P=2, .damping=2, .response=16},
+    .follow_current = {.accel=40, .decel=40, .P=2, .damping=2, .response=16},
 };
 
 /* 4015 / 24N22P, delta: 3.6-ohm terminal resistance -> 1.8-ohm star model.
@@ -42,14 +46,24 @@ const MotorParams MOTOR_4015 = {
     .cur_bandwidth = 250.0f,
     .cur_P = 0.325f, .cur_I = 450.0f,
     .cur_limit = 24.0f, .cur_ramp = 100000.0f,
-    .vel_P = 0.05f, .vel_I = 0.5f,
+    /* Voltage-mode response trial; do not copy V gains into the A controller. */
+    .vel_P = 0.1f, .vel_I = 1.0f,
+    .vel_current_P = 0.05f, .vel_current_I = 0.5f,
     .vel_limit = 13.86f, .vel_ramp = 0.0f,
     .vel_filter_Tf = 0.005f,
-    .pos_P = 2.0f, .pos_limit = 30.0f, .pos_ramp = 0.0f,
+    .pos_P = 6.0f, .pos_limit = 30.0f, .pos_ramp = 0.0f,
+    .follow_voltage = {.accel=40, .decel=40, .P=2, .damping=2, .response=16},
+    /* +/-10deg at 4Hz requires 110rad/s^2. Keep correction headroom in the
+     * 300/600 speed-command slew; current/overload limits remain independent. */
+    .follow_current = {.accel=180, .decel=500, .P=3, .damping=0, .response=120,
+                       .fast_tracking=1, .velocity_P=0.1f},
 };
 
-/* Main loop publishes inside the FOC switch critical section; ADC reads. */
-static volatile MotorProfile active_profile = MOTOR_PROFILE_2804;
+/* Main loop publishes inside the controller switch critical section; ADC
+ * reads. Presets are immutable and can be shared; axis selections cannot. */
+static volatile MotorProfile axis_profiles[MOTOR_AXIS_COUNT] = {
+    MOTOR_PROFILE_2804, MOTOR_PROFILE_2804
+};
 
 const MotorParams *MotorParams_GetProfile(MotorProfile profile)
 {
@@ -58,12 +72,35 @@ const MotorParams *MotorParams_GetProfile(MotorProfile profile)
 
 const MotorParams *MotorParams_GetActive(void)
 {
-    return MotorParams_GetProfile(active_profile);
+    return MotorParams_GetAxis(MOTOR_AXIS_1);
 }
 
-MotorProfile MotorParams_GetActiveProfile(void) { return active_profile; }
+const MotorParams *MotorParams_GetAxis(MotorAxis axis)
+{
+    if ((unsigned)axis >= MOTOR_AXIS_COUNT) return NULL;
+    return MotorParams_GetProfile(axis_profiles[axis]);
+}
+
+MotorProfile MotorParams_GetAxisProfile(MotorAxis axis)
+{
+    if ((unsigned)axis >= MOTOR_AXIS_COUNT) return MOTOR_PROFILE_COUNT;
+    return axis_profiles[axis];
+}
+
+uint8_t MotorParams_SelectAxis(MotorAxis axis, MotorProfile profile)
+{
+    if ((unsigned)axis >= MOTOR_AXIS_COUNT ||
+        (unsigned)profile >= MOTOR_PROFILE_COUNT) return 0U;
+    axis_profiles[axis] = profile;
+    return 1U;
+}
+
+MotorProfile MotorParams_GetActiveProfile(void)
+{
+    return MotorParams_GetAxisProfile(MOTOR_AXIS_1);
+}
 
 void MotorParams_Select(MotorProfile profile)
 {
-    if ((unsigned)profile < MOTOR_PROFILE_COUNT) active_profile = profile;
+    (void)MotorParams_SelectAxis(MOTOR_AXIS_1, profile);
 }

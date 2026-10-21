@@ -13,6 +13,7 @@ uint32_t host_primask;
 UART_HandleTypeDef huart1;
 USBD_HandleTypeDef hUsbDeviceFS;
 volatile uint8_t g_usb_cdc_ready;
+volatile float JerryFOC_Target_Iq, JerryFOC_Target_Position;
 volatile uint8_t g_openloop_debug;
 volatile float g_openloop_angle;
 static bool ready=true, active, fault, usable;

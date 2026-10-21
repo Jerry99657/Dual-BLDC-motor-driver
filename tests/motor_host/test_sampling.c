@@ -71,7 +71,7 @@ HAL_StatusTypeDef HAL_TIM_Base_Start(TIM_HandleTypeDef *h) {
     assert(!(tim8.CR1 & TIM_CR1_CEN));
     assert(!(tim1.CR1 & TIM_CR1_DIR) && !(tim8.CR1 & TIM_CR1_DIR));
     assert(!(tim1.BDTR & TIM_BDTR_MOE) && !(tim8.BDTR & TIM_BDTR_MOE));
-    assert((tim8.CCER & 0x555U) == 0x555U);
+    assert((tim8.CCER & 0x555U) == 0U);
     assert((tim1.CCER & 0x555U) == 0U); /* Only CH4 may be enabled during zeroing. */
     assert(tim1.CCR1 == tim1.CCR2 && tim1.CCR2 == tim1.CCR3);
     assert(tim8.CCR1 == tim8.CCR2 && tim8.CCR2 == tim8.CCR3);
@@ -530,6 +530,47 @@ int main(void) {
     assert(!MotorSampling_SetOutputEnabled(true) && !MotorSampling_IsOutputRequested());
     sample_ms(2,1354); assert(!MotorSampling_IsOutputEnabled());
     MotorParams_Select(MOTOR_PROFILE_2804);
+    /* Two bridges: independent arming and current-fault latches. */
+    MotorParams_Select(MOTOR_PROFILE_2804);
+    MotorParams_SelectAxis(MOTOR_AXIS_2,MOTOR_PROFILE_4015);
+    reset(); assert(MotorSampling_Start()); sample_ms(301,1354);
+    assert(MotorSampling_IsAxisReady(MOTOR_AXIS_2));
+    assert(MotorSampling_SetAxisOutputEnabled(MOTOR_AXIS_1,true));
+    assert(MotorSampling_SetAxisOutputEnabled(MOTOR_AXIS_2,true));
+    frame(0); assert(MotorSampling_Capture()); assert(!(tim8.CCER & 0x555U));
+    frame(0); assert(MotorSampling_Capture()); assert(MotorSampling_IsAxisOutputEnabled(MOTOR_AXIS_2));
+    assert(MotorSampling_IsOutputEnabled());
+    /* Each measured M2 phase is below 2.5 A; reconstructed W exceeds it. */
+    frame(0); adc1.JDR4=2750; adc2.JDR4=2800; assert(MotorSampling_Capture());
+    MotorSamplingDiagnostics second_diag; MotorSampling_GetAxisDiagnostics(MOTOR_AXIS_2,&second_diag);
+    assert(second_diag.fault==MOTOR_SAMPLE_FAULT_OVERCURRENT && second_diag.fault_phase==3);
+    assert(MotorSampling_IsReady() && MotorSampling_IsOutputEnabled());
+    assert(!MotorSampling_IsAxisOutputEnabled(MOTOR_AXIS_2));
+    assert(!MotorSampling_SetAxisOutputEnabled(MOTOR_AXIS_2,true));
+    sample_ms(10,1354); assert(!MotorSampling_IsAxisOutputEnabled(MOTOR_AXIS_2));
+    /* Conversely M1's fault leaves M2 available in independent mode. */
+    reset(); assert(MotorSampling_Start()); sample_ms(301,1354);
+    assert(MotorSampling_SetAxisOutputEnabled(MOTOR_AXIS_2,true)); sample_ms(1,1354);
+    frame(0); adc1.JDR1=4095; assert(MotorSampling_Capture());
+    assert(!MotorSampling_IsReady() && MotorSampling_IsAxisReady(MOTOR_AXIS_2));
+    assert(MotorSampling_IsAxisOutputEnabled(MOTOR_AXIS_2));
+    publish(0);
+    assert(!MotorSampling_IsAxisOutputEnabled(MOTOR_AXIS_2));
+    assert(!MotorSampling_SetAxisOutputEnabled(MOTOR_AXIS_2,true));
+    /* M2 overload uses its own model/budget, including while coasting. */
+    reset(); assert(MotorSampling_Start()); sample_ms(301,1354);
+    assert(MotorSampling_SetAxisOutputEnabled(MOTOR_AXIS_2,true)); sample_ms(1,1354);
+    for(unsigned m=0;m<5500;++m) {
+        ++tick; publish(1354);
+        for(unsigned j=0;j<10;++j) {
+            frame(0); adc1.JDR4=3016; adc2.JDR4=1392;
+            assert(MotorSampling_Capture());
+        }
+        MotorSampling_Service();
+    }
+    MotorSampling_GetAxisDiagnostics(MOTOR_AXIS_2,&second_diag);
+    assert(second_diag.fault==MOTOR_SAMPLE_FAULT_OVERLOAD && MotorSampling_IsReady());
+    puts("PASS: two-bridge independent arming/trips, reconstructed M2 W overcurrent, per-axis overload and shared-bus stop");
     puts("PASS: sampling/protection for both profiles, coast retains ADC/CH4, no automatic re-enable, fresh PWM arming delay, unchanged trip during coast and fault restart refusal");
     return 0;
 }

@@ -138,9 +138,9 @@ void MX_ADC1_Init(void)
   {
     Error_Handler();
   }
-  /** Configure internal reference after VBUS in the same triggered sequence.
-    * 640.5 / 42.5 MHz = 15.07 us sampling (datasheet minimum 4 us).
-    */
+
+  /** Configure Regular Channel
+  */
   sConfig.Channel = ADC_CHANNEL_VREFINT;
   sConfig.Rank = ADC_REGULAR_RANK_2;
   sConfig.SamplingTime = ADC_SAMPLETIME_640CYCLES_5;
