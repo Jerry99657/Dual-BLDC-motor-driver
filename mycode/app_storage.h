@@ -14,6 +14,8 @@
 #define APP_SPEED_LIMIT_MASK (0x3FFUL << APP_SPEED_LIMIT_SHIFT)
 #define APP_SPEED_LIMIT_DEFAULT 100
 #define APP_SPEED_LIMIT_MAX 600
+/* Spare v2 flags bit: old records/defaults select 2804, CRC/layout unchanged. */
+#define APP_FLAG_MOTOR_4015 (1UL << 24)
 
 typedef struct {
     uint32_t magic;

@@ -48,8 +48,10 @@ void JerryFOC_playStartupSound(void)
 }
 
 /* ================= 参数与全局变量 ================= */
-static const MotorParams *active_motor = &MOTOR_2804;
+#define active_motor (MotorParams_GetActive())
 static AngleSource *angle_source = NULL;
+static uint8_t motor_profile_initialized;
+static volatile uint8_t motor_alignment_pending;
 
 /* 纯开环诊断模式 */
 volatile uint8_t g_openloop_debug = 0;
@@ -58,6 +60,7 @@ static float g_shared_prev_Uq = 0.0f;
 static float g_shared_prev_Ud = 0.0f;
 static float g_shared_prev_Ualpha = 0.0f;
 static float g_shared_prev_Ubeta = 0.0f;
+static float id_filter_prev, debug_id_filter_prev;
 static volatile uint8_t foc_fast_loop_enabled = 1U;
 static volatile uint8_t hso_feedback, hso_feedback_fault;
 static volatile float hso_blend; /* ADC writes; TIM2 reads for speed handover. */
@@ -132,7 +135,8 @@ uint8_t JerryFOC_useHSO(uint8_t enable)
     __disable_irq();
     if (enable) {
         float mechanical_speed = encoder_feedback_healthy() ? angle_source->getVelocity() : 0.0f;
-        if (!foc_fast_loop_enabled || !JerryFOC_isDriveReady() || hso_returning || hso_stop_inhibit ||
+        if (!foc_fast_loop_enabled || !MotorSampling_IsOutputRequested() ||
+            !JerryFOC_isDriveReady() || hso_returning || hso_stop_inhibit ||
             fabsf(mechanical_speed) <= HSO_SWITCH_SPEED_RAD_S ||
             (current_control_mode == JERRYFOC_MODE_VELOCITY &&
              (fabsf(JerryFOC_Target_Velocity) <= HSO_SWITCH_SPEED_RAD_S ||
@@ -200,7 +204,7 @@ volatile float phase_current_b = 0.0f;
 volatile float id_current = 0.0f;
 volatile float iq_current = 0.0f;
 
-/* 速度低通滤波器（5 ms，对应 MOTOR_2804.vel_filter_Tf） */
+/* 速度低通滤波器，切换电机时从参数表重新加载。 */
 LowPassFilter M0_Vel_Flt = { .Tf = 0.005f, .y_prev = 0.0f };
 /* 电流低通滤波器（0.1 ms） */
 LowPassFilter M0_Curr_Flt = { .Tf = 0.0001f, .y_prev = 0.0f };
@@ -232,6 +236,51 @@ PIDController iq_loop_M0 = {
 };
 
 /* ================= 工具函数 ================= */
+uint8_t JerryFOC_needsAlignment(void) { return motor_alignment_pending; }
+uint8_t JerryFOC_isAligning(void) { return !foc_fast_loop_enabled; }
+
+uint8_t JerryFOC_selectMotor(MotorProfile profile)
+{
+    if ((unsigned)profile >= MOTOR_PROFILE_COUNT) return 0U;
+    if (motor_profile_initialized && profile == MotorParams_GetActiveProfile()) return 1U;
+    uint32_t mask = __get_PRIMASK();
+    __disable_irq();
+    /* Read the source directly, before reinitializing its velocity to zero.
+     * A disconnected encoder cannot certify that the rotor has stopped. */
+    if (angle_source && (!foc_fast_loop_enabled || !MT6701_IsHealthy() ||
+        !isfinite(angle_source->getVelocity()) || fabsf(angle_source->getVelocity()) > 1.0f)) {
+        __set_PRIMASK(mask);
+        return 0U;
+    }
+    JerryFOC_stop();
+    MotorParams_Select(profile);
+    const MotorParams *m = active_motor;
+    flag_use_current_loop = 0U;
+    current_control_mode = JERRYFOC_MODE_TORQUE;
+    JerryFOC_Target_Position = JerryFOC_Target_Velocity = JerryFOC_Target_Iq = 0.0f;
+    g_openloop_debug = 0U;
+    g_openloop_angle = sensored_velocity_reference = 0.0f;
+    g_shared_prev_Uq = g_shared_prev_Ud = g_shared_prev_Ualpha = g_shared_prev_Ubeta = 0.0f;
+    hso_feedback = hso_feedback_fault = hso_returning = hso_stop_inhibit = 0U;
+    hso_loss_recorded = 0U;
+    hso_blend = hso_return_weight = hso_control_angle = 0.0f;
+    vel_loop_M0 = (PIDController){.P=m->vel_P, .I=m->vel_I,
+        .output_ramp=m->vel_ramp, .limit=m->vel_limit};
+    pos_loop_M0 = (PIDController){.P=m->pos_P, .limit=m->pos_limit,
+        .output_ramp=m->pos_ramp};
+    id_loop_M0 = iq_loop_M0 = (PIDController){.P=m->cur_P, .I=m->cur_I,
+        .output_ramp=m->cur_ramp, .limit=m->cur_limit};
+    velocity_limit_global = m->pos_limit;
+    M0_Vel_Flt = (LowPassFilter){.Tf=m->vel_filter_Tf};
+    M0_Curr_Flt.y_prev = filtered_velocity_global = id_current = iq_current = 0.0f;
+    id_filter_prev = debug_id_filter_prev = 0.0f;
+    angle_source = AngleSrc_Encoder_Init(m->pole_pairs);
+    StHso_Init(m);
+    motor_alignment_pending = motor_profile_initialized = 1U;
+    __set_PRIMASK(mask);
+    return 1U;
+}
+
 #define _constrain(amt, low, high) ((amt) < (low) ? (low) : ((amt) > (high) ? (high) : (amt)))
 
 __RAM_FUNC static float _normalizeAngle(float angle)
@@ -374,6 +423,8 @@ void JerryFOC_alignStart(void)
 {
     if (hso_feedback || hso_feedback_fault) (void)JerryFOC_useHSO(0U);
     if (!JerryFOC_isDriveReady()) return;
+    if (!MotorSampling_SetOutputEnabled(true)) return;
+    motor_alignment_pending = 0U;
     /* 标定期间暂停 ADC FOC 回调，否则 10 kHz 电流环会覆盖标定电压。 */
     foc_fast_loop_enabled = 0U;
 
@@ -387,12 +438,12 @@ void JerryFOC_alignStart(void)
 void JerryFOC_alignFinish(void)
 {
     /* 只有拿到新鲜编码器数据才允许记录零点。 */
-    if (JerryFOC_isDriveReady() && AngleSrc_Encoder_IsSource(angle_source) &&
+    if (!foc_fast_loop_enabled && JerryFOC_isDriveReady() && AngleSrc_Encoder_IsSource(angle_source) &&
         MT6701_IsContinuous() && MT6701_IsHealthy()) {
         AngleSrc_Encoder_Align(0.0f);
     }
 
-    JerryFOC_setPhaseVoltage(0.0f, 0.0f, 0.0f);
+    JerryFOC_stop();
     foc_fast_loop_enabled = 1U;
 }
 
@@ -427,6 +478,47 @@ static void reset_pid_state(PIDController *pid)
     pid->integral_prev = 0.0f;
     pid->error_prev = 0.0f;
     pid->output_prev = 0.0f;
+}
+
+void JerryFOC_stop(void)
+{
+    uint32_t mask = __get_PRIMASK();
+    __disable_irq();
+    /* Equal 50% PWM is a zero vector / dynamic brake, not a coast state.
+     * Disconnect the bridge FIRST; keep CH4 and ADC protection alive. */
+    (void)MotorSampling_SetOutputEnabled(false);
+    if (!foc_fast_loop_enabled) {
+        foc_fast_loop_enabled = 1U;
+        motor_alignment_pending = 0U; /* Explicit Stop cancels an alignment. */
+    }
+    hso_feedback = hso_returning = 0U;
+    hso_blend = hso_return_weight = 0.0f;
+    g_openloop_debug = 0U;
+    current_control_mode = JERRYFOC_MODE_TORQUE;
+    JerryFOC_Target_Position = JerryFOC_Target_Velocity = JerryFOC_Target_Iq = 0.0f;
+    reset_pid_state(&vel_loop_M0);
+    reset_pid_state(&pos_loop_M0);
+    reset_pid_state(&id_loop_M0);
+    reset_pid_state(&iq_loop_M0);
+    sensored_velocity_reference = filtered_velocity_global;
+    g_shared_prev_Uq = g_shared_prev_Ud = g_shared_prev_Ualpha = g_shared_prev_Ubeta = 0.0f;
+    setPwm(0.5f, 0.5f, 0.5f); /* Neutral preloads, with outputs disconnected. */
+    __set_PRIMASK(mask);
+}
+
+uint8_t JerryFOC_startOutput(void)
+{
+    uint32_t mask = __get_PRIMASK();
+    __disable_irq();
+    /* Do not reconnect a neutral voltage vector to a fast coasting rotor.
+     * This is a fresh-start gate, not a change to running Speed:0 ramps. */
+    float speed = angle_source ? angle_source->getVelocity() : NAN;
+    bool stopped = MotorSampling_IsOutputRequested() ||
+                   (isfinite(speed) && fabsf(speed) <= 1.0f);
+    uint8_t ok = foc_fast_loop_enabled && JerryFOC_isDriveReady() && !hso_stop_inhibit &&
+        stopped && (g_openloop_debug || sensored_control_ready()) && MotorSampling_SetOutputEnabled(true);
+    __set_PRIMASK(mask);
+    return ok;
 }
 
 static void seed_sensored_velocity_pi(void)
@@ -590,9 +682,8 @@ void JerryFOC_setPosition(float target_pos, float limit)
 
     JerryFOC_Target_Position = base_angle + target_pos;
 
-    if (limit <= 0.0f) {
-        limit = 30.0f;
-    }
+    if (limit <= 0.0f) limit = active_motor->pos_limit;
+    limit = fminf(limit, active_motor->max_speed_mech);
     velocity_limit_global = limit;
     pos_loop_M0.limit = limit;
 }
@@ -602,9 +693,8 @@ void JerryFOC_setAbsolutePosition(float target_pos, float limit)
     if (!isfinite(target_pos)) return;
     recover_hso_stop_for_command();
     JerryFOC_Target_Position = target_pos;
-    if (limit <= 0.0f) {
-        limit = 30.0f;
-    }
+    if (limit <= 0.0f) limit = active_motor->pos_limit;
+    limit = fminf(limit, active_motor->max_speed_mech);
     velocity_limit_global = limit;
     pos_loop_M0.limit = limit;
 }
@@ -621,7 +711,8 @@ void JerryFOC_setVelocity(float target_vel)
         current_control_mode = JERRYFOC_MODE_VELOCITY;
         recover_hso_stop_for_command();
     }
-    JerryFOC_Target_Velocity = target_vel;
+    JerryFOC_Target_Velocity = _constrain(target_vel,
+        -active_motor->max_speed_mech, active_motor->max_speed_mech);
     __set_PRIMASK(mask);
 }
 void JerryFOC_setCurrent(float target_Iq)
@@ -631,6 +722,8 @@ void JerryFOC_setCurrent(float target_Iq)
         recover_hso_stop_for_command();
     if (flag_use_current_loop)
         target_Iq = _constrain(target_Iq, -active_motor->rated_current, active_motor->rated_current);
+    else
+        target_Iq = _constrain(target_Iq, -active_motor->vel_limit, active_motor->vel_limit);
     JerryFOC_Target_Iq = target_Iq;
 }
 JerryFOC_ControlMode JerryFOC_getMode(void) { return current_control_mode; }
@@ -667,6 +760,22 @@ __RAM_FUNC void JerryFOC_run(void)
 {
     const float Ts_curr = 0.0001f;
     service_hso_feedback();
+    if (!MotorSampling_IsOutputRequested()) {
+        const MotorSampleFrame *sample = MotorSampling_GetFrame();
+        phase_current_a = sample->m1_current[0];
+        phase_current_b = sample->m1_current[1];
+        if (angle_source && MT6701_IsHealthy()) {
+            float ia, ib, raw_d, raw_q;
+            JerryFOC_Clarke(phase_current_a, phase_current_b, &ia, &ib);
+            JerryFOC_Park(ia, ib, angle_source->getElectricalAngle(), &raw_d, &raw_q);
+            float alpha = M0_Curr_Flt.Tf / (M0_Curr_Flt.Tf + Ts_curr);
+            iq_current = alpha * M0_Curr_Flt.y_prev + (1.0f-alpha) * raw_q;
+            M0_Curr_Flt.y_prev = iq_current;
+            id_current = alpha * id_filter_prev + (1.0f-alpha) * raw_d;
+            id_filter_prev = id_current;
+        }
+        return;
+    }
 
     /* All five current offsets are captured before rotor alignment. */
     if (!JerryFOC_isDriveReady() || hso_stop_inhibit) {
@@ -705,9 +814,8 @@ __RAM_FUNC void JerryFOC_run(void)
         float alpha = M0_Curr_Flt.Tf / (M0_Curr_Flt.Tf + Ts_curr);
         iq_current = alpha * M0_Curr_Flt.y_prev + (1.0f - alpha) * raw_Iq;
         M0_Curr_Flt.y_prev = iq_current;
-        static float debug_id_prev = 0.0f;
-        id_current = alpha * debug_id_prev + (1.0f - alpha) * raw_Id;
-        debug_id_prev = id_current;
+        id_current = alpha * debug_id_filter_prev + (1.0f - alpha) * raw_Id;
+        debug_id_filter_prev = id_current;
 
         JerryFOC_setPhaseVoltage(uq_voltage, 0.0f, g_openloop_angle);
         return;
@@ -747,9 +855,8 @@ __RAM_FUNC void JerryFOC_run(void)
     float alpha = M0_Curr_Flt.Tf / (M0_Curr_Flt.Tf + Ts_curr);
     iq_current = alpha * M0_Curr_Flt.y_prev + (1.0f - alpha) * raw_Iq;
     M0_Curr_Flt.y_prev = iq_current;
-    static float id_prev = 0.0f;
-    id_current = alpha * id_prev + (1.0f - alpha) * raw_Id;
-    id_prev = id_current;
+    id_current = alpha * id_filter_prev + (1.0f - alpha) * raw_Id;
+    id_filter_prev = id_current;
 
     float target_iq = JerryFOC_Target_Iq;
     if (!isfinite(target_iq)) target_iq = 0.0f;
@@ -864,7 +971,8 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
         current_mechanical_angle = angle_source->getMechanicalAngle();
     }
 
-    if (!g_openloop_debug && (!control_ready || hso_stop_inhibit)) {
+    if (!MotorSampling_IsOutputRequested() ||
+        (!g_openloop_debug && (!control_ready || hso_stop_inhibit))) {
         /* 编码器异常时清空外环状态，防止恢复后误差一次性施加到电机。 */
         JerryFOC_Target_Iq = 0.0f;
         sensored_velocity_reference = filtered_velocity_global;

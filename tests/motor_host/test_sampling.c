@@ -475,6 +475,61 @@ int main(void) {
     reset(); fault_after_arming=true; assert(!MotorSampling_Start()); off(); assert(calls==5);
     reset(); tick=UINT32_MAX-150; assert(MotorSampling_Start());
     sample_ms(300,1354); assert(MotorSampling_IsReady() && diagnostics().fault==MOTOR_SAMPLE_FAULT_NONE);
-    puts("PASS: continuous sampling, late VBUS, timestamp race, phase mapping, +/-2A trip on all phases, ADC rails/zero failure, sustained overload/cooling, latched power-off, startup cleanup, tick wrap");
+    /* The selected profile, rather than the old global 2804 constants,
+     * controls every phase and both overload/instantaneous protections. */
+    MotorParams_Select(MOTOR_PROFILE_4015);
+    for(unsigned phase=0;phase<3;++phase) for(int sign=-1;sign<=1;sign+=2) {
+        reset(); assert(MotorSampling_Start()); sample_ms(300,1354);
+        const int offsets[3]={2000,2050,2100};
+        volatile uint32_t *regs[3]={&adc1.JDR1,&adc2.JDR1,&adc1.JDR2};
+        int below=(int)(MOTOR_4015.max_current/gain);
+        frame(0); *regs[phase]=(uint32_t)(offsets[phase]+sign*below);
+        assert(MotorSampling_Capture() && MotorSampling_IsReady());
+        frame(0); *regs[phase]=(uint32_t)(offsets[phase]+sign*(below+1));
+        assert(MotorSampling_Capture()); off();
+        assert(diagnostics().fault==MOTOR_SAMPLE_FAULT_OVERCURRENT && diagnostics().fault_phase==phase+1);
+        MotorParams_Select(MOTOR_PROFILE_2804); sample_ms(1,1354); off();
+        assert(diagnostics().fault==MOTOR_SAMPLE_FAULT_OVERCURRENT);
+        MotorParams_Select(MOTOR_PROFILE_4015);
+    }
+    reset(); assert(MotorSampling_Start()); sample_ms(300,1354);
+    loaded_ms(10000,744); assert(MotorSampling_IsReady()); /* 1.2 A, below 4015 reference. */
+    loaded_ms(4400,1116); assert(MotorSampling_IsReady()); /* ~1.8 A, 4.6 s allowance. */
+    loaded_ms(400,1116); off(); assert(diagnostics().fault==MOTOR_SAMPLE_FAULT_OVERLOAD);
+    MotorParams_Select(MOTOR_PROFILE_2804);
+    reset(); assert(MotorSampling_Start()); sample_ms(300,1354);
+    loaded_ms(600,930);
+    MotorParams_Select(MOTOR_PROFILE_4015); MotorParams_Select(MOTOR_PROFILE_2804);
+    loaded_ms(650,930); off(); assert(diagnostics().fault==MOTOR_SAMPLE_FAULT_OVERLOAD);
+    /* A coast stop disconnects all six gates without stopping CH4/timers,
+     * DMA or readiness. Service must never reconnect it in the background. */
+    MotorParams_Select(MOTOR_PROFILE_4015);
+    reset(); assert(MotorSampling_Start()); sample_ms(300,1354);
+    assert(MotorSampling_IsOutputEnabled());
+    uint32_t seq=MotorSampling_GetFrame()->sequence, bus_count=diagnostics().bus_samples;
+    assert(MotorSampling_SetOutputEnabled(false));
+    assert(!MotorSampling_IsOutputEnabled() && !MotorSampling_IsOutputRequested());
+    assert((tim1.CCER & 0x555U)==0 && (tim1.CCER & TIM_CCER_CC4E));
+    assert((tim1.BDTR & TIM_BDTR_MOE) && (tim1.CR1 & TIM_CR1_CEN) && (tim8.CR1 & TIM_CR1_CEN));
+    sample_ms(100,1354);
+    assert(MotorSampling_IsReady() && !MotorSampling_IsOutputEnabled());
+    assert(MotorSampling_GetFrame()->sequence>seq && diagnostics().bus_samples>bus_count);
+    assert(MotorSampling_SetOutputEnabled(true) && !MotorSampling_IsOutputEnabled());
+    frame(0); assert(MotorSampling_Capture() && !MotorSampling_IsOutputEnabled());
+    frame(0); assert(MotorSampling_Capture() && MotorSampling_IsOutputEnabled());
+    assert(MotorSampling_SetOutputEnabled(false));
+    /* Stop followed immediately by a new command and another Stop cancels
+     * pending activation; the ADC ISR cannot resurrect the old request. */
+    assert(MotorSampling_SetOutputEnabled(true));
+    assert(MotorSampling_SetOutputEnabled(false)); sample_ms(2,1354);
+    assert(!MotorSampling_IsOutputEnabled());
+    /* The unchanged 2.5 A threshold also trips during coast: no blind time. */
+    frame(0); adc1.JDR1=2000+(uint32_t)(MOTOR_4015.max_current/gain)+1;
+    assert(MotorSampling_Capture());
+    assert(diagnostics().fault==MOTOR_SAMPLE_FAULT_OVERCURRENT);
+    assert(!MotorSampling_SetOutputEnabled(true) && !MotorSampling_IsOutputRequested());
+    sample_ms(2,1354); assert(!MotorSampling_IsOutputEnabled());
+    MotorParams_Select(MOTOR_PROFILE_2804);
+    puts("PASS: sampling/protection for both profiles, coast retains ADC/CH4, no automatic re-enable, fresh PWM arming delay, unchanged trip during coast and fault restart refusal");
     return 0;
 }

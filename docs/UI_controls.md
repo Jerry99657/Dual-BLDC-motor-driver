@@ -1,5 +1,11 @@
 # 电机驱动板 UI 操作与验证
 
+当前固件 **UI-R26-COAST**：运行中的 OK/KEY2 停止和串口 Stop 改为六路功率 PWM 关闭的滑行停止；Speed=0 继续原闭环减速。Status→Output 显示 PWM/COAST/OFF，滑行未停稳时重新启动提示 Wait for stop，保护门限不变。见 [Coast_stop.md](Coast_stop.md)。
+
+R25 让 Run 异常停止显示并保留具体原因，Status 新增 Run Stop、Stop Age/Err 及 M1 编码器分类诊断，详见 [Run_stop_diagnostics.md](Run_stop_diagnostics.md)。
+
+R24 增加 `Settings → Motor → 2804 / 4015` 切换 M1 的控制与保护参数，确认后清零目标并重新对齐；型号后台保存，Status/About 显示实际型号。运动中/编码器异常/对齐中拒绝切换，旧记录默认 2804。具体参数和操作见 [Motor_profiles.md](Motor_profiles.md)。
+
 ## 按键
 
 工程 `.ioc` 中 PD8/9/10/11/12/14 均为上拉输入，默认低有效。上、下、左、右、OK 和 KEY2 各占独立键位，KEY1 保持原配置。
@@ -27,14 +33,14 @@
 
 | 模式 | 目标范围 | 默认步长 | 单位 |
 | --- | --- | --- | --- |
-| Torque，关闭 Curr Loop | -6.00～+6.00 | 0.05 | V，q 轴电压 |
-| Torque，打开 Curr Loop | 当前电机额定电流的正负范围；2804 为 ±2.00 | 0.05 | A，Iq |
+| Torque，关闭 Curr Loop | 2804：±6.93；4015：±13.86 | 0.05 | V，q 轴电压，实际还受母线限制 |
+| Torque，打开 Curr Loop | 2804：±0.50；4015：±1.20 | 0.05 | A，Iq |
 | Speed | -Speed Limit～+Speed Limit，默认 ±100.0 | 0.5 | rad/s |
 | Position | -3.14～+3.14 | 0.05 | rad，相对本次启动位置 |
 
-`Settings → Speed Limit` 调节 Speed 模式的目标范围上限：可设 1～600 rad/s，默认 100 rad/s，每次上下键调整 1 rad/s，支持长按连发。设为 100 时，Run 的 Speed 目标范围为 -100.0～+100.0 rad/s；设为 20 时则为 -20.0～+20.0 rad/s。Run 的 Speed 页面 `Max` 显示此值。
+`Settings → Speed Limit` 调节 Speed 模式的目标范围上限：2804 可设 1～600 rad/s，4015 可设 1～120 rad/s，默认 100 rad/s，每次上下键调整 1 rad/s，支持长按连发。设为 100 时，Run 的 Speed 目标范围为 -100.0～+100.0 rad/s；设为 20 时则为 -20.0～+20.0 rad/s。Run 的 Speed 页面 `Max` 显示此值。
 
-编辑时按 OK 进入确认按钮，再按 OK 提交；KEY2 放弃本次修改。上限提交后立即应用，已有正向或反向目标超出新范围时会收回到对应边界，例如 -80.0 在上限改为 20 后变为 -20.0。返回 Run 仍需 OK 才会启动，不会因改范围自动运行。恢复默认设置时，上限恢复为 100、目标恢复为零。该范围只约束 Run 的 Speed 目标，与位置模式的 Pos Speed、Torque 电压/电流限幅和 Run Steps 步长分别设置。
+编辑时按 OK 进入确认按钮，再按 OK 提交；KEY2 放弃本次修改。上限提交后立即应用，已有正向或反向目标超出新范围时会收回到对应边界，例如 -80.0 在上限改为 20 后变为 -20.0。返回 Run 仍需 OK 才会启动，不会因改范围自动运行。恢复默认设置时，上限恢复为 100、目标恢复为零。Speed Limit 约束 Run 的目标；此外控制接口统一遵守所选型号的最高机械速度，串口也不能超过该硬上限。Pos Speed、Torque 限幅和 Run Steps 分别设置。
 
 `Settings → Run Steps` 可分别设置三种模式的步长，页面直接显示实际数值和单位：
 
@@ -74,7 +80,7 @@ UI-R23-LCD 按用户提供的 BOE 屏幕示例将可见区偏移从 26/1 修正�
 
 当前版本增加了 VREFINT 平均与低通滤波，使用测得的 VREF+ 统一换算电流、母线和相电压。Status 新增 VREF（有效估算的电压）、RefState、Ref R/C、RefCnt、RefErr；显示精度不代表测量精度。首个有效平均值完成前不使能电机，参考估计超时锁存 ADC REF。CubeMX 工程和 ADC 初始化均已同步修改，配置、滤波参数与上板核对见 [VREFINT_reference_tracking.md](VREFINT_reference_tracking.md)。
 
-本轮固件在 `About` 首行 `FW` 显示 **UI-R23-LCD**，用于确认板上已经运行当前构建。ENC2 连续读取失败 5 次后停止探测并让出 SPI2，复位后才重新尝试，见 [ENC2_optional_probe.md](ENC2_optional_probe.md)。此前修复 USB 遥测发送状态竞争和活动缓冲区被覆盖的问题，见 [USB_CDC_tx_recovery.md](USB_CDC_tx_recovery.md)。HSO CONTROL 期间，高于实测 45rpm 的正常减速继续使用 HSO；目标低于边界或要求反转时先减至实测 45rpm，再平滑返回编码器。改速幅度不再触发提前返回，Speed 指令仍用 rad/s。真正失锁先停机，反馈健康时新 Speed 可直接起转。Run 页先提交模式再提交目标。Status 的 Feedback 显示当前反馈来源，完整恢复规则见 [HSO_recovery.md](HSO_recovery.md)。H Gate 为当前校验原因，H Qual 为资格/保持计数，H Jitter 为角度暂停预算，H Reset 为上次角度清零误差，H Lost 保留上次异常原因，H Actual 为观测磁链，见 [ST_HSO_integration.md](ST_HSO_integration.md)。手动加载过载预算见 [2804_current_limits.md](2804_current_limits.md)。Status 的 I Trip、IU/IV/IW R/Z 和 ChipRev，解释及同步采样修复见 [current_adc_diagnostics.md](current_adc_diagnostics.md)。旧版本的 FW 在列表下方，需要向下滚动才能看见；不能仅凭首屏未显示就判断固件版本。
+本轮固件在 `About` 首行 `FW` 显示 **UI-R26-COAST**，用于确认板上已经运行当前构建。ENC2 连续读取失败 5 次后停止探测并让出 SPI2，复位后才重新尝试，见 [ENC2_optional_probe.md](ENC2_optional_probe.md)。此前修复 USB 遥测发送状态竞争和活动缓冲区被覆盖的问题，见 [USB_CDC_tx_recovery.md](USB_CDC_tx_recovery.md)。HSO CONTROL 期间，高于实测 45rpm 的正常减速继续使用 HSO；目标低于边界或要求反转时先减至实测 45rpm，再平滑返回编码器。改速幅度不再触发提前返回，Speed 指令仍用 rad/s。真正失锁先停机，反馈健康时新 Speed 可直接起转。Run 页先提交模式再提交目标。Status 的 Feedback 显示当前反馈来源，完整恢复规则见 [HSO_recovery.md](HSO_recovery.md)。H Gate 为当前校验原因，H Qual 为资格/保持计数，H Jitter 为角度暂停预算，H Reset 为上次角度清零误差，H Lost 保留上次异常原因，H Actual 为观测磁链，见 [ST_HSO_integration.md](ST_HSO_integration.md)。手动加载过载预算见 [2804_current_limits.md](2804_current_limits.md)。Status 的 I Trip、IU/IV/IW R/Z 和 ChipRev，解释及同步采样修复见 [current_adc_diagnostics.md](current_adc_diagnostics.md)。旧版本的 FW 在列表下方，需要向下滚动才能看见；不能仅凭首屏未显示就判断固件版本。
 
 `Status → Bus` 为 ADC 实测母线电压。`Drive` 显示采样/电流零点的具体状态或锁存故障，编码器在线与对齐另看 Encoder / Aligned。BusRaw 是最新母线原始值，BusCnt / FrameCnt 是规则组样本数 / 完整注入帧数，正常约每秒增加 2000 / 10000；ADC1Err / ADC2Err 显示 HAL 错误码。Enc2 显示第二路 MT6701 的健康状态和原始角度，Enc2Err 为其错误累计值。第二路目前只有诊断采样，没有启用功率输出。
 
@@ -113,4 +119,4 @@ Run 在采样未就绪时显示具体原因并拒绝确认启动；运行中采�
 
 尚未烧录或连接电机验证。实屏帧率、物理按键电平、实际负载下三模式运行和电流环参数需要上板确认；主机模拟不代表这些项目已经验收。
 
-最终构建占用（2026-10-21，UI-R23-LCD）：Debug Flash 115092 B / RAM 21456 B；Release Flash 113684 B / RAM 21160 B。Debug 保留 `-g3`，应用采用 `-Og`，HAL / USB / UI 等采用 `-Os`，HSO 适配与定点数学采用 `-O2`。固件分别为 `build/Debug/FOC_two.elf`、`build/Release/FOC_two.elf` 和各自同目录的 `FOC_two.bin`。HSO 的观察、磁链估算与接管操作见 [ST_HSO_integration.md](ST_HSO_integration.md)，铭牌电流修正及保护见 [2804_current_limits.md](2804_current_limits.md)。
+最终构建占用（2026-10-21，UI-R26-COAST）：Debug Flash 118828 B / RAM 21952 B；Release Flash 117260 B / RAM 21632 B。Debug 保留 `-g3`，应用采用 `-Og`，HAL / USB / UI 等采用 `-Os`，HSO 适配与定点数学采用 `-O2`。固件分别为 `build/Debug/FOC_two.elf`、`build/Release/FOC_two.elf` 和各自同目录的 `FOC_two.bin`。HSO 的观察、磁链估算与接管操作见 [ST_HSO_integration.md](ST_HSO_integration.md)，两套控制及保护参数见 [Motor_profiles.md](Motor_profiles.md)。

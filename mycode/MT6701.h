@@ -29,6 +29,26 @@ uint32_t MT6701_GetSampleCounter(void);
 uint32_t MT6701_GetErrorCounter(void);
 uint16_t MT6701_GetSampleAgeCycles(void);
 
+typedef enum {
+    MT6701_ERROR_NONE = 0,
+    MT6701_ERROR_FRAME,
+    MT6701_ERROR_CRC,
+    MT6701_ERROR_FIELD,
+    MT6701_ERROR_TRACK,
+    MT6701_ERROR_SPI
+} MT6701Error;
+
+typedef struct {
+    uint32_t errors, crc_errors, field_errors, track_errors, spi_errors, frame_errors;
+    uint16_t age_cycles, max_age_cycles;
+    uint8_t status;
+    MT6701Error last_error;
+} MT6701Diagnostics;
+/* Cumulative since reset; CRC-invalid status bits are never classified as a
+ * magnetic error. max_age starts only after the first accepted frame. */
+void MT6701_GetDiagnostics(MT6701Diagnostics *out);
+const char *MT6701_ErrorText(MT6701Error error);
+
 /* M2 diagnostic input on SPI2 / MT6701_CSN2 (PB12). SPI2 is shared with
  * W25Q64: call Service ONLY from the same main loop as AppStorage_Service.
  * Five consecutive invalid frames/HAL failures stop polling until MCU reset.

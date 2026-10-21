@@ -205,6 +205,11 @@ int main(void) {
     StHso_RecordControlCycles(17500); StHso_GetSnapshot(&s);
     assert(!StHso_IsUsable() && s.state==ST_HSO_TIMING && s.max_control_cycles==18000);
     assert(s.reason==ST_HSO_REASON_TIMING);
+    /* A motor switch discards learned flux, usability and old timing state. */
+    StHso_Init(&MOTOR_4015); StHso_GetSnapshot(&s); StHso_GetConfig(&c);
+    assert(!StHso_IsUsable() && s.qualified_samples==0 && s.max_control_cycles==0);
+    assert(s.state==ST_HSO_WAIT_PARAM && c.rs_ohm==1.8f && c.ls_h==0.0013f && c.flux_wb==0);
+    step(true,true); assert(!StHso_IsUsable());
     host_primask=1; StHso_GetSnapshot(&s); assert(host_primask==1);
     puts("PASS: HSO scaling/learning, strict admission, hold hysteresis/2ms confirmation, hard faults, reason diagnostics, sequence gaps, ADC clipping, timing (ST binary mocked)");
     return 0;

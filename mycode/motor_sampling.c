@@ -44,6 +44,8 @@ static volatile uint32_t s_started_at, s_bus_good_at, s_bus_samples;
 static volatile uint16_t s_bus_raw;
 static volatile bool s_bus_seen, s_bus_valid, s_running, s_power_enabled;
 static volatile bool s_bus_good_tracking;
+static volatile bool s_output_requested = true;
+static volatile uint8_t s_output_arm_frames;
 static volatile MotorSamplingFault s_fault;
 static float s_overload_energy;
 static uint16_t s_fault_current_raw[3];
@@ -127,6 +129,33 @@ bool MotorSampling_IsReady(void)
 bool MotorSampling_IsCalibrated(void)
 {
     return s_offset_count >= OFFSET_SAMPLES;
+}
+
+bool MotorSampling_IsOutputRequested(void) { return s_output_requested; }
+
+bool MotorSampling_IsOutputEnabled(void)
+{
+    return s_power_enabled && s_fault == MOTOR_SAMPLE_FAULT_NONE &&
+           (htim1.Instance->CCER & PHASE_CHANNELS) == PHASE_CHANNELS;
+}
+
+bool MotorSampling_SetOutputEnabled(bool enable)
+{
+    uint32_t mask = __get_PRIMASK();
+    __disable_irq();
+    bool ok = true;
+    if (!enable) {
+        s_output_requested = false;
+        s_output_arm_frames = 0U;
+        CLEAR_BIT(htim1.Instance->CCER, PHASE_CHANNELS);
+    } else if (!MotorSampling_IsReady() || !MotorSampling_IsCalibrated()) {
+        ok = false; /* A failed request must never become a delayed restart. */
+    } else if (!s_output_requested) {
+        s_output_requested = true;
+        s_output_arm_frames = 2U;
+    }
+    __set_PRIMASK(mask);
+    return ok;
 }
 
 float MotorSampling_GetBusVoltage(void)
@@ -404,7 +433,7 @@ void MotorSampling_Service(void)
         MotorSampling_IsCalibrated() && frame_fresh() && bus_fresh() &&
         s_bus_valid && s_bus_good_tracking && reference_fresh() &&
         HAL_GetTick() - good_at >= BUS_SETTLE_MS) {
-        SET_BIT(htim1.Instance->CCER, PHASE_CHANNELS);
+        if (s_output_requested) SET_BIT(htim1.Instance->CCER, PHASE_CHANNELS);
         s_power_enabled = true;
         __HAL_TIM_MOE_ENABLE(&htim1);
     }
@@ -469,10 +498,11 @@ bool MotorSampling_Capture(void)
      * voltage mode, diagnostic open loop and alignment cannot bypass this.
      * This is a sampled software trip, not hardware cycle-by-cycle limiting. */
     if (s_power_enabled && !calibrating) {
+        const MotorParams *motor = MotorParams_GetActive();
         for (unsigned i = 0U; i < 3U; ++i) {
             if (raw[i] <= 10U || raw[i] >= 4085U)
                 trip_current(MOTOR_SAMPLE_FAULT_CURRENT_RANGE, i + 1U, false);
-            else if (fabsf(s_frame.m1_current[i]) >= MOTOR_2804.max_current)
+            else if (fabsf(s_frame.m1_current[i]) >= motor->max_current)
                 trip_current(MOTOR_SAMPLE_FAULT_OVERCURRENT, i + 1U, false);
         }
         if (s_power_enabled) {
@@ -481,13 +511,18 @@ bool MotorSampling_Capture(void)
             /* For balanced phases this equals Id^2+Iq^2 (peak convention).
              * Compare all three measured phases; no square root/filter delay. */
             float current_squared = (2.0f / 3.0f) * (iu * iu + iv * iv + iw * iw);
-            float reference_squared = MOTOR_2804.overload_current * MOTOR_2804.overload_current;
+            float reference_squared = motor->overload_current * motor->overload_current;
             s_overload_energy += current_squared - reference_squared;
             if (s_overload_energy < 0.0f) s_overload_energy = 0.0f;
-            if (s_overload_energy >= reference_squared * CURRENT_SAMPLE_HZ * MOTOR_2804.overload_budget_s)
+            if (s_overload_energy >= reference_squared * CURRENT_SAMPLE_HZ * motor->overload_budget_s)
                 trip_current(MOTOR_SAMPLE_FAULT_OVERLOAD, 0U, false);
         }
     }
+    /* Wait one full PWM period with fresh compare preloads before reconnecting
+     * the bridge. Protection above can cancel this; CH4 was never stopped. */
+    if (s_output_requested && s_power_enabled && s_fault == MOTOR_SAMPLE_FAULT_NONE &&
+        s_output_arm_frames != 0U && --s_output_arm_frames == 0U)
+        SET_BIT(htim1.Instance->CCER, PHASE_CHANNELS);
     for (unsigned i = 0U; i < 3U; ++i)
         s_frame.m1_voltage[i] = (float)s_frame.m1_voltage_raw[i] * voltage_volts;
     ++s_frame.sequence;

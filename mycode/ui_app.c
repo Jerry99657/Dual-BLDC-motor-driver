@@ -25,12 +25,14 @@ enum {
     EVT_POSITION_SPEED_CHANGED,
     EVT_RUN_STEPS_CHANGED,
     EVT_SPEED_LIMIT_CHANGED,
+    EVT_MOTOR_2804_CONFIRMED,
+    EVT_MOTOR_4015_CONFIRMED,
 };
 
 /* ---------- 设置菜单下标 ---------- */
 enum { INT_LED_BRIGHT, INT_POSITION_SPEED, INT_SPEED_LIMIT };
 enum { BOOL_CURRENT_LOOP, BOOL_LED };
-enum { CONFIRM_RESET };
+enum { CONFIRM_RESET, CONFIRM_MOTOR_2804, CONFIRM_MOTOR_4015 };
 
 /* ---------- 设置变量 ---------- */
 static int32_t s_speed_x10;
@@ -60,6 +62,7 @@ static uint32_t s_last_live_at;
 
 /* ---------- 动态文本 ---------- */
 static char s_txt_mode[16];
+static char s_txt_motor[8], s_txt_motor_menu[20];
 static char s_txt_target[24];
 static char s_txt_speed[24];
 static char s_txt_iq[24];
@@ -70,6 +73,11 @@ static char s_txt_enc[16];
 static char s_txt_enc2[16];
 static char s_txt_enc2_err[16];
 static char s_txt_drive[16];
+static char s_txt_output[8];
+static char s_txt_run_stop[24] = "--";
+static char s_txt_stop_age[16] = "--", s_txt_stop_errors[16] = "--";
+static char s_txt_enc_crc[16], s_txt_enc_field[16], s_txt_enc_track[16];
+static char s_txt_enc_spi[16], s_txt_enc_frame[16], s_txt_enc_age[24], s_txt_enc_last[16];
 static char s_txt_current_adc[3][24];
 static char s_txt_current_trip[24];
 static char s_txt_adc_revision[16];
@@ -153,6 +161,11 @@ static const char *drive_status_text(void)
 static void refresh_texts(void)
 {
     char v[16];
+    snprintf(s_txt_motor, sizeof(s_txt_motor), "%s", JerryFOC_getMotorParams()->name);
+    snprintf(s_txt_motor_menu, sizeof(s_txt_motor_menu), "Motor: %s", s_txt_motor);
+    snprintf(s_txt_output, sizeof(s_txt_output), "%s",
+             !MotorSampling_IsOutputRequested() ? "COAST" :
+             MotorSampling_IsOutputEnabled() ? "PWM" : "OFF");
     snprintf(s_txt_repeat, sizeof(s_txt_repeat), "%lu", (unsigned long)s_input_repeats);
     snprintf(s_txt_display_errors, sizeof(s_txt_display_errors), "%lu", (unsigned long)s_display_errors);
 
@@ -234,6 +247,15 @@ static void refresh_texts(void)
 
     snprintf(s_txt_err, sizeof(s_txt_err), "%lu",
              (unsigned long)MT6701_GetErrorCounter());
+    MT6701Diagnostics enc;
+    MT6701_GetDiagnostics(&enc);
+    snprintf(s_txt_enc_crc, sizeof(s_txt_enc_crc), "%lu", (unsigned long)enc.crc_errors);
+    snprintf(s_txt_enc_field, sizeof(s_txt_enc_field), "%lu", (unsigned long)enc.field_errors);
+    snprintf(s_txt_enc_track, sizeof(s_txt_enc_track), "%lu", (unsigned long)enc.track_errors);
+    snprintf(s_txt_enc_spi, sizeof(s_txt_enc_spi), "%lu", (unsigned long)enc.spi_errors);
+    snprintf(s_txt_enc_frame, sizeof(s_txt_enc_frame), "%lu", (unsigned long)enc.frame_errors);
+    snprintf(s_txt_enc_age, sizeof(s_txt_enc_age), "%u / %u", enc.age_cycles, enc.max_age_cycles);
+    snprintf(s_txt_enc_last, sizeof(s_txt_enc_last), "%s", MT6701_ErrorText(enc.last_error));
 
     MotorSamplingDiagnostics adc;
     MotorSampling_GetDiagnostics(&adc);
@@ -294,20 +316,33 @@ static const KK_UI_MenuItem settings_items[] = {
     {"Pos Speed",  KK_UI_MENU_INT,    INT_POSITION_SPEED},
     {"Speed Limit", KK_UI_MENU_INT,   INT_SPEED_LIMIT},
     {"Run Steps",  KK_UI_MENU_PAGE, UI_PAGE_RUN_STEPS},
+    {"Motor",      KK_UI_MENU_PAGE, UI_PAGE_MOTOR},
     {"Reset",      KK_UI_MENU_CONFIRM, CONFIRM_RESET},
+};
+
+static const KK_UI_MenuItem motor_items[] = {
+    {"2804", KK_UI_MENU_CONFIRM, CONFIRM_MOTOR_2804},
+    {"4015", KK_UI_MENU_CONFIRM, CONFIRM_MOTOR_4015},
 };
 
 static const KK_UI_MenuPage menu_pages[] = {
     {"Settings", settings_items, NULL,
      sizeof(settings_items) / sizeof(settings_items[0])},
+    {s_txt_motor_menu, motor_items, NULL,
+     sizeof(motor_items) / sizeof(motor_items[0])},
 };
 
 static const KK_UI_InfoRow status_rows[] = {
+    {"Motor",   s_txt_motor},
     {"Mode",    s_txt_mode},
     {"Bus",     s_txt_bus},
     {"VREF",    s_txt_reference},
     {"RefState",s_txt_ref_state},
     {"Drive",   s_txt_drive},
+    {"Output",  s_txt_output},
+    {"Run Stop",s_txt_run_stop},
+    {"Stop Age",s_txt_stop_age},
+    {"Stop Err",s_txt_stop_errors},
     {"I Trip",  s_txt_current_trip},
     {"IU R/Z",  s_txt_current_adc[0]},
     {"IV R/Z",  s_txt_current_adc[1]},
@@ -322,6 +357,13 @@ static const KK_UI_InfoRow status_rows[] = {
     {"Phase A", s_txt_ia},
     {"Phase B", s_txt_ib},
     {"Encoder", s_txt_enc},
+    {"Enc CRC", s_txt_enc_crc},
+    {"Enc Field",s_txt_enc_field},
+    {"Enc Track",s_txt_enc_track},
+    {"Enc SPI", s_txt_enc_spi},
+    {"Enc Frame",s_txt_enc_frame},
+    {"Enc Age", s_txt_enc_age},
+    {"Enc Last",s_txt_enc_last},
     {"Aligned", s_txt_align},
     {"Raw",     s_txt_raw},
     {"Elec",    s_txt_elec},
@@ -352,9 +394,9 @@ static const KK_UI_InfoRow status_rows[] = {
 };
 
 static const KK_UI_InfoRow about_rows[] = {
-    {"FW",      "UI-R23-LCD"},
+    {"FW",      "UI-R26-COAST"},
     {"MCU",     "STM32G431"},
-    {"Motor",   "2804 BLDC"},
+    {"Motor",   s_txt_motor},
     {"Control", "10kHz FOC"},
     {"Encoder", "MT6701"},
     {"LCD",     "ST7735S"},
@@ -376,6 +418,7 @@ static const KK_UI_PageRoute routes[] = {
     {KK_UI_PAGE_INFO,   0U},
     {KK_UI_PAGE_INFO,   1U},
     {KK_UI_PAGE_CUSTOM, 1U},
+    {KK_UI_PAGE_MENU,   1U},
 };
 
 static KK_UI_IntBinding int_bindings[] = {
@@ -391,6 +434,8 @@ static KK_UI_BoolBinding bool_bindings[] = {
 
 static const KK_UI_ConfirmDesc confirm_descs[] = {
     [CONFIRM_RESET] = {"Reset all\nsettings?", EVT_RESET_CONFIRMED, EVT_RESET_CANCELLED},
+    [CONFIRM_MOTOR_2804] = {"Use 2804?\nStop and align", EVT_MOTOR_2804_CONFIRMED, 0U},
+    [CONFIRM_MOTOR_4015] = {"Use 4015?\nStop and align", EVT_MOTOR_4015_CONFIRMED, 0U},
 };
 
 static const KK_UI_App s_app = {
@@ -415,19 +460,22 @@ static const KK_UI_App s_app = {
 };
 
 /* ---------- 设置与 FOC 绑定 ---------- */
+static void clear_run_stop(void)
+{
+    strcpy(s_txt_run_stop, "--");
+    strcpy(s_txt_stop_age, "--");
+    strcpy(s_txt_stop_errors, "--");
+}
+
 /* 模式和目标一起提交，防止 1 kHz 外环在两次写入之间使用旧目标。 */
 static void stop_run(void)
 {
+    /* Entering/backing out of an idle Run page must not interrupt the
+     * independent startup alignment. An explicit serial Stop still can. */
+    if (!s_run_active && JerryFOC_isAligning()) return;
     uint32_t primask = __get_PRIMASK();
     __disable_irq();
-    /* Stop active HSO without erasing loss history. An unhealthy-feedback
-     * block remains until acknowledgement or a valid fresh motion command. */
-    if (JerryFOC_isHSOActive() && !JerryFOC_hasHSOFault()) (void)JerryFOC_useHSO(0U);
-    g_openloop_debug = 0U;
-    JerryFOC_setMode(JERRYFOC_MODE_TORQUE);
-    JerryFOC_setVelocity(0.0f);
-    JerryFOC_setCurrent(0.0f);
-    /* 停止时使用零电压，避免零电流 PI 的残余积分继续驱动。 */
+    JerryFOC_stop();
     JerryFOC_useCurrentLoop(0U);
     s_run_active = false;
     __set_PRIMASK(primask);
@@ -457,6 +505,7 @@ static void apply_run_target(void)
                                    s_run_voltage_x100) / 100.0f);
         break;
     }
+    (void)JerryFOC_startOutput();
     __set_PRIMASK(primask);
 }
 
@@ -491,7 +540,8 @@ static uint32_t settings_flags(void)
     return (s_current_loop ? APP_FLAG_CURRENT_LOOP : 0U) |
            (s_led_enable ? APP_FLAG_LED_ENABLE : 0U) |
            ((uint32_t)s_position_speed << APP_POSITION_SPEED_SHIFT) |
-           ((uint32_t)s_speed_limit << APP_SPEED_LIMIT_SHIFT);
+           ((uint32_t)s_speed_limit << APP_SPEED_LIMIT_SHIFT) |
+           (MotorParams_GetActiveProfile() == MOTOR_PROFILE_4015 ? APP_FLAG_MOTOR_4015 : 0U);
 }
 
 static bool request_settings_save(void)
@@ -521,8 +571,12 @@ static void sync_from_storage(void)
     s_speed_limit = (int32_t)((st->flags & APP_SPEED_LIMIT_MASK) >> APP_SPEED_LIMIT_SHIFT);
     if (s_speed_limit < 1 || s_speed_limit > APP_SPEED_LIMIT_MAX)
         s_speed_limit = APP_SPEED_LIMIT_DEFAULT;
+    int32_t profile_max = (int32_t)JerryFOC_getMotorParams()->max_speed_mech;
+    int_bindings[INT_SPEED_LIMIT].maximum = profile_max;
+    s_speed_limit = clamp_i32(s_speed_limit, 1, profile_max);
     s_speed_x10 = clamp_i32(st->speed_x10, -s_speed_limit * 10, s_speed_limit * 10);
-    s_voltage_x100 = clamp_i32(st->voltage_x100, -600, 600);
+    int32_t voltage_max = to_x100(JerryFOC_getMotorParams()->vel_limit);
+    s_voltage_x100 = clamp_i32(st->voltage_x100, -voltage_max, voltage_max);
     s_position_x100 = clamp_i32(st->position_x100, -314, 314);
     s_led_brightness = clamp_i32((int32_t)st->led_brightness, 0, 100);
     s_current_loop = (st->flags & APP_FLAG_CURRENT_LOOP) != 0U;
@@ -534,6 +588,35 @@ static void sync_from_storage(void)
     s_run_steps[JERRYFOC_MODE_POSITION] = st->position_step_x100;
     for (unsigned i = 0U; i < 3U; ++i)
         if (s_run_steps[i] < 1 || s_run_steps[i] > 100) s_run_steps[i] = 5;
+}
+
+static bool select_motor(MotorProfile profile)
+{
+    if (profile == MotorParams_GetActiveProfile()) return true;
+    stop_run();
+    if (!JerryFOC_selectMotor(profile)) {
+        s_pending_toast = "Stop/check encoder";
+        return false;
+    }
+    /* Never carry a 2804 target/current-mode command into the other motor. */
+    s_speed_x10 = s_run_speed_x10 = 0;
+    s_voltage_x100 = s_run_voltage_x100 = 0;
+    s_position_x100 = s_run_position_x100 = 0;
+    s_run_current_x100 = s_confirmed_current_x100 = 0;
+    s_run_position_origin = 0.0f;
+    s_run_mode = JERRYFOC_MODE_TORQUE;
+    clear_run_stop();
+    s_current_loop = false;
+    s_speed_limit = APP_SPEED_LIMIT_DEFAULT;
+    int_bindings[INT_SPEED_LIMIT].maximum = (int32_t)JerryFOC_getMotorParams()->max_speed_mech;
+    s_position_speed = (int32_t)JerryFOC_getMotorParams()->pos_limit;
+    AppStorage_Get()->speed_x10 = AppStorage_Get()->voltage_x100 = AppStorage_Get()->position_x100 = 0;
+    AppStorage_Get()->flags = settings_flags();
+    mark_settings_dirty(HAL_GetTick());
+    refresh_texts();
+    s_pending_toast = "Motor set; align";
+    KK_UI_Invalidate();
+    return true;
 }
 
 static void run_mode_step(int delta)
@@ -555,6 +638,7 @@ const KK_UI_App *ui_app_get(void)
 
 void ui_app_reset(uint32_t now_ms)
 {
+    clear_run_stop();
     AppStorage_Load();
     sync_from_storage();
 
@@ -603,12 +687,30 @@ void ui_app_update(uint32_t now_ms)
         }
     }
 
-    if (s_run_active && (!JerryFOC_isDriveReady() ||
-                         !MT6701_IsHealthy() || !AngleSrc_Encoder_IsAligned() ||
-                         JerryFOC_getMode() != s_run_mode || g_openloop_debug)) {
-        stop_run();
-        s_pending_toast = "Motor stopped";
-        KK_UI_Invalidate();
+    if (s_run_active) {
+        /* Capture one coherent gate before stop_run() changes mode/targets.
+         * A recovered encoder must not erase why the UI stopped the motor. */
+        uint32_t mask = __get_PRIMASK();
+        __disable_irq();
+        const char *reason = NULL;
+        if (!JerryFOC_isDriveReady()) reason = drive_status_text();
+        else if (!MT6701_IsHealthy()) reason = "ENCODER LOST";
+        else if (!AngleSrc_Encoder_IsAligned()) reason = "NOT ALIGNED";
+        else if (g_openloop_debug) reason = "OPEN LOOP";
+        else if (JerryFOC_getMode() != s_run_mode) reason = "MODE CHANGED";
+        else if (!MotorSampling_IsOutputRequested()) reason = "OUTPUT OFF";
+        MT6701Diagnostics enc;
+        if (reason) MT6701_GetDiagnostics(&enc);
+        __set_PRIMASK(mask);
+        if (reason) {
+            snprintf(s_txt_run_stop, sizeof(s_txt_run_stop), "%s", reason);
+            snprintf(s_txt_stop_age, sizeof(s_txt_stop_age), "%u", enc.age_cycles);
+            snprintf(s_txt_stop_errors, sizeof(s_txt_stop_errors), "%lu", (unsigned long)enc.errors);
+            stop_run();
+            s_pending_toast = reason;
+            refresh_texts();
+            KK_UI_Invalidate();
+        }
     }
 
     if ((now_ms - s_info_at) >= 500U) {
@@ -631,6 +733,10 @@ void ui_app_process_events(void)
 
     while (KK_UI_PollEvent(&evt)) {
         switch (evt) {
+        case EVT_MOTOR_2804_CONFIRMED:
+        case EVT_MOTOR_4015_CONFIRMED:
+            (void)select_motor(evt == EVT_MOTOR_4015_CONFIRMED ? MOTOR_PROFILE_4015 : MOTOR_PROFILE_2804);
+            break;
         case EVT_CURRENT_LOOP_CHANGED:
             stop_run();
             s_run_current_x100 = s_confirmed_current_x100 = 0;
@@ -665,7 +771,9 @@ void ui_app_process_events(void)
             break;
 
         case EVT_RESET_CONFIRMED:
+            if (!select_motor(MOTOR_PROFILE_2804)) break;
             stop_run();
+            clear_run_stop();
             AppStorage_ResetDefaults();
             sync_from_storage();
             s_run_speed_x10 = s_speed_x10;
@@ -762,10 +870,14 @@ void KK_UI_CustomOnInput(KK_UI_PageId page, KK_UI_InputEvent event)
             (void)KK_UI_ShowToast(MotorSampling_GetStatusText(), 900U);
         } else if (!MT6701_IsHealthy() || !AngleSrc_Encoder_IsAligned()) {
             (void)KK_UI_ShowToast("Encoder not ready", 900U);
+        } else if (!s_run_active && !MotorSampling_IsOutputRequested() &&
+                   fabsf(JerryFOC_getVelocity()) > 1.0f) {
+            (void)KK_UI_ShowToast("Wait for stop", 900U);
         } else {
             /* 运行中确认新位置时保留本次原点，停止后启动才重新捕获。 */
             if (!s_run_active) s_run_position_origin = JerryFOC_getAngle();
             s_run_active = true;
+            clear_run_stop();
             apply_run_target();
             *run_target(false) = *run_target(true);
             if (changed) mark_settings_dirty(HAL_GetTick());
@@ -778,7 +890,8 @@ void KK_UI_CustomOnInput(KK_UI_PageId page, KK_UI_InputEvent event)
     int32_t step = s_run_steps[s_run_mode] * (int32_t)event.steps;
     if (event.action == KK_UI_INPUT_DOWN) step = -step;
     int32_t limit = s_run_mode == JERRYFOC_MODE_VELOCITY ? s_speed_limit * 10 :
-                    s_run_mode == JERRYFOC_MODE_POSITION ? 314 : 600;
+                    s_run_mode == JERRYFOC_MODE_POSITION ? 314 :
+                    to_x100(JerryFOC_getMotorParams()->vel_limit);
     if (s_run_mode == JERRYFOC_MODE_TORQUE && s_current_loop)
         limit = to_x100(JerryFOC_getMotorParams()->rated_current);
     int32_t *draft = run_target(true);
@@ -866,6 +979,8 @@ void KK_UI_CustomOnDraw(KK_UI_PageId page, int16_t x_offset,
     OLED_DrawUTF8((int16_t)(4 + x_offset), 38, buf);
     if (!JerryFOC_isDriveReady()) {
         snprintf(buf, sizeof(buf), "%s", drive_status_text());
+    } else if (!s_run_active && strcmp(s_txt_run_stop, "--") != 0) {
+        snprintf(buf, sizeof(buf), "%s", s_txt_run_stop);
     } else if (!MT6701_IsHealthy() || !AngleSrc_Encoder_IsAligned()) {
         snprintf(buf, sizeof(buf), "%s", MT6701_IsHealthy() ? "NOT ALIGNED" : "ENCODER ERROR");
     } else {
@@ -873,7 +988,8 @@ void KK_UI_CustomOnDraw(KK_UI_PageId page, int16_t x_offset,
         snprintf(buf, sizeof(buf), "Iq %s A", v);
     }
     OLED_DrawUTF8((int16_t)(4 + x_offset), 51, buf);
-    if (JerryFOC_isDriveReady() && MT6701_IsHealthy() && AngleSrc_Encoder_IsAligned()) {
+    if ((s_run_active || strcmp(s_txt_run_stop, "--") == 0) &&
+        JerryFOC_isDriveReady() && MT6701_IsHealthy() && AngleSrc_Encoder_IsAligned()) {
         fmt_fixed(v, sizeof(v), s_run_steps[s_run_mode], s_run_mode == JERRYFOC_MODE_VELOCITY ? 10 : 100);
         snprintf(buf, sizeof(buf), "Step %s", v);
         OLED_DrawUTF8((int16_t)(W - 4 - OLED_GetUTF8Width(buf) + x_offset), 51, buf);

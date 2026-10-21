@@ -40,6 +40,7 @@ TIM_HandleTypeDef htim1={&tim1},htim8={&tim8},htim6={&tim6};
 static MotorSampleFrame frame;
 static float bus=12.0f;
 static bool ready=true, calibrated=true, complete=true;
+static bool output_requested=true;
 static unsigned captures, encoder_services, aligns;
 static uint8_t healthy=1, aligned=1;
 static bool hso_usable;
@@ -65,10 +66,19 @@ static float encoder_velocity;
 static float zero(void) { return 0; }
 static float encoder_speed(void) { return encoder_velocity; }
 static AngleSource source={zero,zero,encoder_speed,1};
+static int selected_pp;
+static const MotorParams *hso_motor;
+AngleSource *AngleSrc_Encoder_Init(int pp) { selected_pp=pp; aligned=0; return &source; }
+void StHso_Init(const MotorParams *motor) { hso_motor=motor; hso_usable=false; }
 uint32_t HAL_GetTick(void) { return 0; }
 void HAL_Delay(uint32_t ms) { (void)ms; }
 bool MotorSampling_IsReady(void) { return ready; }
 bool MotorSampling_IsCalibrated(void) { return calibrated; }
+bool MotorSampling_IsOutputRequested(void) { return output_requested; }
+bool MotorSampling_SetOutputEnabled(bool enable) {
+    if(enable && (!ready || !calibrated)) return false;
+    output_requested=enable; return true;
+}
 float MotorSampling_GetBusVoltage(void) { return bus; }
 bool MotorSampling_Capture(void) { ++captures; return complete; }
 const MotorSampleFrame *MotorSampling_GetFrame(void) { return &frame; }
@@ -120,6 +130,7 @@ int main(void) {
     assert(captures==3 && encoder_services==2 && tim1.CCR1==duty); /* Align voltage is not overwritten. */
     ready=false; JerryFOC_alignFinish(); zero_pwm(); assert(aligns==0);
     ready=true; JerryFOC_alignStart(); JerryFOC_alignFinish(); zero_pwm(); assert(aligns==1);
+    assert(!output_requested && JerryFOC_startOutput());
     calibrated=false; JerryFOC_run(); zero_pwm(); assert(JerryFOC_Target_Iq==0);
     calibrated=true; healthy=0; JerryFOC_setCurrent(3); JerryFOC_run(); zero_pwm(); assert(JerryFOC_Target_Iq==0);
     healthy=1; aligned=0; JerryFOC_setCurrent(3); JerryFOC_run(); zero_pwm(); assert(JerryFOC_Target_Iq==0);
@@ -287,6 +298,60 @@ int main(void) {
     command("Speed:100"); assert(JerryFOC_useHSO(1));
     JerryFOC_setMode(JERRYFOC_MODE_POSITION);
     assert(!JerryFOC_isHSOActive());
-    puts("PASS: real protocol+FOC Speed:0/restart/reverse, low-speed HSO return, safe loss stop/fresh-command recovery, hardware fault gates, timing stop, 12/24V scaling, current clamps");
+    /* A profile change is one stopped transaction: no old target, PI state,
+     * HSO takeover or encoder alignment may carry into the other motor. */
+    encoder_velocity=0; healthy=1;
+    assert(!JerryFOC_selectMotor(MOTOR_PROFILE_COUNT));
+    encoder_velocity=2;
+    assert(!JerryFOC_selectMotor(MOTOR_PROFILE_4015));
+    assert(MotorParams_GetActiveProfile()==MOTOR_PROFILE_2804);
+    encoder_velocity=0; healthy=0;
+    assert(!JerryFOC_selectMotor(MOTOR_PROFILE_4015)); healthy=1;
+    vel_loop_M0.integral_prev=4; iq_loop_M0.integral_prev=5;
+    assert(JerryFOC_selectMotor(MOTOR_PROFILE_4015)); zero_pwm();
+    assert(JerryFOC_getMotorParams()==&MOTOR_4015 && selected_pp==11 && hso_motor==&MOTOR_4015);
+    assert(!aligned && JerryFOC_needsAlignment() && !JerryFOC_isHSOActive());
+    assert(JerryFOC_Target_Iq==0 && JerryFOC_Target_Velocity==0 && JerryFOC_Target_Position==0);
+    assert(vel_loop_M0.P==MOTOR_4015.vel_P && vel_loop_M0.limit==MOTOR_4015.vel_limit);
+    assert(vel_loop_M0.integral_prev==0 && iq_loop_M0.integral_prev==0);
+    assert(iq_loop_M0.P==MOTOR_4015.cur_P && id_loop_M0.I==MOTOR_4015.cur_I);
+    JerryFOC_setCurrent(99); assert(JerryFOC_Target_Iq==MOTOR_4015.vel_limit);
+    JerryFOC_setCurrent(1); JerryFOC_run(); zero_pwm(); /* Alignment is mandatory. */
+    JerryFOC_alignStart(); assert(!JerryFOC_needsAlignment());
+    assert(!JerryFOC_selectMotor(MOTOR_PROFILE_2804)); /* No switch during alignment. */
+    JerryFOC_alignFinish(); aligned=1;
+    JerryFOC_useCurrentLoop(1); JerryFOC_setCurrent(9);
+    assert(JerryFOC_Target_Iq==MOTOR_4015.rated_current && vel_loop_M0.limit==MOTOR_4015.rated_current);
+    command("Speed:999"); assert(JerryFOC_Target_Velocity==120);
+    JerryFOC_setAbsolutePosition(1,999); assert(pos_loop_M0.limit==120);
+    ready=false; assert(JerryFOC_selectMotor(MOTOR_PROFILE_2804));
+    assert(!JerryFOC_isDriveReady()); /* Switching never clears a sampling fault. */
+    assert(selected_pp==7 && hso_motor==&MOTOR_2804);
+    assert(vel_loop_M0.limit==6.93f && iq_loop_M0.P==0.215f && !aligned);
+    JerryFOC_setCurrent(-99); assert(JerryFOC_Target_Iq==-MOTOR_2804.vel_limit);
+    ready=true; aligned=1; encoder_velocity=0;
+    command("Speed:10"); assert(output_requested);
+    encoder_velocity=10;
+    JerryFOC_setVelocity(0); /* A zero speed command retains active deceleration. */
+    assert(output_requested);
+    vel_loop_M0.integral_prev=3; iq_loop_M0.integral_prev=4;
+    command("Stop"); assert(!output_requested);
+    assert(JerryFOC_Target_Iq==0 && JerryFOC_Target_Velocity==0 && JerryFOC_Target_Position==0);
+    assert(vel_loop_M0.integral_prev==0 && iq_loop_M0.integral_prev==0);
+    for(unsigned i=0;i<10;++i) { HAL_TIM_PeriodElapsedCallback(&outer); JerryFOC_run(); }
+    assert(!output_requested && JerryFOC_Target_Iq==0 && vel_loop_M0.integral_prev==0);
+    command("Speed:10"); assert(!output_requested); /* Still coasting: wait, never auto-restart. */
+    encoder_velocity=0; command("Speed:10"); assert(output_requested && JerryFOC_Target_Velocity==10);
+    command("Stop"); command("Speed:nan"); assert(!output_requested);
+    command("Torque:nan"); command("Angle:bad"); command("OpenLoop:bad,5"); assert(!output_requested);
+    command("OpenLoop:2,0.8"); assert(output_requested && g_openloop_debug);
+    command("Stop"); ready=false; assert(!JerryFOC_startOutput());
+    ready=true; healthy=0; assert(!JerryFOC_startOutput()); healthy=1;
+    aligned=0; assert(!JerryFOC_startOutput());
+    JerryFOC_alignStart(); assert(JerryFOC_isAligning() && output_requested);
+    unsigned before_align_stop=aligns;
+    command("Stop"); assert(!output_requested && !JerryFOC_isAligning());
+    JerryFOC_alignFinish(); assert(aligns==before_align_stop); /* Cancelled align cannot certify zero. */
+    puts("PASS: protocol/FOC, HSO recovery/handover, voltage/current clamps, atomic 2804/4015 controller reload, stop/align gates and fault retention");
     return 0;
 }

@@ -14,6 +14,7 @@ static unsigned reads, aborts, display_errors, dma_starts;
 static uint8_t preempt_on_tick;
 static uint8_t command, *dma_rx;
 static HAL_StatusTypeDef poll_result=HAL_OK;
+static HAL_StatusTypeDef dma_result=HAL_OK;
 static uint8_t flash[3U*W25Q64_SECTOR_SIZE];
 static uint32_t flash_addr, flash_busy_until;
 static bool write_enabled;
@@ -32,7 +33,7 @@ void HAL_GPIO_WritePin(GPIO_TypeDef *p,uint16_t pin,GPIO_PinState state) {
 }
 static void receive_frame(uint8_t *p) { p[0]=payload>>16; p[1]=payload>>8; p[2]=payload; }
 HAL_StatusTypeDef HAL_SPI_TransmitReceive_DMA(SPI_HandleTypeDef *h,const uint8_t *tx,uint8_t *rx,uint16_t n) {
-    (void)tx; assert(h==&hspi1 && n==3); dma_rx=rx; ++dma_starts; return HAL_OK;
+    (void)tx; assert(h==&hspi1 && n==3); dma_rx=rx; ++dma_starts; return dma_result;
 }
 HAL_StatusTypeDef HAL_SPI_TransmitReceive(SPI_HandleTypeDef *h,const uint8_t *tx,uint8_t *rx,uint16_t n,uint32_t timeout) {
     (void)tx; assert(h==&hspi2 && n==3 && timeout==1);
@@ -151,6 +152,34 @@ int main(int argc,char **argv) {
     HAL_SPI_ErrorCallback(&hspi1); assert(MT6701_GetErrorCounter()==2);
     HAL_SPI_ErrorCallback(&hspi3); assert(display_errors==1);
     MT6701_StopContinuous(); assert(!MT6701_IsContinuous());
+    /* Decode magnetic status only after validating CRC. A bad wire frame
+     * cannot be reported as a weak/strong magnet just because bits flipped. */
+    MT6701Diagnostics diag;
+    MT6701_GetDiagnostics(NULL);
+    MT6701_GetDiagnostics(&diag);
+    assert(diag.errors==2 && diag.crc_errors==1 && diag.spi_errors==1 && diag.max_age_cycles>=4);
+    const uint32_t bad_frames[]={0x0FA045U,0x0FA080U,0x0FA21EU,0x0FA044U,0U,0xFFFFFFU};
+    MT6701_StartContinuous();
+    for(unsigned i=0;i<sizeof(bad_frames)/sizeof(bad_frames[0]);++i) {
+        MT6701_Service(); payload=bad_frames[i]; receive_frame(dma_rx);
+        HAL_SPI_TxRxCpltCallback(&hspi1);
+    }
+    MT6701_GetDiagnostics(&diag);
+    assert(diag.errors==8 && diag.crc_errors==2 && diag.field_errors==2 && diag.track_errors==1);
+    assert(diag.frame_errors==2 && diag.last_error==MT6701_ERROR_FRAME);
+    /* The push-button flag is valid data, never a magnetic-field fault. */
+    MT6701_Service(); payload=0x0FA10AU; receive_frame(dma_rx); HAL_SPI_TxRxCpltCallback(&hspi1);
+    assert(MT6701_IsHealthy() && MT6701_GetStatus()==4);
+    MT6701_GetDiagnostics(&diag); assert(diag.errors==8 && diag.age_cycles==0);
+    assert(strcmp(MT6701_ErrorText(MT6701_ERROR_CRC),"CRC")==0);
+    assert(strcmp(MT6701_ErrorText(MT6701_ERROR_FIELD),"FIELD")==0);
+    assert(strcmp(MT6701_ErrorText(MT6701_ERROR_TRACK),"TRACK")==0);
+    assert(strcmp(MT6701_ErrorText(MT6701_ERROR_SPI),"SPI")==0);
+    assert(strcmp(MT6701_ErrorText(MT6701_ERROR_NONE),"--")==0);
+    host_primask=1; MT6701_GetDiagnostics(&diag); assert(host_primask==1); host_primask=0;
+    MT6701_StopContinuous(); dma_result=HAL_ERROR; MT6701_StartContinuous();
+    MT6701_GetDiagnostics(&diag); assert(diag.spi_errors==2 && (gpio_a.pins & MT6701_CSN_Pin));
+    dma_result=HAL_OK; MT6701_StopContinuous();
     /* Valid samples reset consecutive failures, even after four failures. */
     payload=0;
     for(unsigned i=0;i<4;++i) { ++tick; poll(); }

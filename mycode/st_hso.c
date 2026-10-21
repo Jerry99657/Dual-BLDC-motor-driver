@@ -70,6 +70,12 @@ static bool valid_config(const StHsoConfig *c)
 void StHso_Init(const MotorParams *motor)
 {
     __HAL_RCC_CORDIC_CLK_ENABLE();
+    /* Also used on a live motor-profile change: no qualification/learned
+     * flux/usable snapshot from the previous motor may survive this call. */
+    memset(&live, 0, sizeof(live));
+    initialized = was_ready = learn_requested = false;
+    last_sequence = qualified = learn_count = 0U;
+    learn_sum = learn_square_sum = learn_speed = 0.0f;
     pole_pairs = motor->pole_pairs > 0 ? motor->pole_pairs : 1;
     requested = (StHsoConfig){motor->Rs, motor->Ls, motor->psi_f,
                              25000.0f, 0.019f};
@@ -78,6 +84,7 @@ void StHso_Init(const MotorParams *motor)
     config_pending = true;
     enabled = true;
     live.state = ST_HSO_WAIT_PARAM;
+    live.reason = live.entry_reason = ST_HSO_REASON_PARAM;
 }
 
 bool StHso_SetConfig(const StHsoConfig *config)

@@ -64,6 +64,11 @@ void MotorSampling_Stop(void);
 void MotorSampling_Service(void);
 bool MotorSampling_IsReady(void);
 bool MotorSampling_IsCalibrated(void);
+/* Gate only M1's six power outputs. CH4/ADC and all protection stay active.
+ * Enabling requires readiness; two injected frames preload fresh PWM first. */
+bool MotorSampling_SetOutputEnabled(bool enable);
+bool MotorSampling_IsOutputRequested(void);
+bool MotorSampling_IsOutputEnabled(void);
 float MotorSampling_GetBusVoltage(void);
 void MotorSampling_GetDiagnostics(MotorSamplingDiagnostics *out);
 const char *MotorSampling_GetStatusText(void);

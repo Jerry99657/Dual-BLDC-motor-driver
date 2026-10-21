@@ -112,37 +112,35 @@ void Protocol_HandleLine(char *line)
         return;
     }
     /* Invalid input must not change mode or release an HSO recovery stop. */
-    float speed_command = 0.0f;
-    if (strncmp(line, "Speed:", 6) == 0 && !parse_hso_values(line + 6, &speed_command, 1U)) return;
+    float command_values[2] = {0.0f, 4.0f};
+    bool speed_cmd = strncmp(line, "Speed:", 6) == 0;
+    bool angle_cmd = strncmp(line, "Angle:", 6) == 0;
+    bool torque_cmd = strncmp(line, "Torque:", 7) == 0;
+    bool open_cmd = strncmp(line, "OpenLoop:", 9) == 0;
+    if ((speed_cmd || angle_cmd || torque_cmd) &&
+        !parse_hso_values(line + (torque_cmd ? 7 : 6), command_values, 1U)) return;
+    if (open_cmd && !parse_hso_values(line + 9, command_values,
+                                     strchr(line + 9, ',') ? 2U : 1U)) return;
     uint32_t primask = __get_PRIMASK();
     __disable_irq();
 
     if (strncmp(line, "Speed:", 6) == 0) {
         g_openloop_debug = 0U;
         JerryFOC_setMode(JERRYFOC_MODE_VELOCITY);
-        JerryFOC_setVelocity(speed_command);
+        JerryFOC_setVelocity(command_values[0]);
     } else if (strncmp(line, "Angle:", 6) == 0) {
         g_openloop_debug = 0U;
         JerryFOC_setMode(JERRYFOC_MODE_POSITION);
-        JerryFOC_setPosition(strtof(line + 6, NULL), 0.0f);
+        JerryFOC_setPosition(command_values[0], 0.0f);
     } else if (strncmp(line, "Torque:", 7) == 0) {
         g_openloop_debug = 0U;
         JerryFOC_setMode(JERRYFOC_MODE_TORQUE);
-        JerryFOC_setCurrent(strtof(line + 7, NULL));
+        JerryFOC_setCurrent(command_values[0]);
     } else if (strncmp(line, "OpenLoop:", 9) == 0) {
         if (JerryFOC_isHSOActive() || JerryFOC_hasHSOFault()) (void)JerryFOC_useHSO(0U);
         /* 纯开环诊断：OpenLoop:速度,电压，例如 OpenLoop:30,6 */
-        float speed = 10.0f;
-        float voltage = 4.0f;
-        char *comma = strchr(line + 9, ',');
-
-        if (comma) {
-            *comma = '\0';
-            speed = strtof(line + 9, NULL);
-            voltage = strtof(comma + 1, NULL);
-        } else {
-            speed = strtof(line + 9, NULL);
-        }
+        float speed = command_values[0];
+        float voltage = command_values[1];
 
         if (speed < 2.0f) {
             speed = 10.0f;
@@ -162,11 +160,9 @@ void Protocol_HandleLine(char *line)
         g_openloop_angle = 0.0f;
     } else if (strcmp(line, "Stop") == 0) {
         if (JerryFOC_isHSOActive() || JerryFOC_hasHSOFault()) (void)JerryFOC_useHSO(0U);
-        g_openloop_debug = 0U;
-        JerryFOC_setVelocity(0.0f);
-        JerryFOC_setCurrent(0.0f);
-        JerryFOC_setMode(JERRYFOC_MODE_TORQUE);
+        JerryFOC_stop();
     }
+    if (speed_cmd || angle_cmd || torque_cmd || open_cmd) (void)JerryFOC_startOutput();
 
     if (!primask) {
         __enable_irq();

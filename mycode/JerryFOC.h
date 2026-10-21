@@ -59,6 +59,15 @@ extern volatile float g_openloop_angle;
 
 /* ================= 接口函数 ================= */
 void JerryFOC_playStartupSound(void);
+/* Main-loop only. Existing output is stopped; a moving/unhealthy encoder or
+ * ongoing alignment rejects a live switch. Sampling faults remain latched. */
+uint8_t JerryFOC_selectMotor(MotorProfile profile);
+uint8_t JerryFOC_needsAlignment(void);
+uint8_t JerryFOC_isAligning(void);
+/* Coast with all six gates disabled. All ADC trips remain active. */
+void JerryFOC_stop(void);
+/* Explicit new motion command only; refuses unready feedback/latched faults. */
+uint8_t JerryFOC_startOutput(void);
 
 void JerryFOC_setMode(JerryFOC_ControlMode mode);
 void JerryFOC_useCurrentLoop(uint8_t enable); /* 0: 电压控制(默认), 1: PI 电流环 */

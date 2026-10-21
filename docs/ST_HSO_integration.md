@@ -1,4 +1,6 @@
-# ST HSO 接入与试运行（UI-R22-VREF）
+# ST HSO 接入与试运行（UI-R25-STOP）
+
+R25 增加 Run 停机快照和编码器错误分类，见 [Run_stop_diagnostics.md](Run_stop_diagnostics.md)。R24 支持 Settings 选择 2804/4015，切换后重载模型与极对数并清除旧磁链学习/资格，不自动接管。两套初始磁链均为 0，需要对各自电机重新辨识；4015 电感的测量口径仍需核实。见 [Motor_profiles.md](Motor_profiles.md)。
 
 R22 使用 VREFINT 平均及低通滤波估算 VREF+，校正 HSO 输入电流、电压的物理量；ST 库的固定归一化尺度保持不变。规则组采样窗口、参考诊断与验证范围见 [VREFINT_reference_tracking.md](VREFINT_reference_tracking.md)。R21 的可选 ENC2 停止探测、R20 的 USB 发送修复也继续保留，HSO 控制策略仍为下述 R19 规则。
 

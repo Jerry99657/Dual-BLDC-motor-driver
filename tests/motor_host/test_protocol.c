@@ -104,6 +104,8 @@ void JerryFOC_setMode(JerryFOC_ControlMode m) { mode=m; }
 void JerryFOC_setVelocity(float v) { target=v; }
 void JerryFOC_setPosition(float p,float l) { (void)l; target=p; }
 void JerryFOC_setCurrent(float v) { target=v; }
+void JerryFOC_stop(void) { active=false; target=0; mode=JERRYFOC_MODE_TORQUE; g_openloop_debug=0; }
+uint8_t JerryFOC_startOutput(void) { return ready; }
 void StHso_Enable(bool en) { observer_enabled=en; }
 bool StHso_LearnFlux(void) { ++learns; return observer_enabled; }
 void StHso_GetConfig(StHsoConfig *c) { *c=config; }

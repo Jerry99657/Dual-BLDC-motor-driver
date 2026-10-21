@@ -58,6 +58,8 @@ int main(void) {
     memset(flash,255,sizeof(flash)); assert(AppStorage_Init());
     assert(sync_calls==0);
     assert(((AppStorage_Get()->flags & APP_SPEED_LIMIT_MASK)>>APP_SPEED_LIMIT_SHIFT)==100);
+    assert(!(AppStorage_Get()->flags & APP_FLAG_MOTOR_4015));
+    AppStorage_Get()->flags |= APP_FLAG_MOTOR_4015;
     AppStorage_Get()->speed_x10=123;
     AppStorage_Get()->flags=(AppStorage_Get()->flags & ~APP_SPEED_LIMIT_MASK) |
                             (123UL<<APP_SPEED_LIMIT_SHIFT);
@@ -75,6 +77,7 @@ int main(void) {
     assert(((AppStorage_Get()->flags & APP_SPEED_LIMIT_MASK)>>APP_SPEED_LIMIT_SHIFT)==234);
     service(10); assert(sync_calls==0);
     assert(AppStorage_Init()); assert(AppStorage_Get()->speed_x10==123);
+    assert(AppStorage_Get()->flags & APP_FLAG_MOTOR_4015);
     assert(((AppStorage_Get()->flags & APP_SPEED_LIMIT_MASK)>>APP_SPEED_LIMIT_SHIFT)==123);
     assert(((AppStorage_Get()->flags & APP_POSITION_SPEED_MASK)>>APP_POSITION_SPEED_SHIFT)==30);
     assert(AppStorage_Get()->speed_step_x10==6 && AppStorage_Get()->torque_step_x100==7 && AppStorage_Get()->position_step_x100==4);
@@ -95,6 +98,7 @@ int main(void) {
     }
     assert(sync_calls==0);
     AppStorage_ResetDefaults(); assert(AppStorage_Get()->speed_x10==0);
+    assert(!(AppStorage_Get()->flags & APP_FLAG_MOTOR_4015));
     assert(((AppStorage_Get()->flags & APP_SPEED_LIMIT_MASK)>>APP_SPEED_LIMIT_SHIFT)==100);
     assert(AppStorage_RequestSave()); service(60); assert(result());
     assert(AppStorage_Get()->speed_step_x10==5 && AppStorage_Get()->torque_step_x100==5 && AppStorage_Get()->position_step_x100==5);
@@ -120,6 +124,7 @@ int main(void) {
     assert(migrated->version==2 && migrated->speed_x10==-123 && migrated->voltage_x100==250 && migrated->led_brightness==35);
     assert(migrated->speed_step_x10==5 && migrated->torque_step_x100==5 && migrated->position_step_x100==5);
     assert((migrated->flags & APP_SPEED_LIMIT_MASK)==0); /* UI supplies default for old records. */
+    assert(!(migrated->flags & APP_FLAG_MOTOR_4015));
     assert(AppStorage_RequestSave()); service(60); assert(result()); service(20);
     assert(AppStorage_Init() && AppStorage_Get()->speed_x10==-123);
     assert((AppStorage_Get()->flags & APP_SPEED_LIMIT_MASK)==0); /* Existing version 2 layout. */

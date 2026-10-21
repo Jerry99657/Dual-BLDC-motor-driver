@@ -42,7 +42,19 @@ typedef struct {
     float pos_ramp;
 } MotorParams;
 
-/* 2804 云台电机 */
+typedef enum {
+    MOTOR_PROFILE_2804 = 0,
+    MOTOR_PROFILE_4015,
+    MOTOR_PROFILE_COUNT
+} MotorProfile;
+
 extern const MotorParams MOTOR_2804;
+extern const MotorParams MOTOR_4015;
+const MotorParams *MotorParams_GetProfile(MotorProfile profile);
+const MotorParams *MotorParams_GetActive(void);
+MotorProfile MotorParams_GetActiveProfile(void);
+/* Application changes must go through JerryFOC_selectMotor(), which stops
+ * output, reloads controllers and invalidates the encoder alignment. */
+void MotorParams_Select(MotorProfile profile);
 
 #endif /* __MOTOR_PARAMS_H */

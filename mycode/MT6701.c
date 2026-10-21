@@ -14,6 +14,9 @@ static volatile uint16_t mt6701_sample_age_cycles = UINT16_MAX;
 static volatile uint32_t mt6701_sample_counter = 0U;
 static volatile uint32_t mt6701_error_counter = 0U;
 static volatile uint32_t mt6701_sample_at = 0U;
+static volatile uint32_t crc_errors, field_errors, track_errors, spi_errors, frame_errors;
+static volatile uint16_t max_sample_age_cycles;
+static volatile MT6701Error last_error;
 
 /* 10 kHz 调度下允许连续 3 个控制周期没有新样本；超过后有感 FOC 撤掉输出。 */
 #define MT6701_MAX_SAMPLE_AGE_CYCLES 3U
@@ -34,14 +37,29 @@ static uint8_t MT6701_CalculateCrc6(uint32_t data18)
     return crc;
 }
 
-static uint8_t MT6701_Decode(const uint8_t data[3], uint16_t *angle, uint8_t *status)
+static MT6701Error MT6701_Decode(const uint8_t data[3], uint16_t *angle, uint8_t *status)
 {
     uint32_t frame = ((uint32_t)data[0] << 16) | ((uint32_t)data[1] << 8) | data[2];
     *angle = (uint16_t)(frame >> 10);
     *status = (uint8_t)((frame >> 6) & 0x0FU);
-    return frame != 0U && frame != 0xFFFFFFU &&
-           (frame & 0x3FU) == MT6701_CalculateCrc6(frame >> 6) &&
-           (*status & 0x0BU) == 0U;
+    if (frame == 0U || frame == 0xFFFFFFU) return MT6701_ERROR_FRAME;
+    if ((frame & 0x3FU) != MT6701_CalculateCrc6(frame >> 6)) return MT6701_ERROR_CRC;
+    if (*status & 0x08U) return MT6701_ERROR_TRACK;
+    if (*status & 0x03U) return MT6701_ERROR_FIELD;
+    return MT6701_ERROR_NONE;
+}
+
+static void MT6701_RecordError(MT6701Error error)
+{
+    ++mt6701_error_counter;
+    last_error = error;
+    switch (error) {
+    case MT6701_ERROR_CRC: ++crc_errors; break;
+    case MT6701_ERROR_FIELD: ++field_errors; break;
+    case MT6701_ERROR_TRACK: ++track_errors; break;
+    case MT6701_ERROR_SPI: ++spi_errors; break;
+    default: ++frame_errors; break;
+    }
 }
 
 static uint8_t MT6701_RequestSample(void)
@@ -57,7 +75,7 @@ static uint8_t MT6701_RequestSample(void)
     if (status != HAL_OK) {
         CS_Disable;
         mt6701_transfer_active = 0U;
-        mt6701_error_counter++;
+        MT6701_RecordError(MT6701_ERROR_SPI);
         return 0U;
     }
     return 1U;
@@ -73,13 +91,13 @@ void HAL_SPI_TxRxCpltCallback(SPI_HandleTypeDef *hspi)
 
         uint16_t raw_angle;
         uint8_t status;
-        uint8_t valid = MT6701_Decode(MT6701_Data, &raw_angle, &status);
+        MT6701Error error = MT6701_Decode(MT6701_Data, &raw_angle, &status);
         mt6701_status = status;
 
         /* Mg[1:0] 非零表示磁场过强/过弱，Mg[3] 表示失跟踪；
          * Mg[2] 是按压状态，不影响转子角度。全 0/全 1 帧用于识别 MISO 卡死。 */
-        if (!valid) {
-            mt6701_error_counter++;
+        if (error != MT6701_ERROR_NONE) {
+            MT6701_RecordError(error);
             mt6701_transfer_active = 0U;
             return;
         }
@@ -100,7 +118,7 @@ void HAL_SPI_ErrorCallback(SPI_HandleTypeDef *hspi)
     if (hspi->Instance == SPI1) {
         CS_Disable;
         mt6701_transfer_active = 0U;
-        mt6701_error_counter++;
+        MT6701_RecordError(MT6701_ERROR_SPI);
     } else if (hspi->Instance == SPI3) {
         OLED_DriverHandleSpiError();
     }
@@ -137,6 +155,8 @@ void MT6701_Service(void)
 
     if (mt6701_sample_valid && mt6701_sample_age_cycles < UINT16_MAX) {
         mt6701_sample_age_cycles++;
+        if (mt6701_sample_age_cycles > max_sample_age_cycles)
+            max_sample_age_cycles = mt6701_sample_age_cycles;
     }
     MT6701_RequestSample();
 }
@@ -172,6 +192,33 @@ uint32_t MT6701_GetErrorCounter(void)
 uint16_t MT6701_GetSampleAgeCycles(void)
 {
     return mt6701_sample_age_cycles;
+}
+
+void MT6701_GetDiagnostics(MT6701Diagnostics *out)
+{
+    if (out == NULL) return;
+    uint32_t mask = __get_PRIMASK();
+    __disable_irq();
+    *out = (MT6701Diagnostics){
+        .errors=mt6701_error_counter, .crc_errors=crc_errors,
+        .field_errors=field_errors, .track_errors=track_errors,
+        .spi_errors=spi_errors, .frame_errors=frame_errors,
+        .age_cycles=mt6701_sample_age_cycles, .max_age_cycles=max_sample_age_cycles,
+        .status=mt6701_status, .last_error=last_error
+    };
+    __set_PRIMASK(mask);
+}
+
+const char *MT6701_ErrorText(MT6701Error error)
+{
+    switch (error) {
+    case MT6701_ERROR_FRAME: return "NO FRAME";
+    case MT6701_ERROR_CRC: return "CRC";
+    case MT6701_ERROR_FIELD: return "FIELD";
+    case MT6701_ERROR_TRACK: return "TRACK";
+    case MT6701_ERROR_SPI: return "SPI";
+    default: return "--";
+    }
 }
 
 static MT6701_2_Snapshot second;
@@ -219,9 +266,9 @@ void MT6701_2_Service(uint32_t now_ms)
         MT6701_2_RecordFailure();
         return;
     }
-    uint8_t valid = MT6701_Decode(rx, &raw, &status);
+    MT6701Error error = MT6701_Decode(rx, &raw, &status);
     second.status = status;
-    if (!valid) {
+    if (error != MT6701_ERROR_NONE) {
         MT6701_2_RecordFailure();
         return;
     }

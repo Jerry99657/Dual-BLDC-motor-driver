@@ -212,20 +212,17 @@ int main(void)
   MT6701_StartContinuous();
   HAL_UART_Receive_IT(&huart1, &rx_byte, 1U);
 
-  /* 3. 角度源与电机 */
-  AngleSource *encoder_src = AngleSrc_Encoder_Init(MOTOR_2804.pole_pairs);
-  JerryFOC_setAngleSource(encoder_src);
-  StHso_Init(&MOTOR_2804);
-  JerryFOC_useCurrentLoop(0U);          /* 2804 默认电压模式 */
-  JerryFOC_setMode(JERRYFOC_MODE_TORQUE);
-  JerryFOC_setCurrent(0.0f);
+  /* Load the selected motor before ADC protection, alignment or FOC starts.
+   * This also works when LCD initialization fails. */
+  (void)AppStorage_Init();
+  (void)JerryFOC_selectMotor((AppStorage_Get()->flags & APP_FLAG_MOTOR_4015) ?
+                           MOTOR_PROFILE_4015 : MOTOR_PROFILE_2804);
 
   /* 4. WS2812 状态灯 */
   WS2812_Init();
 
   /* 5. W25Q64 设置/日志与 KK_UI */
   ui_input_init();
-  (void)AppStorage_Init();
   if (AppStorage_IsReady()) {
       AppStorage_Log(APP_LOG_BOOT, AppStorage_ReadID());
   }
@@ -290,7 +287,8 @@ int main(void)
         ui_app_process_events();
     }
 
-    if (g_need_align && MotorSampling_IsReady() && MotorSampling_IsCalibrated()) {
+    if ((g_need_align || JerryFOC_needsAlignment()) && !g_aligning &&
+        MotorSampling_IsReady() && MotorSampling_IsCalibrated() && MT6701_IsHealthy()) {
         g_need_align = 0U;
         JerryFOC_setMode(JERRYFOC_MODE_TORQUE);
         JerryFOC_setCurrent(0.0f);
@@ -306,7 +304,7 @@ int main(void)
     }
 
     /* 标定不阻塞主循环，期间按键和界面仍然可用 */
-    if (g_aligning && (!MotorSampling_IsReady() ||
+    if (g_aligning && (!JerryFOC_isAligning() || !MotorSampling_IsReady() ||
         (now - g_align_start) >= ALIGN_TIME_MS)) {
         g_aligning = 0U;
         JerryFOC_alignFinish();
