@@ -22,6 +22,11 @@ HAL_StatusTypeDef HAL_SPI_Transmit(SPI_HandleTypeDef *, const uint8_t *, uint16_
 HAL_StatusTypeDef HAL_SPI_Receive(SPI_HandleTypeDef *, uint8_t *, uint16_t, uint32_t);
 HAL_StatusTypeDef HAL_SPI_DMAStop(SPI_HandleTypeDef *);
 HAL_StatusTypeDef HAL_SPI_Abort(SPI_HandleTypeDef *);
+HAL_StatusTypeDef HAL_SPI_Init(SPI_HandleTypeDef *);
+void Host_SPI1_ForceReset(void);
+void Host_SPI1_ReleaseReset(void);
+#define __HAL_RCC_SPI1_FORCE_RESET() Host_SPI1_ForceReset()
+#define __HAL_RCC_SPI1_RELEASE_RESET() Host_SPI1_ReleaseReset()
 void HAL_SPI_TxRxCpltCallback(SPI_HandleTypeDef *);
 void HAL_SPI_ErrorCallback(SPI_HandleTypeDef *);
 #endif

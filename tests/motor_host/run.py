@@ -1,11 +1,14 @@
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 
 repo = Path(__file__).resolve().parents[2]
 out = repo / "build/motor-validation"
 out.mkdir(parents=True, exist_ok=True)
 compiler = shutil.which("gcc") or "gcc"
+subprocess.run([sys.executable, "tests/motor_host/check_spi_clock.py"],
+               cwd=repo, check=True)
 for name, sources in {
     "control": ["mycode/JerryFOC.c", "mycode/motor_control.c", "mycode/protocol.c", "mycode/motor_params.c", "tests/motor_host/test_control.c"],
     "profiles": ["mycode/motor_params.c", "tests/motor_host/test_profiles.c"],
@@ -22,5 +25,5 @@ for name, sources in {
     subprocess.run(command, cwd=repo, check=True)
     subprocess.run([str(out / (name + ".exe"))], cwd=repo, check=True)
     if name == "encoder":
-        for scenario in ("missing", "timeout", "missing-wrap"):
+        for scenario in ("missing", "timeout", "missing-wrap", "m1-recovery", "required-retry", "required-retry-wrap", "zero-m1", "zero-m2", "zero-poll"):
             subprocess.run([str(out / "encoder.exe"), scenario], cwd=repo, check=True)

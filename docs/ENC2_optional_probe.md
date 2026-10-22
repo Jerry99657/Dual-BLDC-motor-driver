@@ -1,5 +1,7 @@
 # ENC2 可选设备探测（UI-R21-ENC2）
 
+本页为 R21 历史记录。当前 R42 保留未启用 ENC2 的五次停止，但对启用的 ENC2 增加故障停机后每 250 ms 单帧重试；也保留显式 Align / Retry。当前固件、总线恢复和时钟配置见 [Encoder_reconnect_clock_restore.md](Encoder_reconnect_clock_restore.md)。
+
 第二路 MT6701 通过 SPI2 / MT6701_CSN2 与 W25Q64 共用总线。原代码每毫秒发起一次读取，即使编码器未连接也持续累加错误，没有停止条件。本次将可选 ENC2 的轮询限制为连续失败 5 次后停止。
 
 ## 规则

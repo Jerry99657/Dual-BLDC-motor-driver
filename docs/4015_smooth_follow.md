@@ -1,5 +1,7 @@
 # UI-R36-SMOOTH：慢速输入整形与停止捕获
 
+此页保留 R36 历史实现。用户板上报告振动更强及停止振荡后，R37 已撤回慢速额外 P、原始位置旁路和末端 PD，改为带滞回的近静止保持，见 [4015_follow_stability.md](4015_follow_stability.md)。当前 **UI-R38-SMOOTH** 继续改善移动输入整形，见 [4015_moving_smoothness.md](4015_moving_smoothness.md)。
+
 适用当前设置：4015 从轴、Curr Loop=On、空载。用户确认的现象是持续转动但快慢起伏，手动加初速后自由滑行则较顺；高速目标仍为 ±10°、4 Hz。补充观测为主机停下时 Run Error≥3 rad，从机约晚停 0.5 s，时间读数尚不准确。本版支持两轴交换主从，无需修改 CubeMX 或设置保存格式。
 
 ## 判断与资料

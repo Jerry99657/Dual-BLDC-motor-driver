@@ -44,7 +44,7 @@ Error_Handler 的 noinline 声明及诊断变量放在 USER CODE 中。LR 可结
 
 ## 验证
 
-本页记录 R33 的启动修复，当前 R36 继续保留；Debug / Release 已重新生成 ELF、BIN、MAP，About → FW 应为 **UI-R36-SMOOTH**。尚未烧录或实机验证。
+本页记录 R33 的启动修复，当前 R41 继续保留；Debug / Release 已重新生成 ELF、BIN、MAP，About → FW 应为 **UI-R43-ZEROLOG**。编码器降速见 [Encoder_SPI_slow_clock.md](Encoder_SPI_slow_clock.md)，当前诊断和 DMA 恢复见 [Encoder_axis_dma_recovery.md](Encoder_axis_dma_recovery.md)。尚未烧录或实机验证。
 
 构建后执行 `python tests/motor_host/check_startup.py`，检查最终 ELF 中 HAL_Init 在时钟/外设调用之前、HAL_MspInit 为强符号、诊断变量存在、固件版本正确及 ELF/BIN 一致。工具从 Debug 的 CMakeCache 或 PATH 查找，也可用 `--toolchain-bin` 指定 GNU ARM 工具目录。新增检查不依赖在文本中搜索 `HAL_Init`，能够发现函数名字仍在注释内、实际调用消失的问题。
 

@@ -1,6 +1,6 @@
 # 双电机 ADC / PWM 配置核查
 
-当前 **UI-R36-SMOOTH** 已核对重新生成的外设配置并接入双有感控制；本页早期版本说明保留作历史参考。当前功能、逐路保护及上板步骤以 [Dual_motor_control.md](Dual_motor_control.md) 为准。
+当前 **UI-R43-ZEROLOG** 已核对重新生成的外设配置并接入双有感控制；本页早期版本说明保留作历史参考。当前功能、逐路保护及上板步骤以 [Dual_motor_control.md](Dual_motor_control.md) 为准。
 
 核查日期：2026-10-21。对象为本工程当前 `FOC_two.ioc`、`Core/Src/adc.c`、`Core/Src/tim.c`、`Core/Src/main.c` 与 `mycode/JerryFOC.c`，以及用户提供的分配表和电压分压原理图。
 

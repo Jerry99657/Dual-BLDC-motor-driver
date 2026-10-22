@@ -1,6 +1,6 @@
 # UI-R35-TRACK：4015 小角度高速往复跟随
 
-本页保留 R35 的高速跟随记录。当前 UI-R36-SMOOTH 的低速输入整形、末端捕获、验证及局限见 [4015_smooth_follow.md](4015_smooth_follow.md)。
+本页保留 R35 的高速跟随记录。当前 UI-R38-SMOOTH 的移动输入整形、R37 停止保持、验证及局限见 [4015_moving_smoothness.md](4015_moving_smoothness.md)。
 
 目标工况：4015 从轴、Curr Loop=On、Pos Speed=120、空载、±10°、每秒完整往复 4 次。按正弦机械角度计算，峰值速度 4.39 rad/s，峰值加速度约 110 rad/s²。R34 参考加速 55、后级给定加速 100 均会限制这个工况。
 

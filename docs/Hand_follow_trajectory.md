@@ -1,6 +1,6 @@
 # UI-R32-FOLLOW：主从追赶轨迹与超调调整
 
-本页保留 R32～R34 的追赶轨迹公式与参数。当前 **UI-R36-SMOOTH** 的 4015 电流闭环另加入快速参考、慢速输入整形和末端捕获，见 [4015_smooth_follow.md](4015_smooth_follow.md)；R35 高速基线见 [4015_fast_follow.md](4015_fast_follow.md)。主轴继续关闭功率输出，普通 Position、Sync Position 的位置 P 仍为 6，无需修改 CubeMX。启动修复见 [Startup_error_handler.md](Startup_error_handler.md)。
+本页保留 R32～R34 的追赶轨迹公式与参数。当前 **UI-R43-ZEROLOG** 改进移动输入整形，并保留 R37 近静止保持，见 [4015_moving_smoothness.md](4015_moving_smoothness.md)；R35 高速基线见 [4015_fast_follow.md](4015_fast_follow.md)。主轴继续关闭功率输出，普通 Position、Sync Position 的位置 P 仍为 6，无需修改 CubeMX。启动修复见 [Startup_error_handler.md](Startup_error_handler.md)。
 
 ## 控制关系
 

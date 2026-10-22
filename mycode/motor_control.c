@@ -37,11 +37,10 @@ static const MotorFollowParams *group_follow;
 static float follow_estimate[2],follow_velocity[2];
 static float follow_weight;
 static float follow_activity;
-static float follow_last_master;
+static float follow_motion_anchor,follow_acceleration;
 static uint16_t follow_quiet_ms;
 static uint16_t follow_count_interval;
-static float follow_raw_speed;
-static float follow_settle;
+static bool follow_quiet,follow_hold;
 static float follow_command_position,follow_command_velocity,follow_master_velocity;
 
 static float clamp(float x,float lo,float hi) { return fminf(hi,fmaxf(lo,x)); }
@@ -368,10 +367,10 @@ bool MotorControl_StartFollow(void)
         follow_velocity[i]=i==MOTOR_AXIS_1 ? JerryFOC_getVelocity() : m2.velocity;
     }
     follow_weight=0;
-    follow_activity=1;
-    follow_last_master=origins[master]; follow_quiet_ms=0; follow_count_interval=1;
-    follow_raw_speed=follow_velocity[master];
-    follow_settle=0;
+    follow_activity=1; follow_acceleration=0;
+    follow_motion_anchor=origins[master];
+    follow_quiet_ms=0; follow_count_interval=1;
+    follow_quiet=follow_hold=false;
     follow_command_position=origins[master];
     follow_command_velocity=follow_master_velocity=follow_velocity[master];
     set_target(slave,JERRYFOC_MODE_POSITION,origins[slave],limit);
@@ -395,15 +394,26 @@ float MotorControl_VelocityControl(MotorAxis axis,PIDController *velocity,float 
     float error=reference-(fast ? follow_velocity[axis] : measured);
     float integral=velocity->integral_prev;
     float gain=velocity->P;
-    /* Raise proportional correction smoothly for a substantial speed error;
-     * retain the quieter nominal gain near zero. Leave I and normal modes alone. */
+    float igain=velocity->I;
+    /* Retain R35 moving gains. Withdraw R36's extra low-speed P and terminal
+     * damping after the real-board vibration report and encoder-noise tests. */
     if (fast) {
-        float moving=clamp(10*fabsf(follow_master_velocity),0,1);
-        float low_gain=gain+0.03f*(1-follow_activity)*moving;
-        velocity->P=low_gain+(group_follow->velocity_P-low_gain)*clamp(fabsf(error),0,1);
+        velocity->P=gain+(group_follow->velocity_P-gain)*clamp(fabsf(error),0,1);
+        /* Hysteresis in follower radians: enter within four encoder counts,
+         * leave beyond eight. Preserve the holding integral/load torque;
+         * suppress tiny speed-noise corrections instead of disabling PWM. */
+        if (!follow_quiet || fabsf(group_error)>0.003068f || fabsf(reference)>0.15f)
+            follow_hold=false;
+        else if (follow_quiet_ms>60 && fabsf(group_error)<0.001534f &&
+                 fabsf(reference)<0.05f && fabsf(follow_velocity[axis])<0.08f)
+            follow_hold=true;
+        if (follow_hold) {
+            velocity->I=0;
+            error=copysignf(fmaxf(0,fabsf(error)-0.05f),error);
+        }
     }
     float output=JerryFOC_PID_Calc(velocity,error);
-    velocity->P=gain;
+    velocity->P=gain; velocity->I=igain;
     /* Conditional integration during fast-follow current saturation. Allow
      * reverse error to unwind; never carry a saturated acceleration into stop. */
     if (fast && output*error>0 && fabsf(output)>=velocity->limit)
@@ -421,17 +431,12 @@ float MotorControl_PositionVelocity(MotorAxis axis,PIDController *position,float
         return JerryFOC_PID_Calc(position,error);
     const MotorFollowParams *m=group_follow;
     float velocity=axis==MOTOR_AXIS_1 ? JerryFOC_getVelocity() : m2.velocity;
-    if (m->fast_tracking) {
-        velocity=follow_velocity[axis];
-        /* Shape the feedforward path, but close small tracking errors against
-         * the real hand position; input smoothing must not redefine the goal. */
-        error+=follow_weight*(-group_error-error);
-    }
+    if (m->fast_tracking) velocity=follow_velocity[axis];
     /* Feed the velocity loop a planned speed, with a small position correction
      * and relative-speed damping. No position integral or step derivative. */
-    float command=group_speed+m->P*error+m->damping*(group_speed-velocity);
-    if (m->fast_tracking) command+=follow_settle*(-6*group_error-0.5f*velocity-command);
-    return command;
+    /* Keep the planned position/speed pair through braking and settling.
+     * Do not switch to a second raw-position PD controller at the endpoint. */
+    return group_speed+m->P*error+m->damping*(group_speed-velocity);
 }
 bool MotorControl_Command(MotorAxis axis,JerryFOC_ControlMode mode,float value,float limit,bool loop)
 {
@@ -530,6 +535,8 @@ void MotorControl_Fast(void)
     if (!MotorControl_AxisEnabled(MOTOR_AXIS_2)) return;
     MT6701_2_Snapshot enc; MT6701_2_GetSnapshot(&enc);
     bool active=MotorSampling_IsAxisOutputRequested(MOTOR_AXIS_2);
+    /* A failed startup probe must not auto-align/energize after reconnection. */
+    if (enc.stopped) m2.pending_align=false;
     if (active && (!enc.healthy || !MotorSampling_IsAxisReady(MOTOR_AXIS_2))) {
         m2.stop_reason=enc.healthy ? MotorSampling_GetAxisStatusText(MOTOR_AXIS_2) : MotorControl_EncoderLostText(MOTOR_AXIS_2);
         if (!enc.healthy) m2.aligned=false;
@@ -607,27 +614,31 @@ static void coordinate(void)
         if (m->fast_tracking) {
             /* Keep follower feedback bandwidth: extra lag inside the speed
              * loop can turn low-speed smoothing into a limit cycle. */
+            float previous_master=follow_velocity[master];
             for (unsigned i=0;i<2;++i) {
                 follow_estimate[i]+=0.001f*follow_velocity[i];
                 float residual=positions[i]-follow_estimate[i];
                 follow_estimate[i]+=0.5f*residual;
                 follow_velocity[i]+=80*residual;
             }
-            /* One-Euro-style command filter: smooth slow hand/count jitter,
-             * increase cutoff with speed. No extrapolated master position. */
-            float delta=positions[master]-follow_last_master;
-            if (fabsf(delta)>0.0001917476f) {
+            /* Tolerate one-count encoder jitter at rest. The motion anchor
+             * is separate from the observer's sample-by-sample velocity. */
+            if (fabsf(positions[master]-follow_motion_anchor)>0.0008628642f) {
                 follow_count_interval=follow_quiet_ms>100 ? 1 : follow_quiet_ms+1;
-                follow_last_master=positions[master]; follow_quiet_ms=0;
+                follow_motion_anchor=positions[master]; follow_quiet_ms=0;
             } else if (follow_quiet_ms<1000) ++follow_quiet_ms;
-            follow_raw_speed+=0.0591174f*(1000*delta-follow_raw_speed);
-            follow_activity+=0.02f*(clamp(fabsf(follow_velocity[master]),0,1)-follow_activity);
-            float fast_blend=clamp((follow_activity-0.3f)/0.4f,0,1);
-            float speed=fabsf(follow_raw_speed);
-            float cutoff=clamp(2+10*speed+50*fmaxf(0,speed-0.3f),2,100);
-            bool quiet=follow_quiet_ms>4 && follow_quiet_ms>2U*follow_count_interval;
-            float settling=quiet && fabsf(group_error)<0.1f ? 1 : 0;
-            follow_settle+=0.1f*(settling-follow_settle);
+            /* Filter signed acceleration before taking its magnitude. A
+             * steady hand turn stays smooth; fast reversals retain the low
+             * latency path even when their instantaneous speed is small.
+             * The same 50ms activity drives BOTH cutoff and channel blend,
+             * avoiding fast cutoff modulation in differentiated setpoints. */
+            follow_acceleration+=0.0591174f*(1000*(follow_velocity[master]-previous_master)-follow_acceleration);
+            float demand=fmaxf(0.25f*fabsf(follow_velocity[master]),0.04f*fabsf(follow_acceleration));
+            follow_activity+=0.02f*(clamp(demand,0,1)-follow_activity);
+            bool quiet=follow_quiet_ms>30 && follow_quiet_ms>2U*follow_count_interval;
+            float fast_blend=quiet ? 0 : clamp((follow_activity-0.3f)/0.4f,0,1);
+            float cutoff=5+95*fast_blend;
+            follow_quiet=quiet;
             if (quiet) {
                 /* Do not let input smoothing prolong a confirmed stop. Sparse
                  * count intervals retain sub-count motion instead of a fixed timeout. */

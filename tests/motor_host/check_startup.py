@@ -45,6 +45,10 @@ for mode in ("Debug", "Release"):
     symbols = tool("nm", elf)
     for symbol in ("HAL_Init", "HAL_MspInit"):
         assert re.search(r"^\w+ T " + symbol + r"$", symbols, re.M), (mode, symbol)
+    for symbol in ("DMA1_Channel1_IRQHandler", "DMA1_Channel2_IRQHandler",
+                   "DMA2_Channel1_IRQHandler", "DMA2_Channel2_IRQHandler",
+                   "SPI1_IRQHandler", "SPI2_IRQHandler", "ADC1_2_IRQHandler", "TIM2_IRQHandler"):
+        assert re.search(r"^\w+ T " + symbol + r"$", symbols, re.M), (mode, symbol)
     for symbol in ("g_boot_stage", "g_error_return_address"):
         assert re.search(r"^\w+ [bB] " + symbol + r"$", symbols, re.M), (mode, symbol)
 
@@ -56,10 +60,10 @@ for mode in ("Debug", "Release"):
     assert hal_calls.index("HAL_InitTick") < hal_calls.index("HAL_MspInit"), (mode, hal_calls)
 
     image = (root / "FOC_two.bin").read_bytes()
-    assert b"UI-R36-SMOOTH" in image and b"UI-R35-TRACK" not in image, mode
+    assert b"UI-R43-ZEROLOG" in image and b"UI-R42-ENCRETRY" not in image, mode
     with tempfile.TemporaryDirectory(prefix="startup-", dir=repo / "build") as scratch:
         output = Path(scratch) / "verified.bin"
         tool("objcopy", "-O", "binary", elf, output)
         assert image == output.read_bytes(), mode
-    print(f"PASS: {mode}: HAL_Init precedes clocks/peripherals; strong MSP; R36; "
+    print(f"PASS: {mode}: HAL_Init precedes clocks/peripherals; strong MSP; R43; "
           f"ELF/BIN match ({len(image)} B), SHA256 {hashlib.sha256(image).hexdigest()}")

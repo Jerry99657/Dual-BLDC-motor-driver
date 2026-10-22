@@ -47,7 +47,7 @@ GPIO_PinState HAL_GPIO_ReadPin(GPIO_TypeDef *port, uint16_t pin) {
 }
 uint8_t MT6701_IsHealthy(void) { return healthy; }
 void MT6701_2_GetSnapshot(MT6701_2_Snapshot *out) {
-    *out=(MT6701_2_Snapshot){.healthy=1,.raw_angle=456};
+    *out=(MT6701_2_Snapshot){.healthy=1,.raw_angle=456,.errors=enc2_diag.errors};
 }
 uint8_t JerryFOC_isDriveReady(void) { return drive_ready && !hso_fault; }
 uint8_t JerryFOC_isHSOActive(void) { return hso_active; }
@@ -79,7 +79,7 @@ uint32_t MT6701_GetErrorCounter(void) { return enc_diag.errors; }
 void MT6701_GetDiagnostics(MT6701Diagnostics *out) { *out=enc_diag; }
 void MT6701_2_GetDiagnostics(MT6701Diagnostics *out) { *out=enc2_diag; }
 const char *MT6701_ErrorText(MT6701Error error) {
-    const char *names[]={"--","NO FRAME","CRC","FIELD","TRACK","SPI"};
+    const char *names[]={"--","ALL 0","CRC","FIELD","TRACK","SPI","ALL 1","DMA TMO"};
     return names[error];
 }
 void JerryFOC_useCurrentLoop(uint8_t enable) { current_loop = enable; }
@@ -226,6 +226,7 @@ static const char *status_value(const char *name) {
     const KK_UI_InfoPage *page=&ui_app_get()->info_pages[0];
     for(unsigned i=0;i<page->row_count;++i)
         if(strcmp(page->rows[i].name,name)==0) return page->rows[i].value;
+    fprintf(stderr,"Missing Status row: %s\n",name);
     assert(0); return "";
 }
 int main(void) {
@@ -246,8 +247,8 @@ int main(void) {
     assert(strcmp(status_value("IW R/Z"),"2049 / 2048")==0);
     assert(strcmp(status_value("I Trip"),"ZERO V 0")==0);
     assert(strcmp(status_value("ChipRev"),"0x2002")==0);
-    assert(strcmp(status_value("Enc2"),"OK 456")==0);
-    assert(strcmp(status_value("Enc2Err"),"0")==0);
+    assert(strcmp(status_value("E2 Probe"),"OK 456")==0);
+    assert(strcmp(status_value("E2 Total"),"0")==0);
     bus_voltage=0; drive_ready=false; unready_status="WAIT BUS"; settle();
     assert(strcmp(status_value("Bus"),"0.0 V")==0 && strcmp(status_value("Drive"),"WAIT BUS")==0);
     press(KK_UI_KEY_OK); settle(); snapshot("run-wait-bus");
@@ -590,14 +591,14 @@ int main(void) {
     enc_diag=(MT6701Diagnostics){.errors=443,.crc_errors=443,.age_cycles=4,.max_age_cycles=4,.last_error=MT6701_ERROR_CRC};
     healthy=false; step(0,1);
     assert(strcmp(status_value("Run Stop"),"ENCODER1 LOST")==0);
-    assert(strcmp(status_value("Stop Age"),"4")==0 && strcmp(status_value("Stop Err"),"443")==0);
+    assert(strcmp(status_value("Stop Age"),"E1 4")==0 && strcmp(status_value("Stop Err"),"E1 443")==0);
     assert(JerryFOC_Target_Velocity==0 && JerryFOC_Target_Iq==0);
     healthy=true; enc_diag.age_cycles=1; enc_diag.errors=444; settle();
-    assert(strcmp(status_value("Drive"),"READY")==0 && strcmp(status_value("Encoder"),"OK")==0);
+    assert(strcmp(status_value("Drive"),"READY")==0 && strcmp(status_value("E1 State"),"OK")==0);
     assert(strcmp(status_value("Run Stop"),"ENCODER1 LOST")==0);
-    assert(strcmp(status_value("Stop Err"),"443")==0);
-    assert(strcmp(status_value("Enc CRC"),"443")==0 && strcmp(status_value("Enc Age"),"1 / 4")==0);
-    assert(strcmp(status_value("Enc Last"),"CRC")==0);
+    assert(strcmp(status_value("Stop Err"),"E1 443")==0);
+    assert(strcmp(status_value("E1 CRC"),"443")==0 && strcmp(status_value("E1 Age"),"1 / 4")==0);
+    assert(strcmp(status_value("E1 Last"),"CRC")==0);
     snapshot("run-encoder-stop");
     press(KK_UI_KEY_OK); assert(JerryFOC_Target_Velocity>0 && strcmp(status_value("Run Stop"),"--")==0);
     const char *stop_causes[]={"M1 OVERLOAD","NOT ALIGNED","MODE CHANGED","OPEN LOOP"};
@@ -789,7 +790,38 @@ int main(void) {
     press(KK_UI_KEY_OK); settle(); assert(MotorControl_GetFocus()==MOTOR_AXIS_1);
     press(KK_UI_KEY_OK); settle(); MotorControl_GetAxis(MOTOR_AXIS_2,&second);
     assert(MotorControl_IsGroupActive() && output_requested && !second.active && mode==JERRYFOC_MODE_POSITION);
+    /* Encoder numbering follows the physical axis even when M2 is the hand
+     * master and M1 the powered follower. Labels/values switch together. */
+    enc_diag=(MT6701Diagnostics){.frame_errors=11,.age_cycles=1,.max_age_cycles=4,.last_error=MT6701_ERROR_TIMEOUT,
+        .zero_before=7000,.zero_after=7002,.zero_count=3,.zero_age=1,.zero_started_at=UINT32_MAX-2U,.zero_ended_at=1};
+    enc2_diag=(MT6701Diagnostics){.errors=6,.frame_errors=6,.age_cycles=65535,.max_age_cycles=65535,.last_error=MT6701_ERROR_FRAME,
+        .zero_before=16383,.zero_after=UINT16_MAX,.zero_count=65535,.zero_age=1};
+    settle();
+    assert(!strcmp(status_value("E1 Frame"),"11") && !strcmp(status_value("E1 Last"),"DMA TMO"));
+    MotorControl_SetFocus(MOTOR_AXIS_2); settle();
+    /* Run deliberately stays on the powered follower. Inspect the hand
+     * master's diagnostics from Status after explicitly stopping. */
+    assert(MotorControl_GetFocus()==MOTOR_AXIS_1 && MotorControl_IsGroupActive() && output_requested);
     back(); assert(!output_requested && !MotorControl_IsGroupActive());
+    assert(KK_UI_GoTo(UI_PAGE_STATUS,tick)==KK_UI_OK); settle();
+    MotorControl_SetFocus(MOTOR_AXIS_2); settle();
+    assert(!strcmp(status_value("E2 Frame"),"6") && !strcmp(status_value("E2 Last"),"ALL 0"));
+    assert(!strcmp(status_value("E2 Age"),"65535 / 65535") && !strcmp(status_value("E2 Total"),"6"));
+    assert(!strcmp(status_value("E2 Zero"),"NEAR 65535") && !strcmp(status_value("E2 ZPre"),"16383") && !strcmp(status_value("E2 ZPost"),"--"));
+    OLED_SetFont(ui_font_body);
+    for(unsigned i=0;i<status->row_count;++i) {
+        const char *name=status->rows[i].name;
+        if(name[0]=='E' && (name[1]=='1' || name[1]=='2') && name[2]==' ')
+            assert(OLED_GetUTF8Width(name)+OLED_GetUTF8Width(status->rows[i].value)+8<=152);
+    }
+    MotorControl_SetFocus(MOTOR_AXIS_1); settle();
+    assert(!strcmp(status_value("E1 Last"),"DMA TMO") && !strcmp(status_value("E1 Raw"),"123"));
+    assert(!strcmp(status_value("E1 Zero"),"FAR 3") && !strcmp(status_value("E1 ZPre"),"7000") && !strcmp(status_value("E1 ZPost"),"7002"));
+    assert(!strcmp(status_value("E1 ZTime"),"4"));
+    enc_diag.zero_age=4; settle(); assert(!strcmp(status_value("E1 Zero"),"GAP 3"));
+    enc_diag.zero_age=UINT16_MAX; settle(); assert(!strcmp(status_value("E1 ZPre"),"--"));
+    enc_diag.zero_count=0; settle();
+    assert(!strcmp(status_value("E1 Zero"),"--") && !strcmp(status_value("E1 ZPost"),"--"));
     MotorControl_SelectWork(MOTOR_WORK_SINGLE_M1); MotorControl_SetFocus(MOTOR_AXIS_1);
     /* The Run view is M2, but the first loss may have come from either axis.
      * Both sensors can be unhealthy by the time the slower UI observes it. */
@@ -807,8 +839,8 @@ int main(void) {
         second.status=MotorControl_EncoderLostText((MotorAxis)lost);
         ControlStub_SetSecondState(second); step(0,1);
         assert(!strcmp(status_value("Run Stop"),lost ? "ENCODER2 LOST" : "ENCODER1 LOST"));
-        assert(!strcmp(status_value("Stop Age"),lost ? "6" : "4"));
-        assert(!strcmp(status_value("Stop Err"),lost ? "222" : "111"));
+        assert(!strcmp(status_value("Stop Age"),lost ? "E2 6" : "E1 4"));
+        assert(!strcmp(status_value("Stop Err"),lost ? "E2 222" : "E1 111"));
         settle(); snapshot(lost ? "run-encoder2-stop" : "run-encoder1-group-stop");
         OLED_SetFont(ui_font_body); assert(OLED_GetUTF8Width(second.status)<=152);
         healthy=true; second.healthy=true; second.status="READY";

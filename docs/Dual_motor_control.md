@@ -1,6 +1,18 @@
-# UI-R36-SMOOTH：双电机有感控制与手动主从跟随
+# UI-R43-ZEROLOG：双电机有感控制与手动主从跟随
 
-R36 在 R35 高速跟随基础上，增加主机慢速命令整形、快慢通道连续融合，以及输入安静后的末端位置捕获；从机反馈保持带宽。适用于 4015 电流闭环，参数、验证及停止延迟的实机边界见 [4015_smooth_follow.md](4015_smooth_follow.md)。R35 高速基线见 [4015_fast_follow.md](4015_fast_follow.md)，R34 历史记录见 [4015_current_follow.md](4015_current_follow.md)。
+R43 在 Status 增加物理 E1/E2 的 Zero、ZPre、ZPost、ZTime，记录全零事件前后角度、次数和持续时间；区分零点附近、远离零点和前样本过期，不放行可疑全零帧。解释与验证见 [Encoder_zero_event_diagnostics.md](Encoder_zero_event_diagnostics.md)。
+
+2026-10-23 的 Follow 失联、M2 磁铁对准后改善及单机约 20 min 对照结果已记入 [实板观察记录](Encoder_follow_field_log_2026-10-23.md)。本次只更新文档，保留 R43 代码和保护，等待再次复现。
+
+R42 对当前模式所需的 ENC2 增加故障停机后每 250 ms 单帧重试；未启用的 ENC2 保留五次连续失败停止。恢复采样不会自动启动电机。APB1/APB2 恢复 170 MHz、编码器约 664 kHz，并保持 Flash、LCD、I²C、串口、CAN、USB 速率不变，见 [Encoder_reconnect_clock_restore.md](Encoder_reconnect_clock_restore.md)。
+
+R41 将编码器诊断明确标注为 E1/E2，并补上 M1 在途 DMA 超时检测和主循环恢复；恢复仅重建采样，不自动重启电机。ENC2 五次连续失败后停止探测的策略继续保留，见 [Encoder_axis_dma_recovery.md](Encoder_axis_dma_recovery.md)。
+
+R40 在 Status → Enc Last 区分全零 `ALL 0` 与全一 `ALL 1` 帧，明确当前健康、历史样本年龄和错误恢复规则；诊断边界和上板定位见 [Encoder_constant_frame_diagnostics.md](Encoder_constant_frame_diagnostics.md)。
+
+R39 将两路编码器时钟减半至约 332 kHz，继续使用硬件 SPI + DMA；共享外设时钟已补偿，配置和验证说明见 [Encoder_SPI_slow_clock.md](Encoder_SPI_slow_clock.md)。本轮未继续优化控制算法。
+
+R38 根据速度和经过滤波的加速度共同调度主轴输入整形，改善手转过程的快慢起伏；保留已在板上改善停止高频振动的 R37 近静止保持。适用于 4015 电流闭环，模型结果、角度滞后取舍及实机边界见 [4015_moving_smoothness.md](4015_moving_smoothness.md)。R37 停止修正见 [4015_follow_stability.md](4015_follow_stability.md)，R35 高速基线见 [4015_fast_follow.md](4015_fast_follow.md)。
 
 R33 修复启动注释吞掉 HAL_Init 导致上电进入 Error_Handler 的问题，增加启动阶段和错误入口返回地址，并对最终 ELF 的初始化调用顺序增加检查；详见 [Startup_error_handler.md](Startup_error_handler.md)。主从轨迹沿用 R32。
 
@@ -16,7 +28,7 @@ R29 将 Pos Speed 编辑范围改为 1～当前轴 Speed Limit，扩展存储到
 
 已对照用户重新生成的 `.ioc` 和初始化代码核对：SPI2_RX=DMA2 Channel1、SPI2_TX=DMA2 Channel2，均为 Normal、Byte/Byte、Memory Increment、High DMA priority；两个 DMA IRQ 和 SPI2 IRQ 的抢占优先级均为 1。DMA2 时钟、HAL 链接和三个 IRQ handler 齐全。
 
-TIM8 的 PC6/7/8、PB3/4/5 均已下拉；TIM1/TIM8 保留 PSC=0、ARR=8499、中心对齐 10 kHz、TIM1 TRGO Enable → TIM8 ITR0 Trigger、死区 17。ADC 注入四个 Rank、双 ADC 同时模式、规则组 VBUS + VREFINT 及其采样时间均保留正确。SPI1 /256、SPI3 /16 没有被覆盖。SPI2/SPI3 的 NSSP 仍由 main 的 USER CODE 清除，与软件 GPIO 片选配合。
+TIM8 的 PC6/7/8、PB3/4/5 均已下拉；TIM1/TIM8 保留 PSC=0、ARR=8499、中心对齐 10 kHz、TIM1 TRGO Enable → TIM8 ITR0 Trigger、死区 17。ADC 注入四个 Rank、双 ADC 同时模式、规则组 VBUS + VREFINT 及其采样时间均保留正确。当前 APB1/2=170 MHz；SPI1 /256、SPI2 默认 /8、编码器临时 /256、SPI3 /16，见 [Encoder_reconnect_clock_restore.md](Encoder_reconnect_clock_restore.md)。SPI2/SPI3 的 NSSP 仍由 main 的 USER CODE 清除，与软件 GPIO 片选配合。
 
 **本轮不需要再修改 CubeMX。** 后续重新生成仍应保留 USER CODE 和应用 CMake 配置。完整外设清单见 [Dual_motor_CubeMX_setup.md](Dual_motor_CubeMX_setup.md)。
 
@@ -73,7 +85,7 @@ Gear Ratio 以百分数编辑，100=1:1、-100=反向 1:1，允许 -1000～1000�
           （受从轴速度上限及原有速度给定斜坡约束）
 ```
 
-R36 的 4015 电流跟随在上述结构中分开命令平滑与真实位置修正，并在输入安静后平滑进入末端 PD 位置保持；公式细节及未验证的实机停止问题见 [4015_smooth_follow.md](4015_smooth_follow.md)。
+R38 的 4015 电流跟随在整个减速过程中使用同一对参考位置/速度。主轴活动度同时调度输入带宽与快慢通道，平缓手转继续平滑，快速往复由加速度维持快速通道。主轴安静且误差、速度足够小时，沿用 R37 的积分保持及负载补偿，详见 [4015_moving_smoothness.md](4015_moving_smoothness.md)。
 
 设置 Gear Ratio=100、Gear Offset=0，即同方向 1:1 跟随机械角度变化：主轴手转 90°，从轴目标也增加 90°；跨过一圈和反转均使用连续多圈位置。此前保存的自定义比例/偏置继续保留，首次试用请核对这两项。主轴在启用瞬间可以正在手转，从轴必须已静止。重复发送 Follow 不重新抓取零点；Stop 后再次 Follow 才建立新锚点。
 
@@ -93,7 +105,7 @@ M2 W 相电流由 `Iw=-(Iu+Iv)` 重建，并参与瞬时过流和过载判断；
 
 ## SPI2 与保存
 
-M2 启用时由 ADC 节拍调度 3 字节 SPI2 DMA，每帧临时切换 Mode 1、/256，完成后恢复 Flash 参数。DMA 完成回调不自触发下一帧。5 次实际连续失败后停止请求；有效帧清除失败连续计数，SPI2 忙不计为采样失败。
+M2 启用时由 ADC 节拍调度 3 字节 SPI2 DMA，每帧临时切换 Mode 1、/256，完成后恢复 Flash 参数。DMA 完成回调不自触发下一帧。5 次实际连续失败后停止 DMA；启用的 ENC2 等输出停止并释放 SPI2 后，每 250 ms 探测一帧，有效后恢复 DMA；未启用的 ENC2 继续停止探测。有效帧清除失败连续计数，SPI2 忙不计为采样失败，恢复不自动 Run/Follow。
 
 M2 运行/对齐及整个手动跟随期间独占实时采样，包括 M2 作为不通电主轴的情况；保存和日志排队，Status → Save Bus 显示 DEFERRED，停止后自动继续。空闲时 Flash 每次事务及整个存储服务步骤持有总线锁，编码器让出该时间窗口。数据更新与输出启停仍须通过控制接口，不能从其他中断直接访问 W25Q64。
 
@@ -145,6 +157,6 @@ JustFloat 保持 25 个 float + 4 字节帧尾，共 104 字节。Single M1 的�
 
 已通过 `tests/motor_host/run.py`、`tests/ui_host/run.py`、`tests/usb_host/run.py`。新增测试覆盖真实 M1 FOC + M2 控制/协同 + 协议代码中的两种手动主从方向、主轴不通电/不对齐、手转启动、跨圈/反转、启动锚点、速度前馈、比例/偏置、M2 主轴的 SPI2 预留、编码器失联联动停止、恢复不自启和显式再启动；并回归采样保护、MT6701/W25Q64、存储和 USB。UI 覆盖手动跟随页、OK 启停、方向键无运动副作用、KEY2 停止及版面宽度。外设、ST HSO 二进制计算及机械运动使用主机模型，不能代替上板带载验证。
 
-Debug：Flash **131020 B / 131072 B**，余 **52 B**；RAM **21608 B / 32768 B**。Release：Flash **130244 B**，余 **828 B**；RAM **21512 B**。主循环、外设初始化、USB 及 SPI/GPIO/UART HAL 共享 LTO 优化，采用单一 LTO 分区；中断分发采用 -Os，HSO 初始化/配置入口按大小优化，10 kHz HSO 算法保留原设置。Debug 仍含调试符号，但部分局部变量会被优化。Flash 已接近容量上限。
+Debug：Flash **130396 B / 131072 B**，余 **676 B**；RAM **21840 B / 32768 B**。Release：Flash **129612 B**，余 **1460 B**；RAM **21744 B**。主循环、外设初始化、USB 及 SPI/GPIO/UART HAL 共享 LTO 优化，采用单一 LTO 分区；中断分发采用 -Os，HSO 初始化/配置及使能入口按大小优化，10 kHz HSO 算法保留原设置。Debug 仍含调试符号，但部分局部变量会被优化。Flash 已接近容量上限。
 
 两种构建的 ELF/BIN/MAP 均已更新，未烧录或驱动实际电机。链接仍有原 RWX LOAD 段警告，LTO 另有串行编译提示；构建均成功，无 Flash 溢出。

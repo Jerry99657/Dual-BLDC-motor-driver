@@ -47,10 +47,19 @@ target_compile_options(USB_Device_Library PRIVATE $<$<CONFIG:Debug>:-Os>)
 target_compile_options(USB_Device_Library PRIVATE -flto)
 # Share peripheral helpers with the existing LTO encoder/Flash/serial code.
 # Keep HAL startup and the HSO fast path at their existing settings.
+# Cold FDCAN/I2C/clock/power setup and DMA cleanup also share link-time code;
+# this retains encoder recovery and diagnostics within the real 128KiB Flash.
 set_property(SOURCE Drivers/STM32G4xx_HAL_Driver/Src/stm32g4xx_hal_spi.c
     Drivers/STM32G4xx_HAL_Driver/Src/stm32g4xx_hal_gpio.c
     Drivers/STM32G4xx_HAL_Driver/Src/stm32g4xx_hal_uart.c
     Drivers/STM32G4xx_HAL_Driver/Src/stm32g4xx_hal_uart_ex.c
+    Drivers/STM32G4xx_HAL_Driver/Src/stm32g4xx_hal_fdcan.c
+    Drivers/STM32G4xx_HAL_Driver/Src/stm32g4xx_hal_i2c.c
+    Drivers/STM32G4xx_HAL_Driver/Src/stm32g4xx_hal_i2c_ex.c
+    Drivers/STM32G4xx_HAL_Driver/Src/stm32g4xx_hal_dma.c
+    Drivers/STM32G4xx_HAL_Driver/Src/stm32g4xx_hal_rcc.c
+    Drivers/STM32G4xx_HAL_Driver/Src/stm32g4xx_hal_rcc_ex.c
+    Drivers/STM32G4xx_HAL_Driver/Src/stm32g4xx_hal_pwr_ex.c
     TARGET_DIRECTORY STM32_Drivers APPEND PROPERTY COMPILE_OPTIONS -flto)
 
 # Link directories setup

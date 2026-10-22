@@ -31,7 +31,7 @@ const char *MotorSampling_GetAxisStatusText(MotorAxis axis)
 void MT6701_2_GetSnapshot(MT6701_2_Snapshot *s) { *s=enc2; }
 void MT6701_2_FastService(void) {}
 void MT6701_2_SetRealtime(bool e) { (void)e; }
-void MT6701_2_Retry(void) { enc2.healthy=1; }
+void MT6701_2_Retry(void) { enc2.healthy=1; enc2.stopped=0; }
 bool MT6701_2_Reserve(bool e) { if (e && flash_owned) return false; reserved=e; return true; }
 static MotorAxisSnapshot state(MotorAxis a) { MotorAxisSnapshot s; MotorControl_GetAxis(a,&s); return s; }
 static void ms(unsigned n,float delta2)
@@ -232,6 +232,7 @@ typedef struct {
     float peak,rise90,settle;
     float gain,phase,stop_delay,final_error,ripple_rms,hand_ripple,max_gap;
     float gap_at_stop,catch_delay,major_stop_delay;
+    float terminal_speed,terminal_q,terminal_dq;
     unsigned paused;
 } CurrentTrial;
 static CurrentTrial follow_current_trial(MotorAxis slave,float acceleration_gain,unsigned motion)
@@ -257,17 +258,20 @@ static CurrentTrial follow_current_trial(MotorAxis slave,float acceleration_gain
     float peak=0,rise90=-1,settle=0,ss=0,sc=0,rs=0,rc=0,stop_delay=0;
     float ripple2=0,hs=0,hc=0,max_gap=0;
     float gap_at_stop=0,catch_delay=0,major_stop_delay=0;
+    float terminal_v2=0,terminal_q2=0,terminal_dq2=0;
     unsigned paused=0,count=0;
     for(unsigned n=0;n<6000;++n) {
+        bool smooth_plant=motion>=15 && motion<=20;
         float q=state(slave).target_iq;
+        float load=motion==19 && n>=3000 ? 0.05f : 0;
         assert(isfinite(q) && fabsf(q)<=1.2001f);
         iq+=(q-iq)*0.25f;
-        if (fabsf(velocity)<0.003f && fabsf(iq)<0.12f) velocity=0;
+        if (!smooth_plant && fabsf(velocity)<0.003f && fabsf(iq)<0.12f) velocity=0;
         else {
-            float friction=copysignf(0.078f,fabsf(velocity)>0.003f ? velocity : iq);
-            float next=velocity+0.001f*(acceleration_gain*(iq-friction-
-                0.015f*sinf(22*positions[slave]))-2*velocity);
-            velocity=velocity*next<0 && fabsf(iq)<0.12f ? 0 : next;
+            float friction=copysignf(smooth_plant ? 0 : 0.078f,fabsf(velocity)>0.003f ? velocity : iq);
+            float next=velocity+0.001f*(acceleration_gain*(iq-load-friction-
+                (smooth_plant ? 0 : 0.015f)*sinf(22*positions[slave]))-2*velocity);
+            velocity=!smooth_plant && velocity*next<0 && fabsf(iq)<0.12f ? 0 : next;
         }
         float master_velocity=n<100 ? 0 : 12;
         if (motion==1 && n>=100) master_velocity+=6*sinf(2*PI*2*(n-100)*0.001f);
@@ -287,13 +291,30 @@ static CurrentTrial follow_current_trial(MotorAxis slave,float acceleration_gain
         /* A roughly one-revolution flick faster than the bounded follower:
          * expose a multi-radian backlog, separately from near-goal creep. */
         if (motion==12) master_velocity=n<100 ? 0 : 40*fmaxf(0,1-(float)(n-100)/300);
+        /* Stationary encoders with 40/80Hz, one-count angle noise. Cases 15..20
+         * omit static friction so it cannot mask active holding vibration.
+         * Case 19 applies a load; case 20 moves after three seconds of hold. */
+        if (motion>=13) master_velocity=0;
+        if (motion==20) master_velocity=n>=3000 && n<3100 ? 1 : 0;
+        /* Moderate hand turns used to select the fast path prematurely.
+         * Check both 6Hz speed variation/encoder noise and a deliberate 1Hz
+         * speed change; smoothing must not simply reject all hand motion. */
+        if (motion==21) master_velocity=n<100 ? 0 : 0.6f+0.15f*sinf(12*PI*(n-100)*0.001f);
+        if (motion==22) master_velocity=n<100 ? 0 : 1+0.2f*sinf(12*PI*(n-100)*0.001f);
+        if (motion==23 || motion==25) master_velocity=n<100 ? 0 : 0.6f;
+        if (motion==24) master_velocity=n<100 ? 0 : 1;
+        if (motion==26) master_velocity=n<100 ? 0 : 0.6f+0.15f*sinf(2*PI*(n-100)*0.001f);
         positions[slave]+=velocity*0.001f;
         positions[1U-slave]+=master_velocity*0.001f;
-        float noise=motion==11 ? quantum*sinf(74*PI*n*0.001f) : 0;
-        hand_position=roundf((positions[0]+(slave==MOTOR_AXIS_2 ? noise : 0))/quantum)*quantum;
+        float noise=motion==11 || motion==25 ? quantum*sinf(74*PI*n*0.001f) :
+            motion==24 ? quantum*sinf(160*PI*n*0.001f) :
+            motion==17 || motion==18 ? quantum*sinf(2*PI*(motion==18 ? 80 : 40)*n*0.001f) : 0;
+        float fn=motion>=13 && motion<=18 ?
+            quantum*sinf(2*PI*(motion==13 || motion==15 ? 40 : 80)*n*0.001f) : 0;
+        hand_position=roundf((positions[0]+(slave==MOTOR_AXIS_1 ? fn : noise))/quantum)*quantum;
         encoder_velocity=(hand_position-history1[n%4])/0.004f;
         history1[n%4]=hand_position;
-        enc2.angle=fmodf(0.25f+roundf((positions[1]+(slave==MOTOR_AXIS_1 ? noise : 0))/quantum)*quantum,2*PI);
+        enc2.angle=fmodf(0.25f+roundf((positions[1]+(slave==MOTOR_AXIS_2 ? fn : noise))/quantum)*quantum,2*PI);
         ++now; ++enc2.samples;
         /* A draft flag alone cannot change the live actuator or its preset. */
         if (n==3000 && motion==0) *flags^=APP_FLAG_CURRENT_LOOP;
@@ -329,10 +350,15 @@ static CurrentTrial follow_current_trial(MotorAxis slave,float acceleration_gain
             float phase=8*PI*(n-100)*0.001f;
             ss+=positions[slave]*sinf(phase); sc+=positions[slave]*cosf(phase);
             rs+=positions[1U-slave]*sinf(phase); rc+=positions[1U-slave]*cosf(phase);
-            float center=motion==10 ? 0.03f : 0.2f;
+            float center=motion==10 ? 0.03f : motion==22 || motion==24 ? 1 : motion>=21 ? 0.6f : 0.2f;
             ripple2+=(velocity-center)*(velocity-center);
-            hs+=velocity*sinf(12*PI*n*0.001f); hc+=velocity*cosf(12*PI*n*0.001f);
+            float band=(motion==26 ? 2 : 12)*PI*n*0.001f;
+            hs+=velocity*sinf(band); hc+=velocity*cosf(band);
             ++count;
+        }
+        if (n>=5000) {
+            terminal_v2+=velocity*velocity; terminal_q2+=q*q;
+            terminal_dq2+=(q-last_q)*(q-last_q)*1e6f;
         }
         last_q=q;
     }
@@ -342,11 +368,12 @@ static CurrentTrial follow_current_trial(MotorAxis slave,float acceleration_gain
         peak,rise90,settle,hypotf(ss,sc)/fmaxf(hypotf(rs,rc),1e-6f),
         remainderf((atan2f(sc,ss)-atan2f(rc,rs))*180/PI,360),stop_delay,
         positions[slave]-positions[1U-slave],sqrtf(ripple2/count),2*hypotf(hs,hc)/count,max_gap,
-        gap_at_stop,catch_delay,major_stop_delay,paused};
+        gap_at_stop,catch_delay,major_stop_delay,
+        sqrtf(terminal_v2/1000),sqrtf(terminal_q2/1000),sqrtf(terminal_dq2/1000),paused};
 }
 static void follow_current_models(bool verify)
 {
-    for(unsigned a=0;a<2;++a) for(unsigned k=0;k<3;++k) for(unsigned v=0;v<13;++v) {
+    for(unsigned a=0;a<2;++a) for(unsigned k=0;k<3;++k) for(unsigned v=0;v<27;++v) {
         const float gains[]={300,1500,3000};
         CurrentTrial t=follow_current_trial((MotorAxis)a,gains[k],v);
         if (verify) {
@@ -362,15 +389,39 @@ static void follow_current_models(bool verify)
                 assert(t.gain>0.8f && t.gain<1.05f && t.torque_slew<12);
                 if (k>0) assert(t.error_rms<0.03f);
             }
-            if (v==7) assert(t.speed_rms<0.085f && t.torque_slew<1.35f && t.min_speed>0.1f);
-            if (v==8) assert(t.ripple_rms<0.095f && t.hand_ripple<0.08f && t.min_speed>0);
+            /* R37 withdraws R36's moving P boost after real-board vibration.
+             * Preserve the R35 moving ripple envelope, and independently
+             * require much quieter encoder-noise holding below. Step/reverse
+             * and 4Hz transient bounds above are NOT relaxed. */
+            if (v==7) assert(t.speed_rms<0.095f && t.torque_slew<1.35f && t.min_speed>0.08f);
+            if (v==8) assert(t.ripple_rms<0.11f && t.hand_ripple<0.065f && t.min_speed>0);
             if (v==9) assert(t.stop_delay<0.05f && fabsf(t.final_error)<0.02f);
             if (v==10) assert(fabsf(t.final_error)<0.035f && t.error_rms<0.03f);
-            if (v==11) assert(t.speed_rms<0.085f && t.torque_slew<1.45f);
+            if (v==11) assert(t.speed_rms<0.095f && t.torque_slew<1.45f);
             /* Catch the original absolute goal without a turn slip. Arrival
              * within 0.1rad is NOT a claim of final velocity settling: the
              * latter is reported separately, including friction breakaway. */
             if (v==12) assert(t.max_gap<2*PI && t.catch_delay<1 && fabsf(t.final_error)<0.03f);
+            if (v>=13 && v<=18) {
+                assert(t.terminal_q<0.001f && t.terminal_dq<0.6f && t.terminal_speed<0.01f);
+                assert(fabsf(t.final_error)<0.006f);
+            }
+            if (v==19) assert(fabsf(t.terminal_q-0.05f)<0.002f &&
+                t.terminal_speed<0.03f && fabsf(t.final_error)<0.006f);
+            if (v==20) assert(t.terminal_speed<0.03f && fabsf(t.final_error)<0.006f);
+            if (v==21) assert(t.hand_ripple<0.125f && t.torque_slew<1.1f &&
+                t.error_rms<0.05f && t.ripple_rms<0.2f && t.min_speed>0.2f);
+            if (v==22) assert(t.hand_ripple<0.17f && t.torque_slew<1.1f &&
+                t.error_rms<0.06f && t.min_speed>0.5f);
+            if (v==23 || v==25) assert(t.torque_slew<1.2f && t.speed_rms<0.2f &&
+                t.error_rms<0.05f && t.min_speed>0.25f);
+            if (v==24) assert(t.torque_slew<1.2f && t.speed_rms<0.2f &&
+                t.error_rms<0.06f && t.min_speed>0.65f);
+            /* The 1Hz motion is deliberate: retain its amplitude instead of
+             * obtaining smoothness by suppressing the whole input. The
+             * low-gain plant retains its pre-existing resonant amplification. */
+            if (v==26) assert(t.hand_ripple>0.13f && t.hand_ripple<0.23f &&
+                t.torque_slew<1.1f && t.error_rms<0.05f && t.min_speed>0.15f);
         }
         printf("CURRENT MODEL ONLY: M%u gain=%.0f motion=%u posRMS=%.4f speedRMS=%.4f min=%.3f dIqRMS=%.3f paused=%u\n",
             a+1,gains[k],v,t.error_rms,t.speed_rms,t.min_speed,t.torque_slew,t.paused);
@@ -384,6 +435,10 @@ static void follow_current_models(bool verify)
             a+1,gains[k],v,t.ripple_rms,t.hand_ripple,t.final_error);
         if (v==12) printf("CURRENT FLICK MODEL ONLY: M%u plant=%.0f maxGap=%.3frad gapAtStop=%.3frad catchTo0.1rad=%.3fs lastAbove0.2rad_s=%.3fs lastAbove0.02rad_s=%.3fs finalError=%.4frad\n",
             a+1,gains[k],t.max_gap,t.gap_at_stop,t.catch_delay,t.major_stop_delay,t.stop_delay,t.final_error);
+        if (v>=13 && v<=20) printf("CURRENT HOLD MODEL ONLY: M%u plant=%.0f motion=%u terminalVelocity=%.5f Iq=%.5f dIq=%.3f finalError=%.5f\n",
+            a+1,gains[k],v,t.terminal_speed,t.terminal_q,t.terminal_dq,t.final_error);
+        if (v>=21) printf("CURRENT MOVING MODEL ONLY: M%u plant=%.0f motion=%u posRMS=%.4f speedRipple=%.4f inputBandAmplitude=%.4f dIq=%.3f minV=%.3f\n",
+            a+1,gains[k],v,t.error_rms,t.ripple_rms,t.hand_ripple,t.torque_slew,t.min_speed);
     }
 }
 int main(int argc,char **argv)
@@ -436,6 +491,19 @@ int main(int argc,char **argv)
     command("HSO:Off"); assert(output_requested && output2); /* No target reset. */
     healthy=0; MotorControl_Fast(); assert(!output_requested && !output2 && !MotorControl_IsGroupActive());
     healthy=1; ms(20,0); assert(!output_requested && !output2);
+
+    /* Missing ENC2 at startup cannot auto-energize when its slow probe recovers. */
+    boot(MOTOR_WORK_SINGLE_M1);
+    enc2.healthy=0; enc2.stopped=1;
+    assert(MotorControl_SelectWork(MOTOR_WORK_INDEPENDENT));
+    MotorControl_Fast();
+    enc2.healthy=1; enc2.stopped=0; ms(20,0);
+    MotorControl_Service(now); now+=3001; MotorControl_Service(now);
+    assert(!output_requested && !output2 && !state(MOTOR_AXIS_2).aligned);
+    assert(MotorControl_RequestAlign(MOTOR_AXIS_2));
+    MotorControl_Service(now); assert(output2 && state(MOTOR_AXIS_2).aligning);
+    now+=3000; MotorControl_Service(now); ms(8,0);
+    assert(!output2 && state(MOTOR_AXIS_2).aligned);
 
     boot(MOTOR_WORK_SYNC_SPEED);
     assert(MotorControl_SetGear(1000,0));

@@ -53,7 +53,17 @@ int main(void) {
     StHsoConfig c; StHso_GetConfig(&c);
     assert(c.voltage_pole_rps==25000 && fabsf(c.sample_delay_cycles-0.019f)<1e-6f);
     c.flux_wb=NAN; assert(!StHso_SetConfig(&c));
-    c.flux_wb=0.003f; assert(StHso_SetConfig(&c));
+    c.flux_wb=0.003f;
+    /* Size-optimized ordered bounds must still reject every non-finite
+     * configuration field; invalid requests cannot publish new parameters. */
+    assert(!StHso_SetConfig(NULL));
+    StHsoConfig bad=c;
+    float *fields[]={&bad.rs_ohm,&bad.ls_h,&bad.flux_wb,&bad.voltage_pole_rps,&bad.sample_delay_cycles};
+    const float nonfinite[]={NAN,INFINITY,-INFINITY};
+    for(unsigned i=0;i<5;++i) for(unsigned j=0;j<3;++j) {
+        bad=c; *fields[i]=nonfinite[j]; assert(!StHso_SetConfig(&bad));
+    }
+    assert(StHso_SetConfig(&c));
     step(true,true); assert(runs==1 && configurations==1);
     assert(params.Flux_Wb==0.003f && params.FullScaleVoltage_V==72.6f);
     assert(iparams.cycleFreq_Hz==10000 && iparams.fullScaleCurrent_A==6.6f);

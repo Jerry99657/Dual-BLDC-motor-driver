@@ -8,15 +8,15 @@ volatile float Angle = 0.0f;
 
 static volatile uint8_t mt6701_continuous = 0U;
 static volatile uint8_t mt6701_transfer_active = 0U;
+enum { MT_IDLE, MT_DMA, MT_PUBLISH, MT_RECOVER };
+static volatile uint8_t mt6701_transfer_age;
+static volatile uint32_t mt6701_transfer_at;
 static volatile uint8_t mt6701_sample_valid = 0U;
 static volatile uint8_t mt6701_status = 0U;
 static volatile uint16_t mt6701_sample_age_cycles = UINT16_MAX;
 static volatile uint32_t mt6701_sample_counter = 0U;
-static volatile uint32_t mt6701_error_counter = 0U;
 static volatile uint32_t mt6701_sample_at = 0U;
-static volatile uint32_t crc_errors, field_errors, track_errors, spi_errors, frame_errors;
-static volatile uint16_t max_sample_age_cycles;
-static volatile MT6701Error last_error;
+static MT6701Diagnostics first_diag;
 
 /* 10 kHz 调度下允许连续 3 个控制周期没有新样本；超过后有感 FOC 撤掉输出。 */
 #define MT6701_MAX_SAMPLE_AGE_CYCLES 3U
@@ -42,24 +42,60 @@ static MT6701Error MT6701_Decode(const uint8_t data[3], uint16_t *angle, uint8_t
     uint32_t frame = ((uint32_t)data[0] << 16) | ((uint32_t)data[1] << 8) | data[2];
     *angle = (uint16_t)(frame >> 10);
     *status = (uint8_t)((frame >> 6) & 0x0FU);
-    if (frame == 0U || frame == 0xFFFFFFU) return MT6701_ERROR_FRAME;
+    /* Keep the existing rejection policy, but distinguish stuck-level data.
+     * Zero is CRC-valid for angle/status zero; this diagnostic alone cannot
+     * distinguish that real position from a disconnected/held-low MISO. */
+    if (frame == 0U) return MT6701_ERROR_FRAME;
+    if (frame == 0xFFFFFFU) return MT6701_ERROR_ONES;
     if ((frame & 0x3FU) != MT6701_CalculateCrc6(frame >> 6)) return MT6701_ERROR_CRC;
     if (*status & 0x08U) return MT6701_ERROR_TRACK;
     if (*status & 0x03U) return MT6701_ERROR_FIELD;
     return MT6701_ERROR_NONE;
 }
 
+static void MT6701_ObserveZero(MT6701Diagnostics *diag, MT6701Error error,
+                               uint16_t raw, uint16_t previous, uint16_t age, uint32_t sampled_at)
+{
+    if (error==MT6701_ERROR_FRAME) {
+        if (!diag->zero_count || diag->zero_after!=UINT16_MAX) {
+            diag->zero_before=previous;
+            diag->zero_after=UINT16_MAX;
+            diag->zero_started_at=HAL_GetTick();
+            /* Optional polling or a stopped scheduler can leave cycle age
+             * frozen despite an expired wall-clock sample. Classify as GAP. */
+            diag->zero_age=age<=MT6701_MAX_SAMPLE_AGE_CYCLES && HAL_GetTick()-sampled_at>5U ?
+                MT6701_MAX_SAMPLE_AGE_CYCLES+1U : age;
+            diag->zero_count=0U;
+        }
+        if (diag->zero_count<UINT16_MAX) ++diag->zero_count;
+    } else if (error==MT6701_ERROR_NONE && diag->zero_count && diag->zero_after==UINT16_MAX) {
+        diag->zero_ended_at=HAL_GetTick();
+        diag->zero_after=raw;
+    }
+}
+
 static void MT6701_RecordError(MT6701Error error)
 {
-    ++mt6701_error_counter;
-    last_error = error;
+    ++first_diag.errors;
+    first_diag.last_error = error;
     switch (error) {
-    case MT6701_ERROR_CRC: ++crc_errors; break;
-    case MT6701_ERROR_FIELD: ++field_errors; break;
-    case MT6701_ERROR_TRACK: ++track_errors; break;
-    case MT6701_ERROR_SPI: ++spi_errors; break;
-    default: ++frame_errors; break;
+    case MT6701_ERROR_CRC: ++first_diag.crc_errors; break;
+    case MT6701_ERROR_FIELD: ++first_diag.field_errors; break;
+    case MT6701_ERROR_TRACK: ++first_diag.track_errors; break;
+    case MT6701_ERROR_SPI:
+    case MT6701_ERROR_TIMEOUT: ++first_diag.spi_errors; break;
+    default: ++first_diag.frame_errors; break;
     }
+}
+
+static void MT6701_Fault(MT6701Error error)
+{
+    if (!mt6701_continuous || mt6701_transfer_active==MT_RECOVER) return;
+    /* Hold ownership through main-loop cleanup. DMA callbacks and the ADC
+     * scheduler must not publish/reuse this buffer during abort/reset. */
+    mt6701_transfer_active=MT_RECOVER;
+    mt6701_sample_valid=0U;
+    MT6701_RecordError(error);
 }
 
 static uint8_t MT6701_RequestSample(void)
@@ -68,14 +104,14 @@ static uint8_t MT6701_RequestSample(void)
         return 0U;
     }
 
-    mt6701_transfer_active = 1U;
+    mt6701_transfer_active = MT_DMA;
+    mt6701_transfer_age=0U;
+    mt6701_transfer_at=HAL_GetTick();
     CS_Enable;
     HAL_StatusTypeDef status = HAL_SPI_TransmitReceive_DMA(
         &hspi1, MT6701_Data, MT6701_Data, 3);
     if (status != HAL_OK) {
-        CS_Disable;
-        mt6701_transfer_active = 0U;
-        MT6701_RecordError(MT6701_ERROR_SPI);
+        MT6701_Fault(MT6701_ERROR_SPI);
         return 0U;
     }
     return 1U;
@@ -88,6 +124,8 @@ void HAL_SPI_TxRxCpltCallback(SPI_HandleTypeDef *hspi)
 {
     if (hspi->Instance == SPI2) { second_complete(false); return; }
     if (hspi->Instance == SPI1) {
+        if (!mt6701_continuous || mt6701_transfer_active!=MT_DMA) return;
+        mt6701_transfer_active=MT_PUBLISH;
         CS_Disable;
         /* Keep the buffer owned until decoding/publishing has finished:
          * the higher-priority ADC ISR may request the next DMA sample. */
@@ -96,6 +134,8 @@ void HAL_SPI_TxRxCpltCallback(SPI_HandleTypeDef *hspi)
         uint8_t status;
         MT6701Error error = MT6701_Decode(MT6701_Data, &raw_angle, &status);
         mt6701_status = status;
+        MT6701_ObserveZero(&first_diag,error,raw_angle,(uint16_t)Angle_Raw,
+                           mt6701_sample_age_cycles,mt6701_sample_at);
 
         /* Mg[1:0] 非零表示磁场过强/过弱，Mg[3] 表示失跟踪；
          * Mg[2] 是按压状态，不影响转子角度。全 0/全 1 帧用于识别 MISO 卡死。 */
@@ -119,9 +159,7 @@ void HAL_SPI_TxRxCpltCallback(SPI_HandleTypeDef *hspi)
 void HAL_SPI_ErrorCallback(SPI_HandleTypeDef *hspi)
 {
     if (hspi->Instance == SPI1) {
-        CS_Disable;
-        mt6701_transfer_active = 0U;
-        MT6701_RecordError(MT6701_ERROR_SPI);
+        if (mt6701_transfer_active==MT_DMA) MT6701_Fault(MT6701_ERROR_SPI);
     } else if (hspi->Instance == SPI2) {
         second_complete(true);
     } else if (hspi->Instance == SPI3) {
@@ -149,6 +187,26 @@ void MT6701_StopContinuous(void)
     mt6701_sample_age_cycles = UINT16_MAX;
 }
 
+void MT6701_MainService(void)
+{
+    /* Wall-clock fallback also covers a stopped ADC scheduler. The short
+     * critical section prevents a completion/new frame racing this decision. */
+    uint32_t mask=__get_PRIMASK(); __disable_irq();
+    if (mt6701_transfer_active==MT_DMA && HAL_GetTick()-mt6701_transfer_at>1U)
+        MT6701_Fault(MT6701_ERROR_TIMEOUT);
+    __set_PRIMASK(mask);
+    if (mt6701_transfer_active!=MT_RECOVER) return;
+    /* All potentially blocking work belongs to main; interrupts stay enabled.
+     * Abort can fail with BSY stuck. Quiesce both DMA channels, then reset only
+     * SPI1 and reapply its existing Init settings before releasing ownership. */
+    (void)HAL_SPI_Abort(&hspi1);
+    (void)HAL_SPI_DMAStop(&hspi1);
+    CS_Disable;
+    __HAL_RCC_SPI1_FORCE_RESET();
+    __HAL_RCC_SPI1_RELEASE_RESET();
+    if (HAL_SPI_Init(&hspi1)==HAL_OK) mt6701_transfer_active=MT_IDLE;
+}
+
 uint8_t MT6701_IsContinuous(void)
 {
     return mt6701_continuous;
@@ -158,18 +216,20 @@ void MT6701_Service(void)
 {
     if (!mt6701_continuous) return;
 
-    if (mt6701_sample_valid && mt6701_sample_age_cycles < UINT16_MAX) {
+    if (mt6701_sample_age_cycles < UINT16_MAX) {
         mt6701_sample_age_cycles++;
-        if (mt6701_sample_age_cycles > max_sample_age_cycles)
-            max_sample_age_cycles = mt6701_sample_age_cycles;
+        if (mt6701_sample_age_cycles > first_diag.max_age_cycles)
+            first_diag.max_age_cycles = mt6701_sample_age_cycles;
     }
+    if (mt6701_transfer_active==MT_DMA && ++mt6701_transfer_age>3U)
+        MT6701_Fault(MT6701_ERROR_TIMEOUT);
     MT6701_RequestSample();
 }
 
 uint8_t MT6701_IsHealthy(void)
 {
     uint32_t sampled_at = mt6701_sample_at;
-    return (mt6701_continuous && mt6701_sample_valid &&
+    return (mt6701_continuous && mt6701_sample_valid && mt6701_transfer_active!=MT_RECOVER &&
             HAL_GetTick() - sampled_at <= 5U &&
             mt6701_sample_age_cycles <= MT6701_MAX_SAMPLE_AGE_CYCLES) ? 1U : 0U;
 }
@@ -191,7 +251,7 @@ uint32_t MT6701_GetSampleCounter(void)
 
 uint32_t MT6701_GetErrorCounter(void)
 {
-    return mt6701_error_counter;
+    return first_diag.errors;
 }
 
 uint16_t MT6701_GetSampleAgeCycles(void)
@@ -204,35 +264,35 @@ void MT6701_GetDiagnostics(MT6701Diagnostics *out)
     if (out == NULL) return;
     uint32_t mask = __get_PRIMASK();
     __disable_irq();
-    *out = (MT6701Diagnostics){
-        .errors=mt6701_error_counter, .crc_errors=crc_errors,
-        .field_errors=field_errors, .track_errors=track_errors,
-        .spi_errors=spi_errors, .frame_errors=frame_errors,
-        .age_cycles=mt6701_sample_age_cycles, .max_age_cycles=max_sample_age_cycles,
-        .status=mt6701_status, .last_error=last_error
-    };
+    *out = first_diag;
+    out->age_cycles=mt6701_sample_age_cycles;
+    out->status=mt6701_status;
     __set_PRIMASK(mask);
 }
 
 const char *MT6701_ErrorText(MT6701Error error)
 {
     switch (error) {
-    case MT6701_ERROR_FRAME: return "NO FRAME";
+    case MT6701_ERROR_FRAME: return "ALL 0";
+    case MT6701_ERROR_ONES: return "ALL 1";
     case MT6701_ERROR_CRC: return "CRC";
     case MT6701_ERROR_FIELD: return "FIELD";
     case MT6701_ERROR_TRACK: return "TRACK";
     case MT6701_ERROR_SPI: return "SPI";
+    case MT6701_ERROR_TIMEOUT: return "DMA TMO";
     default: return "--";
     }
 }
 
 static volatile MT6701_2_Snapshot second;
 static MT6701Diagnostics second_diag;
-static uint32_t second_poll_at, second_sample_at;
-/* Optional M2 encoder: a missing/broken device must not monopolize SPI2.
- * Count actual failed transactions, not bus contention; reset only on a valid
- * sample. Once stopped, leave SPI2 untouched until the next MCU reset. */
+static volatile uint32_t second_poll_at;
+static uint32_t second_sample_at;
+/* Optional ENC2 stops after five actual failures. A required ENC2 may probe
+ * slowly after output releases its reservation; only valid data clears the
+ * failure streak. Recovery never arms output or reserves SPI2 for motion. */
 #define MT6701_2_MAX_CONSECUTIVE_FAILURES 5U
+#define MT6701_2_RETRY_MS 250U
 static volatile uint8_t second_failures;
 static volatile bool second_realtime, second_active, second_reserved, second_flash;
 static volatile bool second_recover;
@@ -305,6 +365,7 @@ static void MT6701_2_RecordFailure(MT6701Error error)
     else if (error==MT6701_ERROR_SPI) ++second_diag.spi_errors;
     else ++second_diag.frame_errors;
     if (second_failures < MT6701_2_MAX_CONSECUTIVE_FAILURES) ++second_failures;
+    if (second_failures>=MT6701_2_MAX_CONSECUTIVE_FAILURES) second_poll_at=HAL_GetTick();
 }
 
 static void second_publish(const uint8_t rx[3])
@@ -313,6 +374,7 @@ static void second_publish(const uint8_t rx[3])
     uint8_t status;
     MT6701Error error=MT6701_Decode(rx,&raw,&status);
     second.status=status;
+    MT6701_ObserveZero(&second_diag,error,raw,second.raw_angle,second_age,second_sample_at);
     if (error!=MT6701_ERROR_NONE) { MT6701_2_RecordFailure(error); return; }
     second_failures=0U;
     second.raw_angle=raw;
@@ -323,7 +385,7 @@ static void second_publish(const uint8_t rx[3])
 }
 static void second_complete(bool error)
 {
-    if (!second_active || second_recover) return;
+    if (!second_active || !second_dma || second_recover) return;
     if (error) {
         MT6701_2_RecordFailure(MT6701_ERROR_SPI);
         second_recover=true; /* HAL/DMA cleanup belongs to main, never ADC. */
@@ -336,10 +398,12 @@ static void second_complete(bool error)
 void MT6701_2_FastService(void)
 {
     if (!second_realtime) return;
-    if (second.samples && second_age<UINT16_MAX) ++second_age;
-    if (second.samples && second_age>second_diag.max_age_cycles) second_diag.max_age_cycles=second_age;
+    if (second_age<UINT16_MAX) {
+        ++second_age;
+        if (second_age>second_diag.max_age_cycles) second_diag.max_age_cycles=second_age;
+    }
     if (second_active) {
-        if (!second_recover && ++second_transfer_age>3U) {
+        if (second_dma && !second_recover && ++second_transfer_age>3U) {
             MT6701_2_RecordFailure(MT6701_ERROR_SPI);
             second_recover=true;
         }
@@ -367,15 +431,19 @@ void MT6701_2_Service(uint32_t now_ms)
         second_recover=false; second_active=false;
         __set_PRIMASK(mask);
     }
-    if (second_realtime || second_active || second_flash ||
-        second_failures>=MT6701_2_MAX_CONSECUTIVE_FAILURES) return;
-    if (now_ms-second_poll_at<1U) return;
-    second_poll_at=now_ms;
+    if (second_active || second_flash || second_reserved) return;
+    bool stopped=second_failures>=MT6701_2_MAX_CONSECUTIVE_FAILURES;
+    if (second_realtime ? !stopped : stopped) return;
+    if (stopped) now_ms=HAL_GetTick(); /* A fault IRQ may postdate main's tick. */
+    /* One probe per interval, not a new five-frame burst. Keep DMA halted
+     * until the probe passes all frame/CRC/magnetic checks. */
+    if (now_ms-second_poll_at<(second_realtime ? MT6701_2_RETRY_MS : 1U)) return;
     uint32_t mask=__get_PRIMASK(); __disable_irq();
     if (hspi2.State!=HAL_SPI_STATE_READY || (SPI2->SR & SPI_SR_BSY) ||
         HAL_GPIO_ReadPin(W25_NSS_GPIO_Port,W25_NSS_Pin)!=GPIO_PIN_SET) {
         __set_PRIMASK(mask); return;
     }
+    second_poll_at=now_ms;
     second_active=true; second_dma=false;
     second_prepare();
     __set_PRIMASK(mask);

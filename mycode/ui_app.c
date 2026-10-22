@@ -90,6 +90,11 @@ static char s_txt_run_stop[24] = "--";
 static char s_txt_stop_age[16] = "--", s_txt_stop_errors[16] = "--";
 static char s_txt_enc_crc[16], s_txt_enc_field[16], s_txt_enc_track[16];
 static char s_txt_enc_spi[16], s_txt_enc_frame[16], s_txt_enc_age[24], s_txt_enc_last[16];
+static char s_txt_enc_zero[16], s_txt_enc_zpre[16], s_txt_enc_zpost[16], s_txt_enc_ztime[16];
+/* Stable application-owned labels; update only their axis digit. */
+static char s_enc_labels[][9]={"E1 State","E1 CRC","E1 Field","E1 Track",
+    "E1 SPI","E1 Frame","E1 Age","E1 Last","E1 Raw","E1 Err",
+    "E1 Zero","E1 ZPre","E1 ZPost","E1 ZTime"};
 static char s_txt_current_adc[3][24];
 static char s_txt_current_trip[24];
 static char s_txt_adc_revision[16];
@@ -234,6 +239,13 @@ static void fmt_fixed(char *buf, size_t len, int32_t v, int scale)
     }
 }
 
+/* Share the repeated 16-byte diagnostic-counter formatting in the 128KiB
+ * image. A bounded call avoids expanding the same snprintf setup per row. */
+__attribute__((noinline)) static void fmt_counter(char *buf,uint32_t count)
+{
+    snprintf(buf,16U,"%lu",(unsigned long)count);
+}
+
 static const char *mode_name(JerryFOC_ControlMode mode)
 {
     switch (mode) {
@@ -263,8 +275,8 @@ static void refresh_texts(void)
     snprintf(s_txt_output, sizeof(s_txt_output), "%s",
              !MotorSampling_IsAxisOutputRequested(s_view_axis) ? "COAST" :
              MotorSampling_IsAxisOutputEnabled(s_view_axis) ? "PWM" : "OFF");
-    snprintf(s_txt_repeat, sizeof(s_txt_repeat), "%lu", (unsigned long)s_input_repeats);
-    snprintf(s_txt_display_errors, sizeof(s_txt_display_errors), "%lu", (unsigned long)s_display_errors);
+    fmt_counter(s_txt_repeat,s_input_repeats);
+    fmt_counter(s_txt_display_errors,s_display_errors);
 
     snprintf(s_txt_mode, sizeof(s_txt_mode), "%s", mode_name(state.mode));
 
@@ -305,7 +317,7 @@ static void refresh_texts(void)
     MT6701_2_GetSnapshot(&encoder2);
     snprintf(s_txt_enc2, sizeof(s_txt_enc2), "%s %u",
              encoder2.healthy ? "OK" : encoder2.stopped ? "OFF" : "ERROR", (unsigned)encoder2.raw_angle);
-    snprintf(s_txt_enc2_err, sizeof(s_txt_enc2_err), "%lu", (unsigned long)encoder2.errors);
+    fmt_counter(s_txt_enc2_err,encoder2.errors);
     snprintf(s_txt_drive, sizeof(s_txt_drive), "%s",
              drive_status_text());
     StHsoSnapshot hso;
@@ -342,17 +354,31 @@ static void refresh_texts(void)
     fmt_fixed(v, sizeof(v), to_x100(state.position), 100);
     snprintf(s_txt_mech, sizeof(s_txt_mech), "%s rad", v);
 
-    snprintf(s_txt_err, sizeof(s_txt_err), "%lu",
-             (unsigned long)ui_encoder_errors());
+    fmt_counter(s_txt_err,ui_encoder_errors());
     MT6701Diagnostics enc;
     ui_encoder_diag(&enc);
-    snprintf(s_txt_enc_crc, sizeof(s_txt_enc_crc), "%lu", (unsigned long)enc.crc_errors);
-    snprintf(s_txt_enc_field, sizeof(s_txt_enc_field), "%lu", (unsigned long)enc.field_errors);
-    snprintf(s_txt_enc_track, sizeof(s_txt_enc_track), "%lu", (unsigned long)enc.track_errors);
-    snprintf(s_txt_enc_spi, sizeof(s_txt_enc_spi), "%lu", (unsigned long)enc.spi_errors);
-    snprintf(s_txt_enc_frame, sizeof(s_txt_enc_frame), "%lu", (unsigned long)enc.frame_errors);
+    for (unsigned i=0;i<sizeof(s_enc_labels)/sizeof(s_enc_labels[0]);++i)
+        s_enc_labels[i][1]=(char)('1'+s_view_axis);
+    fmt_counter(s_txt_enc_crc,enc.crc_errors);
+    fmt_counter(s_txt_enc_field,enc.field_errors);
+    fmt_counter(s_txt_enc_track,enc.track_errors);
+    fmt_counter(s_txt_enc_spi,enc.spi_errors);
+    fmt_counter(s_txt_enc_frame,enc.frame_errors);
     snprintf(s_txt_enc_age, sizeof(s_txt_enc_age), "%u / %u", enc.age_cycles, enc.max_age_cycles);
     snprintf(s_txt_enc_last, sizeof(s_txt_enc_last), "%s", MT6701_ErrorText(enc.last_error));
+    const char *zero=enc.zero_age>3U ? "GAP" :
+        (enc.zero_before<=128U || enc.zero_before>=16384U-128U) ? "NEAR" : "FAR";
+    if (enc.zero_count) {
+        snprintf(s_txt_enc_zero,sizeof(s_txt_enc_zero),"%s %u",zero,enc.zero_count);
+        if (enc.zero_age!=UINT16_MAX) fmt_counter(s_txt_enc_zpre,enc.zero_before);
+        else strcpy(s_txt_enc_zpre,"--");
+        if (enc.zero_after!=UINT16_MAX) fmt_counter(s_txt_enc_zpost,enc.zero_after);
+        else strcpy(s_txt_enc_zpost,"--");
+        fmt_counter(s_txt_enc_ztime,(enc.zero_after==UINT16_MAX ? HAL_GetTick() : enc.zero_ended_at)-enc.zero_started_at);
+    } else {
+        strcpy(s_txt_enc_zero,"--"); strcpy(s_txt_enc_zpre,"--"); strcpy(s_txt_enc_zpost,"--");
+        strcpy(s_txt_enc_ztime,"--");
+    }
 
     MotorSamplingDiagnostics adc;
     MotorSampling_GetAxisDiagnostics(s_view_axis,&adc);
@@ -366,8 +392,8 @@ static void refresh_texts(void)
              adc.reference_fresh ? "OK" : (adc.reference_updates ? "STALE" : "WAIT"));
     snprintf(s_txt_ref_raw, sizeof(s_txt_ref_raw), "%u / %u",
              (unsigned)adc.reference_raw, (unsigned)adc.reference_cal);
-    snprintf(s_txt_ref_count, sizeof(s_txt_ref_count), "%lu", (unsigned long)adc.reference_updates);
-    snprintf(s_txt_ref_errors, sizeof(s_txt_ref_errors), "%lu", (unsigned long)adc.reference_errors);
+    fmt_counter(s_txt_ref_count,adc.reference_updates);
+    fmt_counter(s_txt_ref_errors,adc.reference_errors);
     snprintf(s_txt_adc_revision, sizeof(s_txt_adc_revision), "0x%04X", (unsigned)adc.silicon_revision);
     for (unsigned i = 0U; i < 3U; ++i) {
         if (s_view_axis==MOTOR_AXIS_2 && i==2U) { strcpy(s_txt_current_adc[i],"derived"); continue; }
@@ -391,8 +417,8 @@ static void refresh_texts(void)
         snprintf(s_txt_bus, sizeof(s_txt_bus), "NO DATA");
     }
     snprintf(s_txt_bus_raw, sizeof(s_txt_bus_raw), "%u", (unsigned)adc.bus_raw);
-    snprintf(s_txt_bus_count, sizeof(s_txt_bus_count), "%lu", (unsigned long)adc.bus_samples);
-    snprintf(s_txt_frame_count, sizeof(s_txt_frame_count), "%lu", (unsigned long)adc.frame_samples);
+    fmt_counter(s_txt_bus_count,adc.bus_samples);
+    fmt_counter(s_txt_frame_count,adc.frame_samples);
     snprintf(s_txt_adc1_error, sizeof(s_txt_adc1_error), "0x%lX", (unsigned long)adc.adc1_error);
     snprintf(s_txt_adc2_error, sizeof(s_txt_adc2_error), "0x%lX", (unsigned long)adc.adc2_error);
 }
@@ -482,19 +508,23 @@ static const KK_UI_InfoRow status_rows[] = {
     {"Id",      s_txt_id},
     {"Phase A", s_txt_ia},
     {"Phase B", s_txt_ib},
-    {"Encoder", s_txt_enc},
-    {"Enc CRC", s_txt_enc_crc},
-    {"Enc Field",s_txt_enc_field},
-    {"Enc Track",s_txt_enc_track},
-    {"Enc SPI", s_txt_enc_spi},
-    {"Enc Frame",s_txt_enc_frame},
-    {"Enc Age", s_txt_enc_age},
-    {"Enc Last",s_txt_enc_last},
+    {s_enc_labels[0], s_txt_enc},
+    {s_enc_labels[1], s_txt_enc_crc},
+    {s_enc_labels[2], s_txt_enc_field},
+    {s_enc_labels[3], s_txt_enc_track},
+    {s_enc_labels[4], s_txt_enc_spi},
+    {s_enc_labels[5], s_txt_enc_frame},
+    {s_enc_labels[6], s_txt_enc_age},
+    {s_enc_labels[7], s_txt_enc_last},
+    {s_enc_labels[10], s_txt_enc_zero},
+    {s_enc_labels[11], s_txt_enc_zpre},
+    {s_enc_labels[12], s_txt_enc_zpost},
+    {s_enc_labels[13], s_txt_enc_ztime},
     {"Aligned", s_txt_align},
-    {"Raw",     s_txt_raw},
+    {s_enc_labels[8], s_txt_raw},
     {"Elec",    s_txt_elec},
     {"Mech",    s_txt_mech},
-    {"Errors",  s_txt_err},
+    {s_enc_labels[9], s_txt_err},
     {"BusRaw",  s_txt_bus_raw},
     {"BusCnt",  s_txt_bus_count},
     {"FrameCnt",s_txt_frame_count},
@@ -503,8 +533,8 @@ static const KK_UI_InfoRow status_rows[] = {
     {"Ref R/C", s_txt_ref_raw},
     {"RefCnt",  s_txt_ref_count},
     {"RefErr",  s_txt_ref_errors},
-    {"Enc2",    s_txt_enc2},
-    {"Enc2Err", s_txt_enc2_err},
+    {"E2 Probe",s_txt_enc2},
+    {"E2 Total",s_txt_enc2_err},
     {"HSO",     s_txt_hso},
     {"Feedback",s_txt_feedback},
     {"H Gate",  s_txt_hso_gate},
@@ -520,7 +550,7 @@ static const KK_UI_InfoRow status_rows[] = {
 };
 
 static const KK_UI_InfoRow about_rows[] = {
-    {"FW",      "UI-R36-SMOOTH"},
+    {"FW",      "UI-R43-ZEROLOG"},
     {"MCU",     "STM32G431"},
     {"Motor",   s_txt_motor},
     {"Control", "10kHz FOC"},
@@ -891,16 +921,18 @@ void ui_app_update(uint32_t now_ms)
         else if (!MotorSampling_IsAxisOutputRequested(s_view_axis))
             reason=strcmp(state.status,"READY")==0 ? "OUTPUT OFF" : state.status;
         MT6701Diagnostics enc;
+        MotorAxis stop_axis=s_view_axis;
         if (reason) {
-            if (!strcmp(reason,MotorControl_EncoderLostText(MOTOR_AXIS_1))) MT6701_GetDiagnostics(&enc);
-            else if (!strcmp(reason,MotorControl_EncoderLostText(MOTOR_AXIS_2))) MT6701_2_GetDiagnostics(&enc);
-            else ui_encoder_diag(&enc);
+            if (!strcmp(reason,MotorControl_EncoderLostText(MOTOR_AXIS_1))) stop_axis=MOTOR_AXIS_1;
+            else if (!strcmp(reason,MotorControl_EncoderLostText(MOTOR_AXIS_2))) stop_axis=MOTOR_AXIS_2;
+            if (stop_axis==MOTOR_AXIS_1) MT6701_GetDiagnostics(&enc);
+            else MT6701_2_GetDiagnostics(&enc);
         }
         __set_PRIMASK(mask);
         if (reason) {
             snprintf(s_txt_run_stop, sizeof(s_txt_run_stop), "%s", reason);
-            snprintf(s_txt_stop_age, sizeof(s_txt_stop_age), "%u", enc.age_cycles);
-            snprintf(s_txt_stop_errors, sizeof(s_txt_stop_errors), "%lu", (unsigned long)enc.errors);
+            snprintf(s_txt_stop_age, sizeof(s_txt_stop_age), "E%u %u", (unsigned)stop_axis+1U, enc.age_cycles);
+            snprintf(s_txt_stop_errors, sizeof(s_txt_stop_errors), "E%u %lu", (unsigned)stop_axis+1U, (unsigned long)enc.errors);
             stop_run();
             s_pending_toast = reason;
             refresh_texts();

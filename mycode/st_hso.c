@@ -57,13 +57,16 @@ static float wrap(float a)
 static fixp30_t to_q30(float x) { return (fixp30_t)(x * Q30_SCALE); }
 static float from_q30(fixp30_t x) { return (float)x / Q30_SCALE; }
 
-static bool valid_config(const StHsoConfig *c)
+/* Configuration validation runs when publishing/applying parameters, not
+ * during normal observer processing. Keep all numeric checks within Flash. */
+__attribute__((optimize("Os"))) static bool valid_config(const StHsoConfig *c)
 {
-    return c && isfinite(c->rs_ohm) && c->rs_ohm >= 0.01f && c->rs_ohm <= 100.0f &&
-        isfinite(c->ls_h) && c->ls_h >= 0.000001f && c->ls_h <= 0.1f &&
-        isfinite(c->flux_wb) && c->flux_wb >= 0.0f && c->flux_wb <= 0.2f &&
-        isfinite(c->voltage_pole_rps) && c->voltage_pole_rps >= 100.0f &&
-        c->voltage_pole_rps <= 1000000.0f && isfinite(c->sample_delay_cycles) &&
+    /* Ordered finite bounds reject NaN and both infinities by themselves;
+     * avoid duplicate classification code without weakening validation. */
+    return c && c->rs_ohm >= 0.01f && c->rs_ohm <= 100.0f &&
+        c->ls_h >= 0.000001f && c->ls_h <= 0.1f &&
+        c->flux_wb >= 0.0f && c->flux_wb <= 0.2f &&
+        c->voltage_pole_rps >= 100.0f && c->voltage_pole_rps <= 1000000.0f &&
         fabsf(c->sample_delay_cycles) <= 0.25f;
 }
 
@@ -109,7 +112,7 @@ void StHso_GetConfig(StHsoConfig *config)
     __set_PRIMASK(mask);
 }
 
-void StHso_Enable(bool enable)
+__attribute__((optimize("Os"))) void StHso_Enable(bool enable)
 {
     uint32_t mask = __get_PRIMASK();
     __disable_irq();

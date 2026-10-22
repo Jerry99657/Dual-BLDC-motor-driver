@@ -1,6 +1,6 @@
 # 双电机有感控制：CubeMX 前置配置
 
-当前 **UI-R36-SMOOTH** 已核对重新生成的外设配置并接入双有感控制；本页的准备阶段说明保留作历史参考。当前功能、逐路型号设置、HSO 入口及上板步骤以 [Dual_motor_control.md](Dual_motor_control.md) 为准。
+当前 **UI-R43-ZEROLOG** 已核对重新生成的外设配置并接入双有感控制；本页的准备阶段说明保留作历史参考。当前功能、逐路型号设置、HSO 入口及上板步骤以 [Dual_motor_control.md](Dual_motor_control.md) 为准。
 
 核查对象：STM32G431VBT6，当前 FOC_two.ioc、Core/Src/spi.c、tim.c、adc.c、dma.c。本文是接入第二套控制环前的配置清单，不表示双电机控制已完成。
 
@@ -27,7 +27,7 @@ Normal 模式由应用每个采样周期提交一帧 3 字节，不使用 Circul
 
 进入 NVIC Settings，启用 DMA2 Channel1、DMA2 Channel2 和 SPI2 global interrupt，三者抢占优先级均为 1、子优先级 0。保持 ADC1_2=0；现有 TIM2=3、LCD SPI3/DMA=4、USB=5 继续保留。
 
-SPI2 的默认参数继续供 W25Q64 使用：Full-Duplex Master、8 bit、MSB first、Software NSS、CPOL Low、CPHA 1 Edge、分频 /8。若有 NSS Pulse 选项，选择 Disable。不要为了编码器把整个 SPI2 默认改为 Mode 1；编码器事务将在应用代码里临时切换到 CPOL Low、CPHA 2 Edge、/256，完成后恢复 Flash 参数。170 MHz 时 /256 约为 664 kHz，24 bit 的线传输时间约 36 us，与 M1 保持一致。
+SPI2 的默认参数继续供 W25Q64 使用：Full-Duplex Master、8 bit、MSB first、Software NSS、CPOL Low、CPHA 1 Edge、分频 /8。若有 NSS Pulse 选项，选择 Disable。不要为了编码器把整个 SPI2 默认改为 Mode 1；编码器事务将在应用代码里临时切换到 CPOL Low、CPHA 2 Edge、/256，完成后恢复 Flash 参数。当前 R42 的 APB1/2=170 MHz，两路编码器均约 664 kHz，24 bit 线传输约 36.14 us；Flash 仍为 21.25 MHz。完整时钟设置见 [Encoder_reconnect_clock_restore.md](Encoder_reconnect_clock_restore.md)。
 
 ### 2. TIM8 六个 PWM 引脚使用下拉
 
@@ -64,7 +64,7 @@ M2 两相电流同时采样，第三相在控制代码中由 Iw=-(Iu+Iv) 重建�
 - ADC1 DMA：DMA1 Channel5、Circular、Half Word / Half Word、Memory Increment Enable。VREFINT 不另加 DMA，也不启用 VREFBUF 输出。
 - TIM6 保留 PSC=169、ARR=499、TRGO Update。应用继续在注入组安全窗口触发其软件 UPDATE，不自由运行，不另开定时中断。
 - 编码器片选：M1 PA4、M2 PB12（MT6701_CSN2），Flash 片选 PD15，均为 GPIO Output、初始 High。不把 PB12 改成 SPI2 硬件 NSS。
-- SPI1 保留 CPOL Low、CPHA 2 Edge、/256；SPI3 保留 /16，避免重新引入 LCD 时序问题。
+- SPI1 保留 CPOL Low、CPHA 2 Edge、/256；APB1/APB2=170 MHz，SPI3 /16，维持 LCD 时钟 10.625 MHz。
 
 ## 生成后核查
 

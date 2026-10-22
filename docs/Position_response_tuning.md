@@ -1,6 +1,6 @@
 # UI-R29-POSLIM：位置响应与手动跟随
 
-当前 **UI-R36-SMOOTH** 为 4015 电流手动跟随加入快慢通道、输入整形和末端位置捕获，见 [4015_smooth_follow.md](4015_smooth_follow.md)。普通 Position / Sync Position 仍用 R31 的 P=6。以下保留 R29～R31 的调参记录，不再代表当前手动主从的控制公式。
+当前 **UI-R43-ZEROLOG** 按速度/加速度共同调度移动输入整形，并保留 R37 近静止保持，见 [4015_moving_smoothness.md](4015_moving_smoothness.md)。普通 Position / Sync Position 仍用 R31 的 P=6。以下保留 R29～R31 的调参记录，不再代表当前手动主从的控制公式。
 
 R31 将 2804/4015 的位置 P 从 4 提到 6，位置 I=D=0，速度 PI、速度前馈与加减速限幅继续沿用 R29。当时 M1/M2 的普通 Position、同步位置和手动跟随均使用各自型号的这个位置增益。无需修改 CubeMX。
 
