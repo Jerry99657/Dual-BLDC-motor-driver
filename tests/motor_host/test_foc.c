@@ -22,10 +22,12 @@ HAL_StatusTypeDef HAL_UART_Transmit_IT(UART_HandleTypeDef *h,uint8_t *p,uint16_t
 }
 uint8_t CDC_Transmit_FS(uint8_t *p,uint16_t n) { (void)p; (void)n; return 0; }
 uint8_t CDC_TxReady_FS(void) { return 0; }
+#ifndef MOTOR_HOST_REAL_HSO
 void StHso_Enable(bool en) { (void)en; }
 bool StHso_LearnFlux(void) { return true; }
 void StHso_GetConfig(StHsoConfig *out) { *out=(StHsoConfig){0}; }
 bool StHso_SetConfig(const StHsoConfig *c) { (void)c; return true; }
+#endif
 static void command(const char *s) {
     Protocol_Feed(PROTO_SRC_USB,(const uint8_t *)s,(uint32_t)strlen(s));
     Protocol_Feed(PROTO_SRC_USB,(const uint8_t *)"\n",1);
@@ -43,25 +45,32 @@ static bool ready=true, calibrated=true, complete=true;
 static bool output_requested=true;
 static unsigned captures, encoder_services, aligns;
 static uint8_t healthy=1, aligned=1;
-static bool hso_usable;
-static bool hso_entry_ok=true;
 static unsigned hso_processes;
-static bool timing_loss_after_control;
+#ifndef MOTOR_HOST_REAL_HSO
+static bool hso_usable,hso_running;
+static float hso_velocity;
 bool StHso_IsUsable(void) { return hso_usable; }
-bool StHso_CanTakeover(void) { return hso_usable && hso_entry_ok; }
+bool StHso_CanTakeover(void) { return hso_usable; }
+bool StHso_Start(float t) { hso_running=hso_usable && fabsf(t)>3; return hso_running; }
+void StHso_Stop(void) { hso_running=false; }
+bool StHso_IsStarting(void) { return hso_running && !hso_usable; }
+bool StHso_IsRunning(void) { return hso_running && hso_usable; }
+bool StHso_AtRest(void) { return true; }
+bool StHso_ValidTarget(float t) { return isfinite(t) && fabsf(t)>=3; }
+float StHso_MinSpeed(void) { return 3; }
 float StHso_Angle(void) { return 0.1f; }
-static float hso_velocity=110.0f;
 float StHso_Velocity(void) { return hso_velocity; }
-static StHsoReason reject_reason=ST_HSO_REASON_ANGLE;
-void StHso_GetSnapshot(StHsoSnapshot *out) { *out=(StHsoSnapshot){.reason=reject_reason}; }
-const char *StHso_ReasonText(StHsoReason reason) { return reason==ST_HSO_REASON_ANGLE ? "ANGLE" : "TIMING"; }
+float StHso_ControlAngle(void) { return 0.1f; }
+float StHso_ControlVelocity(void) { return hso_velocity; }
+float StHso_CurrentD(void) { return 0; }
+void StHso_BlendCurrent(float *d,float *q) { *d=0; (void)q; }
+void StHso_GetSnapshot(StHsoSnapshot *out) { *out=(StHsoSnapshot){.reason=ST_HSO_REASON_TIMING}; }
+const char *StHso_ReasonText(StHsoReason reason) { (void)reason; return "TIMING"; }
 void StHso_Process(const MotorSampleFrame *f,bool r,float a,float v,bool e) {
-    (void)f; (void)r; (void)a; (void)v; (void)e; ++hso_processes;
+    (void)f;(void)r;(void)a;(void)v;(void)e; ++hso_processes;
 }
-void StHso_RecordControlCycles(uint32_t cycles) {
-    (void)cycles;
-    if(timing_loss_after_control) { hso_usable=false; reject_reason=ST_HSO_REASON_TIMING; }
-}
+void StHso_RecordControlCycles(uint32_t c) { (void)c; }
+#endif
 static float encoder_velocity;
 static float zero(void) { return 0; }
 static float encoder_speed(void) { return encoder_velocity; }
@@ -69,7 +78,9 @@ static AngleSource source={zero,zero,encoder_speed,1};
 static int selected_pp;
 static const MotorParams *hso_motor;
 AngleSource *AngleSrc_Encoder_Init(int pp) { selected_pp=pp; aligned=0; return &source; }
-void StHso_Init(const MotorParams *motor) { hso_motor=motor; hso_usable=false; }
+#ifndef MOTOR_HOST_REAL_HSO
+void StHso_Init(const MotorParams *motor) { hso_motor=motor; hso_usable=hso_running=false; }
+#endif
 uint32_t HAL_GetTick(void) { return 0; }
 void HAL_Delay(uint32_t ms) { (void)ms; }
 bool MotorSampling_IsReady(void) { return ready; }
@@ -116,7 +127,7 @@ int main(void) {
     frame.m1_current[0]=0.5f; frame.m1_current[1]=-0.25f;
     adc1.JDR1=4095; adc2.JDR1=0; /* Old direct reads would give the wrong current. */
     JerryFOC_setCurrent(1); HAL_ADCEx_InjectedConvCpltCallback(&hadc1);
-    assert(captures==1 && encoder_services==1 && hso_processes==1);
+    assert(captures==1 && encoder_services==1 && hso_processes==0);
     assert(JerryFOC_getPhaseCurrent_A()==0.5f && JerryFOC_getPhaseCurrent_B()==-0.25f);
     complete=false; frame.m1_current[0]=1.5f;
     HAL_ADCEx_InjectedConvCpltCallback(&hadc1);
@@ -153,151 +164,7 @@ int main(void) {
     JerryFOC_Target_Iq=-10; JerryFOC_run(); assert(JerryFOC_Target_Iq==-0.5f);
     JerryFOC_useCurrentLoop(0);
     JerryFOC_setCurrent(3); assert(JerryFOC_Target_Iq==3); /* Voltage command units stay V. */
-    assert(!JerryFOC_useHSO(1)); /* No observer lock. */
-    hso_usable=true;
-    JerryFOC_setMode(JERRYFOC_MODE_POSITION);
-    assert(!JerryFOC_useHSO(1)); /* Absolute position stays on encoder. */
-    JerryFOC_setMode(JERRYFOC_MODE_TORQUE);
-    encoder_velocity=100;
-    M0_Vel_Flt.y_prev=filtered_velocity_global=100;
-    command("Speed:100");
-    hso_entry_ok=false;
-    assert(!JerryFOC_useHSO(1) && !JerryFOC_hasHSOFault());
-    hso_entry_ok=true;
-    assert(JerryFOC_useHSO(1) && JerryFOC_isHSOActive());
-    /* No speed step on entry: speed uses the same 10 ms blend as angle. */
-    M0_Vel_Flt.y_prev=100;
-    HAL_TIM_PeriodElapsedCallback(&outer);
-    assert(fabsf(filtered_velocity_global-100)<1e-6f);
-    for(unsigned i=0;i<50;++i) JerryFOC_run();
-    M0_Vel_Flt.y_prev=100; HAL_TIM_PeriodElapsedCallback(&outer);
-    assert(fabsf(filtered_velocity_global-(100+5.0f/6.0f))<0.001f);
-    for(unsigned i=0;i<100;++i) JerryFOC_run();
-    assert(fabsf(JerryFOC_getElectricalAngle()-0.1f)<1e-5f);
-    M0_Vel_Flt.y_prev=100; HAL_TIM_PeriodElapsedCallback(&outer);
-    assert(fabsf(filtered_velocity_global-(100+10.0f/6.0f))<0.001f);
-    /* Both small and large above-boundary changes remain on HSO. */
-    command("Speed:95"); JerryFOC_run();
-    assert(JerryFOC_isHSOActive() && !JerryFOC_isHSOReturning());
-    command("Speed:100"); command("Speed:20");
-    assert(JerryFOC_isHSOActive() && !JerryFOC_isHSOReturning() && JerryFOC_Target_Velocity==20);
-    for(unsigned i=0;i<10;++i) HAL_TIM_PeriodElapsedCallback(&outer);
-    float before_deceleration=telemetry_reference;
-    for(unsigned i=0;i<10;++i) HAL_TIM_PeriodElapsedCallback(&outer);
-    assert(fabsf(before_deceleration-telemetry_reference-0.5f)<0.001f); /* 50 rad/s^2 */
-    for(unsigned i=0;i<110;++i) JerryFOC_run();
-    assert(JerryFOC_isHSOActive() && !JerryFOC_isHSOReturning());
-    assert(JerryFOC_Target_Velocity==20 && JerryFOC_isDriveReady());
-    assert(strcmp(JerryFOC_getHSOFaultText(),"--")==0);
-    hso_usable=true; command("Speed:100"); command("HSO:Use");
-    assert(JerryFOC_isHSOActive());
-    /* A loss already pending when the command arrives must be processed
-     * BEFORE applying that fresh command, never by the following ADC frame. */
-    hso_usable=false; reject_reason=ST_HSO_REASON_ANGLE;
-    command("Speed:20"); JerryFOC_run();
-    assert(!JerryFOC_isHSOActive() && JerryFOC_Target_Velocity==20);
-    assert(JerryFOC_getMode()==JERRYFOC_MODE_VELOCITY && JerryFOC_isDriveReady());
-    assert(strcmp(JerryFOC_getHSOFaultText(),"ANGLE")==0);
-    hso_usable=true; command("Speed:100"); command("HSO:Use");
-    for(unsigned i=0;i<110;++i) JerryFOC_run();
-    /* Speed:0 must decelerate under HSO until ACTUAL speed reaches 45 rpm,
-     * not return merely because the target is now below that boundary. */
-    command("Speed:0"); JerryFOC_run();
-    assert(JerryFOC_isHSOActive() && !JerryFOC_isHSOReturning());
-    for(unsigned speed=100;speed>=5;--speed) {
-        encoder_velocity=hso_velocity=(float)speed;
-        JerryFOC_run();
-        assert(JerryFOC_isHSOActive() && !JerryFOC_isHSOReturning());
-    }
-    const float boundary=45.0f*(2.0f*PI)/60.0f;
-    encoder_velocity=boundary; hso_velocity=6; JerryFOC_run(); /* Observer LP may lag. */
-    assert(JerryFOC_isHSOReturning() && JerryFOC_Target_Velocity==0);
-    assert(strcmp(JerryFOC_getFeedbackText(),"TO ENCODER")==0);
-    float previous_angle=JerryFOC_getElectricalAngle();
-    hso_usable=false; reject_reason=ST_HSO_REASON_SPEED;
-    hso_velocity=NAN; /* Return must not consume invalid observer outputs. */
-    for(unsigned i=0;i<110;++i) {
-        JerryFOC_run();
-        float a=JerryFOC_getElectricalAngle();
-        assert(a<=previous_angle+0.00001f); previous_angle=a;
-    }
-    assert(!JerryFOC_isHSOActive() && !JerryFOC_hasHSOFault() && JerryFOC_isDriveReady());
-    assert(JerryFOC_getMode()==JERRYFOC_MODE_VELOCITY && JerryFOC_Target_Velocity==0);
-    assert(strcmp(JerryFOC_getFeedbackText(),"ENCODER")==0);
-    assert(strcmp(JerryFOC_getHSOFaultText(),"--")==0);
-    command("Speed:100"); HAL_TIM_PeriodElapsedCallback(&outer); JerryFOC_run();
-    assert(JerryFOC_Target_Velocity==100 && !JerryFOC_isHSOActive());
-    hso_usable=true; encoder_velocity=100; hso_velocity=110;
-    command("HSO:Use"); assert(Protocol_GetHsoResult()==1 && JerryFOC_isHSOActive());
-    for(unsigned i=0;i<110;++i) JerryFOC_run();
-    /* Natural deceleration in torque mode also exits before the 5 Hz floor. */
-    JerryFOC_setMode(JERRYFOC_MODE_TORQUE); encoder_velocity=hso_velocity=7;
-    JerryFOC_run(); assert(JerryFOC_isHSOActive() && !JerryFOC_isHSOReturning());
-    encoder_velocity=hso_velocity=4.6f;
-    JerryFOC_run(); assert(JerryFOC_isHSOReturning());
-    for(unsigned i=0;i<110;++i) JerryFOC_run();
-    assert(!JerryFOC_isHSOActive() && !JerryFOC_hasHSOFault());
-    encoder_velocity=hso_velocity=boundary; command("Speed:100");
-    command("HSO:Use"); assert(Protocol_GetHsoResult()==-3);
-    encoder_velocity=hso_velocity=4.8f; command("HSO:Use"); assert(JerryFOC_isHSOActive());
-    command("HSO:Encoder");
-    encoder_velocity=100; hso_velocity=110; command("Speed:100"); command("HSO:Use");
-    assert(JerryFOC_isHSOActive());
-    command("Speed:-100"); JerryFOC_run();
-    assert(JerryFOC_isHSOActive() && !JerryFOC_isHSOReturning());
-    encoder_velocity=hso_velocity=5; JerryFOC_run(); assert(!JerryFOC_isHSOReturning());
-    encoder_velocity=hso_velocity=4.6f; JerryFOC_run(); assert(JerryFOC_isHSOReturning());
-    for(unsigned i=0;i<110;++i) JerryFOC_run();
-    assert(!JerryFOC_isHSOActive() && JerryFOC_Target_Velocity==-100);
-    /* Same mechanical boundary for reverse rotation. */
-    encoder_velocity=hso_velocity=-100; command("HSO:Use"); assert(JerryFOC_isHSOActive());
-    command("Speed:0"); JerryFOC_run(); assert(!JerryFOC_isHSOReturning());
-    encoder_velocity=hso_velocity=-5; JerryFOC_run(); assert(!JerryFOC_isHSOReturning());
-    encoder_velocity=hso_velocity=-4.6f; JerryFOC_run(); assert(JerryFOC_isHSOReturning());
-    for(unsigned i=0;i<110;++i) JerryFOC_run();
-    assert(!JerryFOC_isHSOActive() && JerryFOC_Target_Velocity==0);
-    encoder_velocity=100; hso_velocity=110;
-    command("Speed:100"); command("HSO:Use"); assert(JerryFOC_isHSOActive());
-    reject_reason=ST_HSO_REASON_ANGLE;
-    hso_usable=false; JerryFOC_run();
-    assert(!JerryFOC_hasHSOFault() && JerryFOC_isDriveReady() && !JerryFOC_isHSOActive()); zero_pwm();
-    assert(JerryFOC_Target_Iq==0 && JerryFOC_Target_Velocity==0);
-    assert(strcmp(JerryFOC_getHSOFaultText(),"ANGLE")==0);
-    reject_reason=ST_HSO_REASON_TIMING;
-    hso_usable=true;
-    for(unsigned i=0;i<10;++i) { JerryFOC_run(); HAL_TIM_PeriodElapsedCallback(&outer); }
-    zero_pwm(); /* Observer recovery cannot restart the motor. */
-    assert(strcmp(JerryFOC_getHSOFaultText(),"ANGLE")==0);
-    assert(!JerryFOC_useHSO(1));
-    command("Speed:nan"); command("Speed:inf"); command("Speed:");
-    command("Speed:100junk"); JerryFOC_run(); zero_pwm();
-    assert(JerryFOC_Target_Velocity==0);
-    command("Speed:100"); HAL_TIM_PeriodElapsedCallback(&outer); JerryFOC_run();
-    assert(JerryFOC_Target_Velocity==100 && JerryFOC_isDriveReady());
-    command("HSO:Use"); assert(JerryFOC_isHSOActive());
-    assert(strcmp(JerryFOC_getHSOFaultText(),"--")==0);
-    timing_loss_after_control=true;
-    HAL_ADCEx_InjectedConvCpltCallback(&hadc1); zero_pwm();
-    assert(!JerryFOC_isHSOActive() && JerryFOC_Target_Velocity==0);
-    assert(strcmp(JerryFOC_getHSOFaultText(),"TIMING")==0);
-    timing_loss_after_control=false; hso_usable=true;
-    command("Speed:100"); command("HSO:Use"); assert(JerryFOC_isHSOActive());
-    /* Unhealthy encoder / real sampling faults can never auto-return to drive. */
-    healthy=0; JerryFOC_run(); zero_pwm();
-    assert(JerryFOC_hasHSOFault() && !JerryFOC_isDriveReady());
-    command("Speed:100"); healthy=1; JerryFOC_run(); zero_pwm();
-    assert(JerryFOC_hasHSOFault()); /* Recovery alone does not resume stored target. */
-    command("Speed:100"); assert(JerryFOC_isDriveReady());
-    command("HSO:Use"); ready=false; JerryFOC_run(); zero_pwm();
-    command("Speed:100"); assert(!JerryFOC_isDriveReady());
-    JerryFOC_run(); zero_pwm(); ready=true;
-    JerryFOC_run(); zero_pwm(); assert(JerryFOC_hasHSOFault());
-    command("Speed:100"); assert(JerryFOC_isDriveReady());
-    assert(JerryFOC_useHSO(0) && !JerryFOC_isHSOActive() && !JerryFOC_hasHSOFault());
-    assert(JerryFOC_Target_Iq==0 && JerryFOC_Target_Velocity==0);
-    command("Speed:100"); assert(JerryFOC_useHSO(1));
-    JerryFOC_setMode(JERRYFOC_MODE_POSITION);
-    assert(!JerryFOC_isHSOActive());
+    assert(!JerryFOC_useHSO(1)); /* Encoder mode never silently selects sensorless. */
     /* A profile change is one stopped transaction: no old target, PI state,
      * HSO takeover or encoder alignment may carry into the other motor. */
     encoder_velocity=0; healthy=1;
@@ -352,6 +219,6 @@ int main(void) {
     unsigned before_align_stop=aligns;
     command("Stop"); assert(!output_requested && !JerryFOC_isAligning());
     JerryFOC_alignFinish(); assert(aligns==before_align_stop); /* Cancelled align cannot certify zero. */
-    puts("PASS: protocol/FOC, HSO recovery/handover, voltage/current clamps, atomic 2804/4015 controller reload, stop/align gates and fault retention");
+    puts("PASS: protocol/FOC, encoder control, voltage/current clamps, atomic 2804/4015 controller reload, stop/align gates and fault retention");
     return 0;
 }

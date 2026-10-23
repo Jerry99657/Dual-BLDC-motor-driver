@@ -1,8 +1,12 @@
-# UI-R43-ZEROLOG：双电机有感控制与手动主从跟随
+# UI-R53-SAMPLE：单无感与双电机有感控制
+
+R45 修复 Flash 传输失败的清理、写使能确认和有限重试，增加 Save Last；当前固件及资源见 [保存恢复说明](W25Q64_HSO_save_recovery.md)。下述 R44 控制结构保留。
+
+R44 将 Single M1 的 HSO Feedback 改为编码器可断开的独立速度控制，限流对齐 → I/F 起转/磁链估算 → HSO 接管；当前无感操作和资源见 [HSO_sensorless_startup.md](HSO_sensorless_startup.md)。双电机的有感控制、主从算法与 E1/E2 诊断保持 R43 基线。
 
 R43 在 Status 增加物理 E1/E2 的 Zero、ZPre、ZPost、ZTime，记录全零事件前后角度、次数和持续时间；区分零点附近、远离零点和前样本过期，不放行可疑全零帧。解释与验证见 [Encoder_zero_event_diagnostics.md](Encoder_zero_event_diagnostics.md)。
 
-2026-10-23 的 Follow 失联、M2 磁铁对准后改善及单机约 20 min 对照结果已记入 [实板观察记录](Encoder_follow_field_log_2026-10-23.md)。本次只更新文档，保留 R43 代码和保护，等待再次复现。
+2026-10-23 的 Follow 失联、M2 磁铁对准后改善及单机约 20 min 对照结果已记入 [实板观察记录](Encoder_follow_field_log_2026-10-23.md)。该问题按用户要求暂缓继续优化，R44 未调整编码器判帧、重连和主从参数，等待再次复现。
 
 R42 对当前模式所需的 ENC2 增加故障停机后每 250 ms 单帧重试；未启用的 ENC2 保留五次连续失败停止。恢复采样不会自动启动电机。APB1/APB2 恢复 170 MHz、编码器约 664 kHz，并保持 Flash、LCD、I²C、串口、CAN、USB 速率不变，见 [Encoder_reconnect_clock_restore.md](Encoder_reconnect_clock_restore.md)。
 
@@ -38,7 +42,7 @@ TIM8 的 PC6/7/8、PB3/4/5 均已下拉；TIM1/TIM8 保留 PSC=0、ARR=8499、�
 
 | Settings → System → Work Mode | 含义 | Run 控制模式 |
 | --- | --- | --- |
-| Single M1 | 仅 M1；编码器或 HSO 混合反馈 | Torque / Speed / Position |
+| Single M1 | 仅 M1；编码器或独立 HSO | 编码器：Torque / Speed / Position；HSO：Speed |
 | Single M2 | 仅 M2；固定编码器 | Torque / Speed / Position |
 | Dual Independent | 两路分别接收目标，独立启停 | 两路各自 Torque / Speed / Position |
 | Dual Sync Speed | 两路跟随共同速度轨迹 | Speed |
@@ -46,7 +50,7 @@ TIM8 的 PC6/7/8、PB3/4/5 均已下拉；TIM1/TIM8 保留 PSC=0、ARR=8499、�
 | Dual Master M1 | 手转 M1，M2 按测得机械位置跟随；M1 功率输出关闭 | 位置跟随 |
 | Dual Master M2 | 手转 M2，M1 按测得机械位置跟随；M2 功率输出关闭 | 位置跟随 |
 
-双电机模式一律编码器反馈，界面禁用 HSO Feedback，串口也拒绝 HSO 接管/学习。返回 Single M1 后，可在 System → HSO Feedback 开启旁路观察、学习和手动 Use；它仍需编码器启动和资格判断，不是脱离编码器的无感启动。默认新配置和旧记录迁移均为 Single M1 + Encoder。
+双电机模式一律编码器反馈，界面禁用 HSO Feedback，串口也拒绝 HSO 接管/学习。返回 Single M1 后，可在 System → HSO Feedback 开启独立无感启动，直接用 Run Speed 或 Speed 命令，无需编码器 Learn/Use。默认新配置和旧记录迁移均为 Single M1 + Encoder。
 
 ## 第一次上板操作
 
@@ -65,7 +69,7 @@ TIM8 的 PC6/7/8、PB3/4/5 均已下拉；TIM1/TIM8 保留 PSC=0、ARR=8499、�
 - KEY1：仅 Dual Independent 的 Run 页切换 M1/M2 视图，保持另一电机运行，并保留每路自己的草稿和已确认值；20 ms 去抖，一直按住只切换一次。
 - KEY2：停止并返回；退出 Run 时停止两路。单路启动对齐期间的空闲页面进出保留原对齐流程。
 
-独立模式中，不改数值再次按 OK 只停止当前路；KEY2 或无前缀 Stop 停止两路。同步/主从的启动和停止作用于整个组。专用 Stop 为关闭相输出的滑行停止，Speed=0 继续正常闭环减速；没有屏蔽过流，也没有增大原有门限。
+独立模式中，不改数值再次按 OK 只停止当前路；KEY2 或无前缀 Stop 停止两路。同步/主从的启动和停止作用于整个组。专用 Stop 为关闭相输出的滑行停止；编码器模式 Speed=0 正常闭环减速，独立 HSO 的 Speed=0 则滑行停止。没有屏蔽过流，也没有增大原有门限。
 
 Torque 的单位继续由 Curr Loop 决定：关闭时为 Uq 电压 V，开启时为 Iq 电流 A。尚不能将电压模式的数值解释成 N·m。
 
@@ -149,14 +153,14 @@ Follow
 
 手动跟随最短流程：停止两路 → Work:MasterM1（或 MasterM2）→ Gear:1,0 → 等从轴对齐并静止 → Follow → 手转主轴。配置命令需要等待主循环应用，可通过 Status 的 Work、Cmd 核对后再发下一条；不要把配置与 Follow 在同一处理批次内连发。
 
-Status → Cmd：1=接受，0=配置排队中，-1=状态/配置不允许，-2=运动参数格式错误，-3=配置队列忙。拒绝启动时同时核对对应路 Drive、Encoder、Aligned；运动目标遵守对应路 Speed Limit。单 M1 的 HSO 命令和资格条件沿用原文档。
+Status → Cmd：1=接受，0=配置排队中，-1=状态/配置不允许，-2=运动参数格式错误，-3=配置队列忙。拒绝启动时同时核对对应路 Drive、Encoder、Aligned；运动目标遵守对应路 Speed Limit。单 M1 的 HSO 启动条件见 [独立无感说明](HSO_sensorless_startup.md)，物理编码器离线不阻止该模式启动。
 
-JustFloat 保持 25 个 float + 4 字节帧尾，共 104 字节。Single M1 的映射不变。启用 M2 时，前 16 通道继续为 M1；后 9 通道为：17 Work 枚举、18 M2 实际速度、19 M2 目标速度、20 M2 位置、21 M2 Iq、22 M2 Id、23 最大控制执行时间 us、24 M2 标志（bit0 已对齐，bit1 请求输出）、25 协同误差。此时后 9 通道替代原 HSO 遥测。
+JustFloat 保持 25 个 float + 4 字节帧尾，共 104 字节。Single M1 的通道顺序不变，但 R44 无感启动中的速度为虚拟参考，H Error 为虚拟角度/角度增量残差，见无感说明。启用 M2 时，前 16 通道继续为 M1；后 9 通道为：17 Work 枚举、18 M2 实际速度、19 M2 目标速度、20 M2 位置、21 M2 Iq、22 M2 Id、23 最大控制执行时间 us、24 M2 标志（bit0 已对齐，bit1 请求输出）、25 协同误差。此时后 9 通道替代原 HSO 遥测。
 
 ## 验证与资源
 
 已通过 `tests/motor_host/run.py`、`tests/ui_host/run.py`、`tests/usb_host/run.py`。新增测试覆盖真实 M1 FOC + M2 控制/协同 + 协议代码中的两种手动主从方向、主轴不通电/不对齐、手转启动、跨圈/反转、启动锚点、速度前馈、比例/偏置、M2 主轴的 SPI2 预留、编码器失联联动停止、恢复不自启和显式再启动；并回归采样保护、MT6701/W25Q64、存储和 USB。UI 覆盖手动跟随页、OK 启停、方向键无运动副作用、KEY2 停止及版面宽度。外设、ST HSO 二进制计算及机械运动使用主机模型，不能代替上板带载验证。
 
-Debug：Flash **130396 B / 131072 B**，余 **676 B**；RAM **21840 B / 32768 B**。Release：Flash **129612 B**，余 **1460 B**；RAM **21744 B**。主循环、外设初始化、USB 及 SPI/GPIO/UART HAL 共享 LTO 优化，采用单一 LTO 分区；中断分发采用 -Os，HSO 初始化/配置及使能入口按大小优化，10 kHz HSO 算法保留原设置。Debug 仍含调试符号，但部分局部变量会被优化。Flash 已接近容量上限。
+R53 Debug：Flash **131068 B / 131072 B**，余 **4 B**；RAM **22344 B / 32768 B**。Release：Flash **130252 B**，余 **820 B**；RAM **22264 B**。主循环、外设初始化、USB 及 SPI/GPIO/UART HAL 共享 LTO 优化，采用单一 LTO 分区；中断分发采用 -Os，HSO 启动、交接辅助与判定/诊断按大小优化，算术 -O2 加 LTO，ST 定点数学保持 -O2。Debug 仍含调试符号，但部分局部变量会被优化。Flash 已接近容量上限。
 
-两种构建的 ELF/BIN/MAP 均已更新，未烧录或驱动实际电机。链接仍有原 RWX LOAD 段警告，LTO 另有串行编译提示；构建均成功，无 Flash 溢出。
+两种构建的 ELF/BIN/MAP 均已更新。用户于 2026-10-23 确认 4015 独立 HSO 在 12/20 V 均可运行，范围和历史数据见 [独立无感启动](HSO_sensorless_startup.md)；代理未连接开发板或代为烧录。链接仍有原 RWX LOAD 段警告，LTO 另有串行编译提示；构建均成功，无 Flash 溢出。

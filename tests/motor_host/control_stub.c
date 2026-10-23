@@ -44,7 +44,7 @@ bool AppStorage_RequestSave(void) { return false; }
 bool AppStorage_IsDeferred(void) { return false; }
 static MotorWorkMode work;
 static MotorAxis focus;
-static bool hso=true;
+static bool hso=false;
 static bool following;
 #ifdef CONTROL_STUB_UI
 static MotorAxisSnapshot second_ui={.healthy=true,.aligned=true,.ready=true,.status="READY"};

@@ -53,14 +53,12 @@ static void handle_hso(const char *command)
         if (JerryFOC_isHSOActive() || JerryFOC_hasHSOFault()) (void)JerryFOC_useHSO(0U);
         StHso_Enable(false);
     } else if (strcmp(command, "Encoder") == 0) {
-        (void)JerryFOC_useHSO(0U);
+        if (!MotorControl_SelectFeedback(false)) hso_result=-3;
     } else if (strcmp(command, "Use") == 0) {
         if (!JerryFOC_useHSO(1U)) hso_result = -3;
     } else if (strcmp(command, "Learn") == 0) {
-        const MotorParams *motor = JerryFOC_getMotorParams();
         if (JerryFOC_isHSOActive() || JerryFOC_hasHSOFault() ||
             !JerryFOC_isDriveReady() || g_openloop_debug ||
-            fabsf(JerryFOC_getVelocity()) * motor->pole_pairs < 31.4159265f ||
             !StHso_LearnFlux()) hso_result = -3;
     } else if (strncmp(command, "Motor:", 6) == 0 || strncmp(command, "Filter:", 7) == 0) {
         if (JerryFOC_isHSOActive() || JerryFOC_hasHSOFault()) { hso_result = -3; return; }
@@ -221,7 +219,7 @@ void Protocol_HandleLine(char *line)
         }
         control_result=MotorControl_Command(axis,mode,value,0,(flags & APP_FLAG_CURRENT_LOOP)!=0U) ? 1 : -1;
     } else if (strncmp(line, "OpenLoop:", 9) == 0) {
-        if (MotorControl_GetWork()!=MOTOR_WORK_SINGLE_M1 || axis!=MOTOR_AXIS_1 || !JerryFOC_isDriveReady()) {
+        if (MotorControl_GetWork()!=MOTOR_WORK_SINGLE_M1 || MotorControl_HsoAllowed() || axis!=MOTOR_AXIS_1 || !JerryFOC_isDriveReady()) {
             control_result=-1; __set_PRIMASK(primask); return;
         }
         if (JerryFOC_isHSOActive() || JerryFOC_hasHSOFault()) (void)JerryFOC_useHSO(0U);

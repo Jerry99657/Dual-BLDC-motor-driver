@@ -99,6 +99,7 @@ const char *MotorControl_WorkText(void)
 bool MotorControl_ModeAllowed(JerryFOC_ControlMode mode)
 {
     if ((unsigned)mode>JERRYFOC_MODE_POSITION) return false;
+    if (MotorControl_HsoAllowed()) return mode==JERRYFOC_MODE_VELOCITY;
     if (work==MOTOR_WORK_SYNC_SPEED) return mode==JERRYFOC_MODE_VELOCITY;
     if (work==MOTOR_WORK_SYNC_POSITION || MotorControl_IsHandFollow()) return mode==JERRYFOC_MODE_POSITION;
     return !MotorControl_IsCoupled() || mode!=JERRYFOC_MODE_TORQUE;
@@ -144,6 +145,7 @@ void MotorControl_Stop(MotorAxis axis)
 }
 static bool stationary(void)
 {
+    if (MotorControl_HsoAllowed() && !StHso_AtRest()) return false;
     if (JerryFOC_isAligning() || m2.aligning || MotorSampling_IsOutputRequested() ||
         MotorSampling_IsAxisOutputRequested(MOTOR_AXIS_2)) return false;
     return fabsf(JerryFOC_getVelocity())<=1.0f && fabsf(m2.velocity)<=1.0f;
@@ -177,6 +179,8 @@ bool MotorControl_SelectFeedback(bool hso)
     if (work!=MOTOR_WORK_SINGLE_M1 || !stationary()) { __set_PRIMASK(mask); return false; }
     hso_selected=hso;
     (void)JerryFOC_useHSO(0); StHso_Enable(hso);
+    m1_stop_reason=group_stop_reason=NULL;
+    if (!hso) JerryFOC_requestAlignment();
     save_config(); __set_PRIMASK(mask); return true;
 }
 static void clear_saved_axis(MotorAxis axis)
@@ -267,6 +271,10 @@ void MotorControl_GetAxis(MotorAxis axis,MotorAxisSnapshot *out)
             .current_loop=flag_use_current_loop!=0,.ready=JerryFOC_isDriveReady()!=0,.status=sampling};
         if (JerryFOC_hasHSOFault()) out->status="HSO STOPPED";
         else if (m1_stop_reason && out->ready) out->status=m1_stop_reason;
+        if (MotorControl_HsoAllowed()) {
+            out->healthy=!JerryFOC_hasHSOFault();
+            out->aligned=true; /* Sensorless alignment belongs to its startup FSM. */
+        }
     } else {
         MT6701_2_Snapshot enc; MT6701_2_GetSnapshot(&enc);
         *out=(MotorAxisSnapshot){.mode=m2.mode,.velocity=m2.velocity,.position=m2.position,
@@ -291,6 +299,12 @@ void MotorControl_GetAxis(MotorAxis axis,MotorAxisSnapshot *out)
 static bool can_start(MotorAxis axis)
 {
     MotorAxisSnapshot s; MotorControl_GetAxis(axis,&s);
+    if (axis==MOTOR_AXIS_1 && MotorControl_HsoAllowed()) {
+        if (!MotorSampling_IsReady() || !MotorSampling_IsCalibrated()) {
+            command_text=MotorSampling_GetAxisStatusText(axis); return false;
+        }
+        return !timing_fault;
+    }
     if (!MotorControl_AxisEnabled(axis)) command_text="AXIS DISABLED";
     else if (!s.ready && !(axis==MOTOR_AXIS_1 && JerryFOC_hasHSOFault() &&
              MotorSampling_IsAxisReady(axis))) command_text=s.status;
@@ -445,6 +459,15 @@ bool MotorControl_Command(MotorAxis axis,JerryFOC_ControlMode mode,float value,f
         command_text="MODE / VALUE"; return false;
     }
     uint32_t mask=__get_PRIMASK(); __disable_irq();
+    if (axis==MOTOR_AXIS_1 && MotorControl_HsoAllowed() && value==0.0f) {
+        MotorControl_Stop(axis); command_text="READY"; __set_PRIMASK(mask); return true;
+    }
+    if (axis==MOTOR_AXIS_1 && MotorControl_HsoAllowed()) {
+        value=clamp(value,-speed_limit(axis),speed_limit(axis));
+        if (!StHso_ValidTarget(value)) {
+            command_text="HSO SPEED/DIR"; __set_PRIMASK(mask); return false;
+        }
+    }
     bool coupled=MotorControl_IsCoupled();
     if (coupled && group_active && group_mode!=mode) {
         command_text="Stop before mode"; __set_PRIMASK(mask); return false;
@@ -488,7 +511,7 @@ bool MotorControl_Command(MotorAxis axis,JerryFOC_ControlMode mode,float value,f
     bool ok=axis==MOTOR_AXIS_1 ? JerryFOC_startOutput()!=0U : MotorSampling_SetAxisOutputEnabled(axis,true);
     if (!ok && axis==MOTOR_AXIS_2) { stop_axis(axis); command_text="START REJECTED"; }
     else {
-        command_text=ok ? "READY" : "START REJECTED";
+        command_text=ok ? "READY" : MotorControl_HsoAllowed() ? "HSO START GATE" : "START REJECTED";
         if (ok) { if (axis==MOTOR_AXIS_2) m2.stop_reason=NULL; else m1_stop_reason=NULL; }
     }
     __set_PRIMASK(mask); return ok;
@@ -526,7 +549,7 @@ static float current_pi(PIDController *p,float error)
 void MotorControl_Fast(void)
 {
     if (MotorControl_AxisEnabled(MOTOR_AXIS_1) && MotorSampling_IsOutputRequested() &&
-        !g_openloop_debug &&
+        !g_openloop_debug && !MotorControl_HsoAllowed() &&
         (!MT6701_IsHealthy() || !MotorSampling_IsAxisReady(MOTOR_AXIS_1))) {
         m1_stop_reason=MT6701_IsHealthy() ? MotorSampling_GetAxisStatusText(MOTOR_AXIS_1) : MotorControl_EncoderLostText(MOTOR_AXIS_1);
         command_text=group_stop_reason=m1_stop_reason;

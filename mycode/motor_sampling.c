@@ -497,6 +497,14 @@ void MotorSampling_Service(void)
 bool MotorSampling_Capture(void)
 {
     if (!s_running) return false;
+    /* Snapshot BEFORE this callback can arm outputs or FOC can update CCRs.
+     * CH4=1 triggers near CNT=0; all three PWM1 high pulses must extend past
+     * the last voltage acquisition (~3.12 us + trigger/deadtime margin).
+     * 800 ticks at 170 MHz = 4.71 us. Never extrapolate across an edge/coast. */
+    s_frame.m1_voltage_high_plateau =
+        (htim1.Instance->CCER & PHASE_CHANNELS)==PHASE_CHANNELS &&
+        (htim1.Instance->BDTR & TIM_BDTR_MOE)!=0U &&
+        htim1.Instance->CCR1>800U && htim1.Instance->CCR2>800U && htim1.Instance->CCR3>800U;
     if (!frame_fresh()) trip(MOTOR_SAMPLE_FAULT_FRAME_TIMEOUT);
     if (!__HAL_ADC_GET_FLAG(&hadc2, ADC_FLAG_JEOS)) {
         trip(MOTOR_SAMPLE_FAULT_PAIR);

@@ -23,4 +23,7 @@ needed for the hardware CORDIC path. The CORDIC clock/platform bridge lives in
 
 The modifiable application integration is `mycode/st_hso.c/.h`, plus the FOC,
 protocol and UI application hooks. No ZeST, PolPulse, RsTemp or ST Motor Profiler
-library is included. See `docs/ST_HSO_integration.md` for operation and limits.
+library is included. R44 adds an application-owned, current-limited DC
+alignment and I/F flux bootstrap before independent sensorless HSO control;
+this is not ST Motor Profiler or an import of the full RsDC module.
+See `docs/HSO_sensorless_startup.md` for current operation and test limits.

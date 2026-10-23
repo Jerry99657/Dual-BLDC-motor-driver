@@ -1,6 +1,6 @@
 # 2804 / 4015 电机参数切换（UI-R24-MOTOR）
 
-当前 **UI-R43-ZEROLOG** 已接入双有感控制；本页早期版本说明保留作历史参考。当前逐路型号设置、HSO 入口及上板步骤以 [Dual_motor_control.md](Dual_motor_control.md) 为准。
+当前 **UI-R53-SAMPLE** 保留两套型号和双有感控制，Single M1 的 HSO 改为独立无感启动。逐路设置以 [Dual_motor_control.md](Dual_motor_control.md) 为准，无感步骤见 [HSO_sensorless_startup.md](HSO_sensorless_startup.md)。本页下文保留 R24 历史说明。
 
 本次选择作用于 **M1 驱动通道**。M2 仍只有采样与可选编码器诊断，不会因选择 4015 而使能第二路功率输出。
 

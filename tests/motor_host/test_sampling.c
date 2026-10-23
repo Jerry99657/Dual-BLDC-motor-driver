@@ -265,8 +265,28 @@ static void check_reference_estimation(void) {
     assert(diagnostics().fault==MOTOR_SAMPLE_FAULT_OVERCURRENT);
     puts("PASS: VREFINT factory calibration, 64-sample averaging/IIR, first-block gate, shared current/phase/bus scale, outlier rejection, stale stop, latched recovery");
 }
+static void check_voltage_plateau(void) {
+    reset();assert(MotorSampling_Start());sample_ms(301,1354);
+    assert(MotorSampling_SetOutputEnabled(false));
+    tim1.CCR1=tim1.CCR2=tim1.CCR3=4250;
+    frame(0);assert(MotorSampling_Capture());assert(!MotorSampling_GetFrame()->m1_voltage_high_plateau);
+    assert(MotorSampling_SetOutputEnabled(true));
+    for(unsigned i=0;i<2;++i) {frame(0);assert(MotorSampling_Capture());assert(!MotorSampling_GetFrame()->m1_voltage_high_plateau);}
+    frame(0);assert(MotorSampling_Capture());assert(MotorSampling_GetFrame()->m1_voltage_high_plateau);
+    for(unsigned phase=0;phase<3;++phase) {
+        uint32_t *ccr[]={&tim1.CCR1,&tim1.CCR2,&tim1.CCR3};
+        *ccr[phase]=800;frame(0);assert(MotorSampling_Capture());
+        assert(!MotorSampling_GetFrame()->m1_voltage_high_plateau);
+        *ccr[phase]=801;frame(0);assert(MotorSampling_Capture());
+        assert(MotorSampling_GetFrame()->m1_voltage_high_plateau);*ccr[phase]=4250;
+    }
+    tim1.BDTR &= ~TIM_BDTR_MOE;frame(0);assert(MotorSampling_Capture());
+    assert(!MotorSampling_GetFrame()->m1_voltage_high_plateau);
+    puts("PASS: voltage plateau metadata snapshots real MOE/CCER and all three PWM widths, edge guard, coast and both pre-arm frames");
+}
 int main(void) {
     check_reference_estimation();
+    check_voltage_plateau();
     /* Drive the real scheduling through JEOS -> stopped TIM6 UPDATE -> DMA.
      * No asynchronous/manual bus publish: this must work before zeroing,
      * after late VBUS connection, and after an actual current fault. */

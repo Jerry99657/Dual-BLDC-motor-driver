@@ -61,6 +61,14 @@ set_property(SOURCE Drivers/STM32G4xx_HAL_Driver/Src/stm32g4xx_hal_spi.c
     Drivers/STM32G4xx_HAL_Driver/Src/stm32g4xx_hal_rcc_ex.c
     Drivers/STM32G4xx_HAL_Driver/Src/stm32g4xx_hal_pwr_ex.c
     TARGET_DIRECTORY STM32_Drivers APPEND PROPERTY COMPILE_OPTIONS -flto)
+# Share generated ADC/timer setup with its HAL helpers as well. Keep -Os, debug
+# symbols and every protection check; the storage recovery/diagnostics must
+# still fit the real 128 KiB device.
+set_property(SOURCE Drivers/STM32G4xx_HAL_Driver/Src/stm32g4xx_hal_adc.c
+    Drivers/STM32G4xx_HAL_Driver/Src/stm32g4xx_hal_adc_ex.c
+    Drivers/STM32G4xx_HAL_Driver/Src/stm32g4xx_hal_tim.c
+    Drivers/STM32G4xx_HAL_Driver/Src/stm32g4xx_hal_tim_ex.c
+    TARGET_DIRECTORY STM32_Drivers APPEND PROPERTY COMPILE_OPTIONS -flto)
 
 # Link directories setup
 target_link_directories(${CMAKE_PROJECT_NAME} PRIVATE
@@ -144,6 +152,9 @@ set_source_files_properties(Core/Src/adc.c Core/Src/tim.c Core/Src/spi.c
 # IRQ dispatch wrappers need no -Og expansion; keep the real-time control
 # and protection paths intact while recovering space on the 128KiB device.
 set_source_files_properties(Core/Src/stm32g4xx_it.c PROPERTIES COMPILE_OPTIONS "-Os")
+# libc platform stubs are not control-loop code; retain symbols while avoiding
+# Debug expansion of the heap and I/O scaffolding.
+set_source_files_properties(Core/Src/syscalls.c Core/Src/sysmem.c PROPERTIES COMPILE_OPTIONS "-Os")
 # Generated USB application glue follows the same size policy as the USB
 # library, with link-time optimization to fit hand-follow planning as well.
 # Debug symbols remain, although optimized locals may not be inspectable.
@@ -182,8 +193,10 @@ target_link_libraries(${CMAKE_PROJECT_NAME}
     # Add user defined libraries
 )
 
-set_source_files_properties(mycode/st_hso.c ThirdParty/ST_HSO/fixpmath.c
-    PROPERTIES COMPILE_OPTIONS "-O2")
+# Keep observer arithmetic at -O2; LTO shares the small startup/accessor hooks
+# with FOC instead of duplicating them in the tightly sized 128 KiB image.
+set_source_files_properties(mycode/st_hso.c PROPERTIES COMPILE_OPTIONS "-O2;-flto")
+set_source_files_properties(ThirdParty/ST_HSO/fixpmath.c PROPERTIES COMPILE_OPTIONS "-O2")
 
 # 让 IDE 的常规构建同步生成最新 BIN，避免只更新 ELF 后误用旧固件。
 add_custom_command(TARGET ${CMAKE_PROJECT_NAME} POST_BUILD

@@ -295,27 +295,67 @@ static uint32_t second_sample_at;
 #define MT6701_2_RETRY_MS 250U
 static volatile uint8_t second_failures;
 static volatile bool second_realtime, second_active, second_reserved, second_flash;
-static volatile bool second_recover;
-static bool second_dma;
+static volatile bool second_recover,second_valid;
+static volatile bool second_dma;
 static uint8_t second_flash_depth;
 static uint8_t second_rx[3], second_tx[3] = {255,255,255};
-static uint32_t second_cr1, second_cr2;
+static volatile uint32_t second_transfer_at;
+static MT6701_2_BusDiagnostics second_bus_diag;
 static uint16_t second_transfer_age;
 static volatile uint16_t second_age = UINT16_MAX;
 
+/* No saved register image: a failed/aborted transfer must never become the
+ * next device's baseline. All owners use 8-bit full duplex, software CS.
+ * Keep HAL's Init fields in agreement with the active hardware mode too. */
+static void second_configure(bool encoder)
+{
+    hspi2.Init.CLKPhase=encoder ? SPI_PHASE_2EDGE : SPI_PHASE_1EDGE;
+    hspi2.Init.BaudRatePrescaler=encoder ? SPI_BAUDRATEPRESCALER_256 : SPI_BAUDRATEPRESCALER_8;
+    hspi2.Init.NSSPMode=SPI_NSS_PULSE_DISABLE;
+    CLEAR_BIT(SPI2->CR1,SPI_CR1_SPE);
+    SPI2->CR2=SPI_DATASIZE_8BIT|SPI_RXFIFO_THRESHOLD_QF;
+    SPI2->CR1=SPI_MODE_MASTER|SPI_NSS_SOFT|hspi2.Init.CLKPhase|hspi2.Init.BaudRatePrescaler;
+}
+static bool second_bus_dirty(void)
+{
+    return hspi2.State!=HAL_SPI_STATE_READY ||
+        (SPI2->SR & (SPI_SR_BSY|SPI_SR_FRLVL|SPI_SR_FTLVL|SPI_SR_OVR|SPI_SR_MODF|SPI_SR_FRE));
+}
+void MT6701_2_BusFault(void)
+{
+    uint32_t mask=__get_PRIMASK(); __disable_irq();
+    if (!second_recover) {
+        second_bus_diag.cr1=(uint16_t)SPI2->CR1;
+        second_bus_diag.cr2=(uint16_t)SPI2->CR2;
+        second_bus_diag.sr=(uint16_t)SPI2->SR;
+        second_recover=true;
+        second_valid=false;
+    }
+    __set_PRIMASK(mask);
+}
+void MT6701_2_GetBusDiagnostics(MT6701_2_BusDiagnostics *out)
+{
+    if (!out) return;
+    uint32_t mask=__get_PRIMASK(); __disable_irq();
+    *out=second_bus_diag;
+    __set_PRIMASK(mask);
+}
 bool MT6701_2_StorageBlocked(void) { return second_reserved; }
 bool MT6701_2_FlashBegin(void)
 {
     uint32_t mask=__get_PRIMASK(); __disable_irq();
-    bool ok=second_flash || (!second_reserved && !second_active &&
-            hspi2.State==HAL_SPI_STATE_READY && !(SPI2->SR & SPI_SR_BSY));
+    bool ok=!second_recover && (second_flash || (!second_reserved && !second_active &&
+            !second_bus_dirty()));
+    if (ok && !second_flash) second_configure(false);
     if (ok) { second_flash=true; ++second_flash_depth; }
     __set_PRIMASK(mask);
     return ok;
 }
 void MT6701_2_FlashEnd(void)
 {
+    uint32_t mask=__get_PRIMASK(); __disable_irq();
     if (second_flash_depth && --second_flash_depth==0U) second_flash=false;
+    __set_PRIMASK(mask);
 }
 bool MT6701_2_Reserve(bool active)
 {
@@ -341,16 +381,11 @@ void MT6701_2_Retry(void)
 static void second_restore(void)
 {
     HAL_GPIO_WritePin(MT6701_CSN2_GPIO_Port, MT6701_CSN2_Pin, GPIO_PIN_SET);
-    CLEAR_BIT(SPI2->CR1,SPI_CR1_SPE);
-    SPI2->CR2=second_cr2;
-    SPI2->CR1=second_cr1;
+    second_configure(false);
 }
 static void second_prepare(void)
 {
-    second_cr1=SPI2->CR1; second_cr2=SPI2->CR2;
-    CLEAR_BIT(SPI2->CR1,SPI_CR1_SPE);
-    MODIFY_REG(SPI2->CR1,SPI_CR1_CPOL|SPI_CR1_CPHA|SPI_CR1_BR,
-               SPI_PHASE_2EDGE|SPI_BAUDRATEPRESCALER_256);
+    second_configure(true);
     HAL_GPIO_WritePin(MT6701_CSN2_GPIO_Port,MT6701_CSN2_Pin,GPIO_PIN_RESET);
 }
 
@@ -377,6 +412,7 @@ static void second_publish(const uint8_t rx[3])
     MT6701_ObserveZero(&second_diag,error,raw,second.raw_angle,second_age,second_sample_at);
     if (error!=MT6701_ERROR_NONE) { MT6701_2_RecordFailure(error); return; }
     second_failures=0U;
+    second_valid=true;
     second.raw_angle=raw;
     second.angle=2.0f*PI-2.0f*PI*(float)raw/16384.0f;
     second_sample_at=HAL_GetTick();
@@ -388,9 +424,10 @@ static void second_complete(bool error)
     if (!second_active || !second_dma || second_recover) return;
     if (error) {
         MT6701_2_RecordFailure(MT6701_ERROR_SPI);
-        second_recover=true; /* HAL/DMA cleanup belongs to main, never ADC. */
+        MT6701_2_BusFault(); /* HAL/DMA cleanup belongs to main, never ADC. */
         return;
     }
+    second_dma=false; /* ADC may preempt decoding, but cannot time out publication. */
     second_publish(second_rx);
     second_restore();
     second_active=false; /* Publish last: ADC may preempt the DMA callback. */
@@ -405,31 +442,51 @@ void MT6701_2_FastService(void)
     if (second_active) {
         if (second_dma && !second_recover && ++second_transfer_age>3U) {
             MT6701_2_RecordFailure(MT6701_ERROR_SPI);
-            second_recover=true;
+            MT6701_2_BusFault();
         }
         return;
     }
-    if (second_failures>=MT6701_2_MAX_CONSECUTIVE_FAILURES || second_flash ||
-        hspi2.State!=HAL_SPI_STATE_READY || (SPI2->SR & SPI_SR_BSY) ||
+    if (second_failures>=MT6701_2_MAX_CONSECUTIVE_FAILURES || second_flash || second_recover ||
+        second_bus_dirty() ||
         HAL_GPIO_ReadPin(W25_NSS_GPIO_Port,W25_NSS_Pin)!=GPIO_PIN_SET) return;
     second_active=true; second_dma=true;
     second_transfer_age=0U;
+    second_transfer_at=HAL_GetTick();
     second_prepare();
     if (HAL_SPI_TransmitReceive_DMA(&hspi2,second_tx,second_rx,3U)!=HAL_OK) {
         MT6701_2_RecordFailure(MT6701_ERROR_SPI);
-        second_recover=true;
+        MT6701_2_BusFault();
     }
 }
 void MT6701_2_Service(uint32_t now_ms)
 {
+    uint32_t mask=__get_PRIMASK(); __disable_irq();
+    /* Still runs if the ADC scheduler stops or M2 is disabled mid-frame. */
+    if (second_active && second_dma && !second_recover && HAL_GetTick()-second_transfer_at>1U) {
+        MT6701_2_RecordFailure(MT6701_ERROR_SPI);
+        MT6701_2_BusFault();
+    }
+    if (!second_active && !second_flash &&
+        HAL_GPIO_ReadPin(W25_NSS_GPIO_Port,W25_NSS_Pin)==GPIO_PIN_SET && second_bus_dirty())
+        MT6701_2_BusFault();
+    __set_PRIMASK(mask);
+    if (second_flash) return;
     if (second_recover) {
-        /* Keep active set until both DMA channels and SPI are quiescent. */
+        /* Hold ownership through abort/reset/init, including stale callbacks.
+         * Abort alone can return READY with BSY/FIFO still dirty. Never restore
+         * a pre-fault snapshot after reset. All blocking work stays in main. */
         (void)HAL_SPI_Abort(&hspi2);
         (void)HAL_SPI_DMAStop(&hspi2);
+        HAL_GPIO_WritePin(W25_NSS_GPIO_Port,W25_NSS_Pin,GPIO_PIN_SET);
         second_restore();
-        uint32_t mask=__get_PRIMASK(); __disable_irq();
+        __HAL_RCC_SPI2_FORCE_RESET();
+        __HAL_RCC_SPI2_RELEASE_RESET();
+        if (HAL_SPI_Init(&hspi2)!=HAL_OK) return;
+        ++second_bus_diag.resets;
+        mask=__get_PRIMASK(); __disable_irq();
         second_recover=false; second_active=false;
         __set_PRIMASK(mask);
+        return; /* Resume sampling on the next scheduler/service invocation. */
     }
     if (second_active || second_flash || second_reserved) return;
     bool stopped=second_failures>=MT6701_2_MAX_CONSECUTIVE_FAILURES;
@@ -438,8 +495,8 @@ void MT6701_2_Service(uint32_t now_ms)
     /* One probe per interval, not a new five-frame burst. Keep DMA halted
      * until the probe passes all frame/CRC/magnetic checks. */
     if (now_ms-second_poll_at<(second_realtime ? MT6701_2_RETRY_MS : 1U)) return;
-    uint32_t mask=__get_PRIMASK(); __disable_irq();
-    if (hspi2.State!=HAL_SPI_STATE_READY || (SPI2->SR & SPI_SR_BSY) ||
+    mask=__get_PRIMASK(); __disable_irq();
+    if (second_bus_dirty() ||
         HAL_GPIO_ReadPin(W25_NSS_GPIO_Port,W25_NSS_Pin)!=GPIO_PIN_SET) {
         __set_PRIMASK(mask); return;
     }
@@ -449,9 +506,12 @@ void MT6701_2_Service(uint32_t now_ms)
     __set_PRIMASK(mask);
     uint8_t rx[3];
     HAL_StatusTypeDef result=HAL_SPI_TransmitReceive(&hspi2,second_tx,rx,3U,1U);
-    if (result!=HAL_OK) (void)HAL_SPI_Abort(&hspi2);
     if (result==HAL_OK) second_publish(rx);
-    else MT6701_2_RecordFailure(MT6701_ERROR_SPI);
+    else {
+        MT6701_2_RecordFailure(MT6701_ERROR_SPI);
+        MT6701_2_BusFault();
+        /* Main owns this polling transfer; release CS, recover next service. */
+    }
     second_restore();
     second_active=false;
 }
@@ -463,7 +523,7 @@ void MT6701_2_GetSnapshot(MT6701_2_Snapshot *out)
     uint32_t at=second_sample_at;
     out->age_cycles=second_age;
     out->stopped=second_failures>=MT6701_2_MAX_CONSECUTIVE_FAILURES;
-    out->healthy=!out->stopped && out->samples!=0U &&
+    out->healthy=second_valid && !second_recover && !out->stopped && out->samples!=0U &&
                  (!second_realtime || second_age<=MT6701_MAX_SAMPLE_AGE_CYCLES);
     __set_PRIMASK(mask);
     out->healthy=out->healthy && HAL_GetTick()-at<=5U;

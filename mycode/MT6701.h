@@ -91,5 +91,12 @@ bool MT6701_2_Reserve(bool active); /* Refuses a live Flash/diagnostic CS. */
 bool MT6701_2_StorageBlocked(void);
 bool MT6701_2_FlashBegin(void);
 void MT6701_2_FlashEnd(void);
+/* Shared SPI2 recovery is deferred to main, never performed while Flash owns
+ * CS or in the control IRQ. The snapshot is taken before abort clears flags. */
+void MT6701_2_BusFault(void);
+typedef struct {
+    uint16_t cr1, cr2, sr, resets;
+} MT6701_2_BusDiagnostics;
+void MT6701_2_GetBusDiagnostics(MT6701_2_BusDiagnostics *out);
 
 #endif /* __MT6701_H_ */

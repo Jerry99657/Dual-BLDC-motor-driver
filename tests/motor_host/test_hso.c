@@ -1,226 +1,307 @@
-/* Test the actual adapter; substitute only the ARM-only ST binary boundary.
- * This does not execute or validate the proprietary observer on a host PC. */
+/* Real sensorless adapter; only proprietary ST ARM binaries are mocked. */
 #include <assert.h>
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
 #include "main.h"
 #include "st_hso.h"
-#include "hso.h"
-#include "impedcorr.h"
-
 HostDwt host_dwt;
 uint32_t host_primask;
-static HSO_Params params;
-static IMPEDCORR_Params iparams;
-static Currents_Iab_t measured_i;
-static Voltages_Uab_t measured_v;
-static float angle, speed_hz=10, flux;
-static unsigned runs, configurations;
-static uint32_t execution_cycles=1000U;
-static int32_t q(float x) { return (int32_t)(x*1073741824.0f); }
-void HSO_setParams(HSO_Handle h,const HSO_Params *p) { (void)h; params=*p; flux=p->Flux_Wb; ++configurations; }
-void HSO_setFlag_TrackAngle(HSO_Handle h,bool x) { (void)h; assert(x); }
-void HSO_setFlag_EnableOffsetUpdate(HSO_Handle h,bool x) { (void)h; assert(x); }
-void HSO_run(HSO_Handle h,Voltages_Uab_t *e,fixp30_t c) {
-    (void)h; (void)e; assert(c==0); ++runs; host_dwt.CYCCNT+=execution_cycles;
-}
-fixp30_t HSO_getAngle_pu(const HSO_Handle h) { (void)h; return q(angle/6.28318530718f); }
-fixp30_t HSO_getEmfSpeed_pu(const HSO_Handle h) { (void)h; return q(speed_hz/1000); }
-fixp30_t HSO_getSpeedLP_pu(const HSO_Handle h) { return HSO_getEmfSpeed_pu(h); }
-fixp30_t HSO_getFluxAmpl_Wb(const HSO_Handle h) { (void)h; return q(flux); }
-IMPEDCORR_Handle IMPEDCORR_init(void *m,size_t n) { assert(n>=sizeof(IMPEDCORR_Obj)); return m; }
-void IMPEDCORR_setParams(IMPEDCORR_Handle h,const IMPEDCORR_Params *p) { (void)h; iparams=*p; }
-void IMPEDCORR_setRs_si(IMPEDCORR_Handle h,float x) { (void)h; assert(x==MOTOR_2804.Rs); }
-void IMPEDCORR_setLs_si(IMPEDCORR_Handle h,float x) { (void)h; assert(x==MOTOR_2804.Ls); }
-Voltages_Uab_t IMPEDCORR_run(IMPEDCORR_Handle h,const Currents_Iab_t *i,const Voltages_Uab_t *v,fixp30_t w) {
-    (void)h; (void)w; measured_i=*i; measured_v=*v; return *v;
-}
+#include "hso_binary_stub.h"
 static MotorSampleFrame frame;
-static float encoder_speed;
-static void step(bool ready,bool encoder) {
+static float sample_bus=20;
+float MotorSampling_GetBusVoltage(void) { return sample_bus; }
+static void step(void) {
+    float a=StHso_ControlAngle(),d=binary_zero_current ? 0 : StHso_CurrentD();
+    frame.m1_current[0]=d*cosf(a);
+    frame.m1_current[1]=d*(-0.5f*cosf(a)+0.86602540378f*sinf(a));
+    frame.m1_current[2]=-frame.m1_current[0]-frame.m1_current[1];
+    for(unsigned i=0;i<3;++i) { frame.m1_current_raw[i]=2048;frame.m1_voltage_raw[i]=1350; }
     ++frame.sequence;
-    StHso_Process(&frame,ready,0,encoder_speed,encoder);
+    StHso_Process(&frame,true,NAN,NAN,false); /* No encoder, ever. */
+}
+static StHsoSnapshot state(void) { StHsoSnapshot s;StHso_GetSnapshot(&s);return s; }
+static void idle(void) { for(unsigned i=0;i<2000;++i) step(); assert(StHso_AtRest()); }
+static void init(void) {
+    frame=(MotorSampleFrame){0}; binary_emf=true;binary_jump=0;binary_zero_current=false;
+    binary_flux=0.012f;binary_d_ripple=binary_phase=0;binary_flux_vary=false;binary_emf_samples=0;
+    binary_frequency_ripple=binary_frequency_bias=binary_phase_rate_hz=0;binary_emf_spikes=false;
+    binary_frequency_square=binary_emf_alternating=false;
+    StHso_Init(&MOTOR_4015); idle();
+}
+static void reach_control(void) {
+    for(unsigned i=0;i<79000 && !StHso_IsUsable();++i) step();
+    StHsoSnapshot s=state();
+    if(!StHso_IsUsable()) fprintf(stderr,"startup state %d reason %d qual %u hz %f angle %f flux %f\n",s.state,s.reason,s.qualified_samples,s.emf_hz,s.angle_error_rad,s.flux_wb);
+    assert(StHso_IsUsable() && StHso_CanTakeover() && s.state==ST_HSO_CONTROL);
+}
+static void capture_start(void) {
+    init();StHsoConfig c;StHso_GetConfig(&c);c.flux_wb=0.012f;
+    assert(StHso_SetConfig(&c));idle();assert(StHso_Start(10));
+    while(state().state!=ST_HSO_CAPTURE) {
+        step();assert(StHso_IsRunning());
+        if(state().state==ST_HSO_ALIGN) assert(!binary_offsets);
+        if(state().state==ST_HSO_RAMP) assert(binary_offsets && binary_track);
+    }
+    for(unsigned i=0;i<999;++i) step(); /* First CAPTURE frame already counted. */
+    assert(!StHso_IsUsable() && state().qualified_samples==0 && binary_offsets);
+    assert(state().emf_offset_v==0 && fabsf(state().emf_offset_limit_v-0.05883f)<1e-6f);
+}
+static double filtered_high(double bus,double duty,double seconds) {
+    /* Independent continuous-time periodic PWM/RC solution, tau=40 us.
+     * t=0 is the centre of the high pulse (TIM1 counter valley). */
+    const double tau=40e-6,T=100e-6;
+    double centre=bus*(1-sinh((1-duty)*T/(2*tau))/sinh(T/(2*tau)));
+    return bus+(centre-bus)*exp(-seconds/tau);
+}
+static void voltage_alignment_tests(void) {
+    const double te=(25+47.5)/42500000.0,tl=te+60/42500000.0;
+    for(unsigned supply=0;supply<2;++supply) for(unsigned vector=0;vector<2;++vector) {
+        init();sample_bus=supply ? 20 : 12;assert(StHso_Start(50));step();
+        double d[]={.5,.5,.5};if(vector) {d[0]=.4;d[1]=.6;d[2]=.55;}
+        double truth[3];
+        for(unsigned i=0;i<3;++i) {
+            truth[i]=filtered_high(sample_bus,d[i],te);
+            double measured=filtered_high(sample_bus,d[i],i==1 ? te : tl);
+            /* Quantize the actual ADC just as on board; keep raw counts. */
+            frame.m1_voltage_raw[i]=(uint16_t)lround(measured/35.86*4095);
+            frame.m1_voltage[i]=(float)frame.m1_voltage_raw[i]*35.86f/4095;
+        }
+        MotorSampleFrame original=frame;
+        double expected_a=(2*truth[0]-truth[1]-truth[2])/3;
+        double expected_b=(truth[1]-truth[2])/sqrt(3.0);
+        frame.m1_voltage_high_plateau=false;++frame.sequence;StHso_Process(&frame,true,NAN,NAN,false);
+        float raw_a=(float)binary_voltage_in.A/1073741824*72.6f;
+        float raw_b=(float)binary_voltage_in.B/1073741824*72.6f;
+        assert(hypot(raw_a-expected_a,raw_b-expected_b)>.09);
+        frame.m1_voltage_high_plateau=true;++frame.sequence;StHso_Process(&frame,true,NAN,NAN,false);
+        float aligned_a=(float)binary_voltage_in.A/1073741824*72.6f;
+        float aligned_b=(float)binary_voltage_in.B/1073741824*72.6f;
+        assert(hypot(aligned_a-expected_a,aligned_b-expected_b)<.009); /* One divider-referred ADC LSB. */
+        for(unsigned i=0;i<3;++i) {
+            assert(frame.m1_voltage_raw[i]==original.m1_voltage_raw[i]);
+            assert(frame.m1_voltage[i]==original.m1_voltage[i]);
+        }
+        /* Unknown/coast/edge metadata must not apply a PWM-source model. */
+        frame.m1_voltage_high_plateau=false;++frame.sequence;StHso_Process(&frame,true,NAN,NAN,false);
+        assert(fabsf((float)binary_voltage_in.A/1073741824*72.6f-raw_a)<1e-5f);
+        assert(fabsf((float)binary_voltage_in.B/1073741824*72.6f-raw_b)<1e-5f);
+    }
+    init();assert(StHso_Start(50));step();frame.m1_voltage_high_plateau=true;
+    sample_bus=NAN;++frame.sequence;StHso_Process(&frame,true,NAN,NAN,false);
+    assert(!StHso_IsRunning() && state().reason==ST_HSO_REASON_SAMPLE);sample_bus=20;
+    puts("PASS: actual adapter against independent periodic PWM/RC/ADC model at 12/20 V, zero and differential vectors, <1 ADC-LSB alignment error, raw preservation, edge/coast bypass and invalid bus rejection");
+}
+static float wrapped(float a) { return atan2f(sinf(a),cosf(a)); }
+static void phase_capture_tests(void) {
+    /* The user's -28.8 deg offset and mirror-image reverse rotation are
+     * admissible only if stable. Test with independent derivative ripple,
+     * across electrical wraps; current-vector continuity includes dq rotation. */
+    for(unsigned direction=0;direction<2;++direction) {
+        init();StHsoConfig c;StHso_GetConfig(&c);c.flux_wb=0.012f;
+        assert(StHso_SetConfig(&c));idle();
+        binary_jump=direction ? 0.502654825f : -0.502654825f;
+        assert(StHso_Start(direction ? -10 : 10));
+        binary_frequency_ripple=3;reach_control();
+        assert(fabsf(state().angle_error_rad)>0.4363f && state().capture_resets==0);
+        binary_frequency_ripple=0;
+        float start=StHso_ControlAngle(),offset=wrapped(state().angle_rad-start);
+        float previous_d,previous_q=0;
+        StHso_BlendCurrent(&previous_d,&previous_q);
+        assert(fabsf(previous_d-0.6f)<1e-5f && previous_q==0);
+        for(unsigned i=1;i<=1000;++i) {
+            step();assert(StHso_IsUsable());
+            float d,q=0;StHso_BlendCurrent(&d,&q);
+            /* With zero requested speed-PI torque, the remaining I/F vector
+             * must retain its original direction, not rotate with the frame. */
+            float expected_angle=wrapped(state().angle_rad-offset);
+            if (i<1000) {
+                assert(fabsf(wrapped(StHso_ControlAngle()+atan2f(q,d)-expected_angle))<1e-5f);
+                assert(fabsf(hypotf(d,q)-0.6f*(1-(float)i/1000))<1e-5f);
+            }
+            assert(fabsf(d-previous_d)<0.002f && fabsf(q-previous_q)<0.002f);
+            previous_d=d;previous_q=q;
+            q=direction ? -MOTOR_4015.rated_current : MOTOR_4015.rated_current;
+            StHso_BlendCurrent(&d,&q);
+            assert(hypotf(d,q)<=MOTOR_4015.rated_current+1e-5f);
+        }
+        assert(previous_d==0 && previous_q==0);
+    }
+    /* A small frequency slip can pass the old 15% frequency test but cannot
+     * stay in a fixed 10-degree phase window for 200 ms. Never certify it by
+     * moving the phase reference along with the drifting observer. */
+    capture_start();binary_phase_rate_hz=0.25f;bool saw_drift=false;
+    for(unsigned i=0;i<21000 && StHso_IsRunning();++i) {
+        step();StHsoSnapshot s=state();
+        if(s.capture_reason==ST_HSO_REASON_PHASE_DRIFT) {
+            saw_drift=true;assert(fabsf(s.capture_drift_rad)>0.1745f);
+        }
+        assert(!StHso_IsUsable());
+    }
+    assert(saw_drift && state().reason==ST_HSO_REASON_CAPTURE_TIMEOUT);
+    /* Bounded but oscillatory phase (15 deg, 5 Hz) is also not stable enough;
+     * its derivative is <=1.31 Hz, entirely within the +/-2.25 Hz gate. */
+    capture_start();saw_drift=false;
+    for(unsigned i=0;i<21000 && StHso_IsRunning();++i) {
+        float p=(float)i*0.00314159265359f;
+        binary_jump=0.261799388f*sinf(p);binary_frequency_bias=1.30899694f*cosf(p);
+        step();saw_drift |= state().capture_reason==ST_HSO_REASON_PHASE_DRIFT;
+        assert(!StHso_IsUsable());
+    }
+    assert(saw_drift && state().reason==ST_HSO_REASON_CAPTURE_TIMEOUT);
+    /* User-like speed bias still refuses takeover despite a steady angle:
+     * accepting a load-angle offset does not waive independent frequency. */
+    capture_start();binary_jump=-0.502654825f;binary_frequency_bias=-2.3f;
+    for(unsigned i=0;i<21000 && StHso_IsRunning();++i)step();
+    assert(!StHso_IsUsable() && state().reason==ST_HSO_REASON_CAPTURE_TIMEOUT &&
+           state().capture_reason==ST_HSO_REASON_FREQUENCY);
+    puts("PASS: stable +/-28.8 deg I/F offsets with frequency ripple, both directions/wraps, continuous 50 ms frame + 100 ms dq vector crossfade/current bound; phase drift/oscillation and sustained frequency bias cannot take over (ST binaries mocked)");
+}
+static void capture_tests(void) {
+    /* Flux learning may complete just before the old shared 6 s deadline.
+     * CAPTURE still needs its full settle + quality window, with a separate
+     * bounded lock deadline. No-EMF learning itself still expires at 6 s. */
+    init();binary_emf=false;assert(StHso_Start(10));
+    while(state().state!=ST_HSO_LEARNING) {step();assert(StHso_IsRunning());}
+    unsigned cycle=(unsigned)lroundf(10000/fabsf(binary_hz));
+    for(unsigned i=0;i<50U*cycle-1U;++i)step();
+    binary_emf=true;reach_control();
+    assert(binary_emf_samples>60000 && binary_emf_samples<62000);
+    /* Raw derivative ripple +/-3 Hz (angle ripple +/-3.44 deg) repeatedly
+     * violates R49's +/-2.25 Hz gate for >2 ms. Its independent mean remains
+     * 15 Hz. No tolerance, virtual angle or forced frequency is substituted. */
+    capture_start();binary_frequency_ripple=3;reach_control();
+    for(unsigned i=0;i<2000;++i)step();
+    assert(StHso_IsUsable()); /* Existing CONTROL checks also hold in this model. */
+    capture_start();binary_emf_spikes=true;reach_control();
+    for(unsigned i=0;i<2000;++i)step();
+    assert(StHso_IsUsable());
+    /* <=1% brief phase outliers fit the bounded 200 ms admission window. */
+    capture_start();
+    for(unsigned i=0;i<2100 && !StHso_IsUsable();++i) {binary_jump=i%100U==0 ? 0.6f : 0;step();}
+    binary_jump=0;assert(StHso_IsUsable() && state().capture_resets==0 && state().qualified_samples==2000);
+    /* 10% bad frames, with no consecutive pair: old unlimited good-sample
+     * accumulation could admit this. The new total-error budget must not. */
+    capture_start();
+    for(unsigned i=0;i<60001 && StHso_IsRunning();++i) {binary_jump=i%10U==0 ? 0.6f : 0;step();}
+    StHsoSnapshot s=state();
+    assert(!StHso_IsRunning() && s.reason==ST_HSO_REASON_CAPTURE_TIMEOUT && s.capture_resets>0);
+    assert(s.capture_reason==ST_HSO_REASON_PHASE_DRIFT && s.entry_reason==ST_HSO_REASON_PHASE_DRIFT);
+    assert(fabsf(s.capture_angle_rad-0.6f)<0.02f && fabsf(s.capture_frequency_error_hz)<0.02f &&
+           fabsf(s.capture_emf_ratio-1)<0.01f);
+    /* Exactly 20 consecutive bad frames still reset; a subsequent good frame
+     * cannot erase the rejection record. Sampling/drive do not auto-restart. */
+    capture_start();binary_jump=0.6f;for(unsigned i=0;i<20;++i)step();
+    s=state();assert(s.capture_resets==1 && s.qualified_samples==0 && s.capture_reason==ST_HSO_REASON_PHASE_DRIFT);
+    binary_jump=0;step();assert(state().reason==ST_HSO_REASON_NONE && state().entry_reason==ST_HSO_REASON_PHASE_DRIFT);
+    assert(state().capture_resets==1 && fabsf(state().capture_angle_rad-s.capture_angle_rad)<1e-6f);
+    reach_control();
+    /* Filtering must not admit sustained frequency/phase/amplitude errors. */
+    capture_start();binary_frequency_bias=-3;
+    for(unsigned i=0;i<60001 && StHso_IsRunning();++i)step();
+    s=state();assert(s.reason==ST_HSO_REASON_CAPTURE_TIMEOUT && s.capture_reason==ST_HSO_REASON_FREQUENCY);
+    assert(fabsf(s.capture_frequency_error_hz+3)<0.02f && !s.usable);
+    capture_start();binary_jump=1.2f; /* Beyond finite 60-degree startup bound. */
+    for(unsigned i=0;i<60001 && StHso_IsRunning();++i)step();
+    assert(state().reason==ST_HSO_REASON_CAPTURE_TIMEOUT && state().capture_reason==ST_HSO_REASON_ANGLE);
+    capture_start();binary_emf=false;
+    for(unsigned i=0;i<60001 && StHso_IsRunning();++i)step();
+    s=state();assert(s.reason==ST_HSO_REASON_CAPTURE_TIMEOUT && s.capture_reason==ST_HSO_REASON_FLUX && s.capture_emf_ratio<0.01f);
+    /* A valid filtered mean alone cannot take over: require an actual good
+     * current frame too. Alternating out-of-range raw inputs never get one. */
+    for(unsigned k=0;k<2;++k) {
+        capture_start();binary_frequency_square=k==0;binary_emf_alternating=k==1;
+        for(unsigned i=0;i<60001 && StHso_IsRunning();++i)step();
+        s=state();assert(!s.usable && s.reason==ST_HSO_REASON_CAPTURE_TIMEOUT);
+        assert(s.qualified_samples==2000 && s.capture_resets==0);
+        assert(s.entry_reason==(k==0 ? ST_HSO_REASON_FREQUENCY : ST_HSO_REASON_FLUX));
+    }
+    puts("PASS: CAPTURE frequency/energy ripple filtering, 100 ms settle + bounded 200 ms quality window, 2.5% total/2 ms run limits, raw final-frame entry, persistent reset cause/angle/frequency/energy diagnostics, sustained faults rejected (ST binaries mocked)");
 }
 int main(void) {
-    StHso_Init(&MOTOR_2804);
-    for(unsigned i=0;i<3;++i) { frame.m1_current_raw[i]=2048; frame.m1_voltage_raw[i]=1350; }
-    frame.m1_voltage[0]=15; frame.m1_voltage[1]=9; frame.m1_voltage[2]=12;
-    frame.m1_current[0]=0.5f; frame.m1_current[1]=-0.25f;
-    StHsoSnapshot s;
-    step(false,true); StHso_GetSnapshot(&s); assert(s.state==ST_HSO_WAIT_SAMPLE && runs==0);
-    step(true,true); StHso_GetSnapshot(&s); assert(s.state==ST_HSO_WAIT_PARAM && runs==0);
-    StHsoConfig c; StHso_GetConfig(&c);
-    assert(c.voltage_pole_rps==25000 && fabsf(c.sample_delay_cycles-0.019f)<1e-6f);
-    c.flux_wb=NAN; assert(!StHso_SetConfig(&c));
-    c.flux_wb=0.003f;
-    /* Size-optimized ordered bounds must still reject every non-finite
-     * configuration field; invalid requests cannot publish new parameters. */
+    init(); assert(!StHso_Start(0) && !StHso_Start(1) && !StHso_Start(NAN));
+    assert(state().emf_offset_v==0 && state().emf_offset_limit_v==0); /* No configured observer yet. */
+    StHsoConfig c; StHso_GetConfig(&c); assert(c.flux_wb==0);
     assert(!StHso_SetConfig(NULL));
-    StHsoConfig bad=c;
-    float *fields[]={&bad.rs_ohm,&bad.ls_h,&bad.flux_wb,&bad.voltage_pole_rps,&bad.sample_delay_cycles};
-    const float nonfinite[]={NAN,INFINITY,-INFINITY};
-    for(unsigned i=0;i<5;++i) for(unsigned j=0;j<3;++j) {
-        bad=c; *fields[i]=nonfinite[j]; assert(!StHso_SetConfig(&bad));
+    for(unsigned field=0;field<5;++field) for(unsigned kind=0;kind<3;++kind) {
+        StHsoConfig bad=c;float *v[]={&bad.rs_ohm,&bad.ls_h,&bad.flux_wb,&bad.voltage_pole_rps,&bad.sample_delay_cycles};
+        *v[field]=kind==0 ? NAN : kind==1 ? INFINITY : -INFINITY;assert(!StHso_SetConfig(&bad));
     }
-    assert(StHso_SetConfig(&c));
-    step(true,true); assert(runs==1 && configurations==1);
-    assert(params.Flux_Wb==0.003f && params.FullScaleVoltage_V==72.6f);
-    assert(iparams.cycleFreq_Hz==10000 && iparams.fullScaleCurrent_A==6.6f);
-    assert(fabsf(measured_i.A/1073741824.0f-0.5f/6.6f)<1e-6f && measured_i.B==0);
-    assert(fabsf(measured_v.A/1073741824.0f-3.0f/72.6f)<1e-6f);
-    assert(fabsf(measured_v.B/1073741824.0f+3.0f*0.577350269f/72.6f)<1e-6f);
-    /* Common-mode shift cannot change alpha/beta. */
-    Voltages_Uab_t before=measured_v;
-    for(unsigned i=0;i<3;++i) frame.m1_voltage[i]+=5;
-    step(true,true); assert(before.A==measured_v.A && before.B==measured_v.B);
-    encoder_speed=10.0f*6.28318530718f/7;
-    /* Reproduce the user's ~24 ms reset loop: occasional small angle spikes
-     * pause, do not earn progress, and do not erase the existing good samples. */
-    step(true,false);
-    for(unsigned i=0;i<1999;++i) {
-        angle=(i&1)?-0.08f:0.24f; step(true,true);
-        if((i+1)%240==0) { angle=0.30f; step(true,true); }
+    assert(StHso_Start(10) && StHso_IsStarting() && StHso_CurrentD()==0);
+    for(unsigned i=0;i<2500;++i) step();
+    assert(!binary_offsets); /* Alignment remains frozen, unlike rotating CAPTURE. */
+    assert(fabsf(StHso_CurrentD()-0.6f)<1e-5f);
+    assert(!StHso_SetConfig(&c) && !StHso_LearnFlux());
+    reach_control();StHso_GetConfig(&c);assert(fabsf(c.flux_wb-0.012f)<0.00002f);
+    assert(fabsf(c.sample_delay_cycles-60.0f/42500000*10000)<1e-7f);
+    assert(fabsf(binary_ip.KsampleDelay-c.sample_delay_cycles)<1e-7f);
+    assert(binary_offsets);
+    assert(binary_ip.cycleFreq_Hz==10000 && binary_ip.fullScaleCurrent_A==6.6f && binary_params.FullScaleVoltage_V==72.6f);
+    assert(!StHso_Start(-10) && !StHso_ValidTarget(-10));
+    for(unsigned i=0;i<1000;++i)step();
+    assert(StHso_CurrentD()==0);
+    binary_jump=1.0f;step();assert(!StHso_IsRunning() && state().reason==ST_HSO_REASON_ANGLE);
+    StHso_Stop();binary_jump=0;idle();assert(!StHso_IsRunning());
+    assert(StHso_Start(10));reach_control();binary_emf=false;
+    for(unsigned i=0;i<20;++i)step();
+    assert(!StHso_IsRunning() && state().reason==ST_HSO_REASON_FLUX);
+    StHso_Stop();binary_emf=true;idle();
+    assert(StHso_Start(-10));reach_control();assert(StHso_ControlVelocity()<0);
+    StHso_Process(&frame,false,0,0,false);assert(!StHso_IsRunning() && state().reason==ST_HSO_REASON_SAMPLE);
+    StHso_Stop();idle();assert(StHso_Start(10));step();frame.sequence+=2;step();
+    assert(!StHso_IsRunning() && state().reason==ST_HSO_REASON_SEQUENCE);
+    init();binary_emf=false;assert(StHso_Start(10));
+    for(unsigned i=0;i<60001;++i)step();
+    assert(!StHso_IsRunning() && state().reason==ST_HSO_REASON_LEARN_TIMEOUT);
+    assert(state().entry_reason==ST_HSO_REASON_FLUX);
+    init();StHso_GetConfig(&c);c.flux_wb=0.012f;assert(StHso_SetConfig(&c));idle();
+    binary_emf=false;assert(StHso_Start(10));
+    for(unsigned i=0;i<60001;++i)step();
+    assert(!StHso_IsRunning() && state().reason==ST_HSO_REASON_CAPTURE_TIMEOUT);
+    init();binary_zero_current=true;assert(StHso_Start(10));
+    for(unsigned i=0;i<10000;++i)step();
+    assert(!StHso_IsRunning() && state().reason==ST_HSO_REASON_STARTUP);
+    init();assert(StHso_Start(10));step();StHso_RecordControlCycles(17000);
+    assert(!StHso_IsRunning() && state().reason==ST_HSO_REASON_TIMING);
+    init();assert(StHso_Start(10));step();frame.m1_voltage[0]=NAN;++frame.sequence;
+    StHso_Process(&frame,true,0,0,false);assert(!StHso_IsRunning() && state().reason==ST_HSO_REASON_RANGE);
+    init();StHso_Stop();frame.m1_voltage[0]=2;
+    for(unsigned i=0;i<3000;++i)step();
+    assert(!StHso_AtRest() && !StHso_Start(10));
+    frame.m1_voltage[0]=0;idle();StHso_Enable(false);assert(!StHso_Start(10));
+    /* Instantaneous d/q phase is invalid on EVERY sample. Zero-mean EMI/PWM
+     * ripple must average out without selecting only favourable samples. */
+    init();binary_d_ripple=0.8f;assert(StHso_Start(10));reach_control();
+    StHso_GetConfig(&c);assert(fabsf(c.flux_wb-0.012f)<0.00002f);
+    init();binary_d_ripple=0.8f;assert(StHso_Start(-10));reach_control();
+    StHso_GetConfig(&c);assert(fabsf(c.flux_wb-0.012f)<0.00002f);
+    /* The 5 Hz low target uses full 200 ms cycles; enough bounded time remains
+     * for settling + at least 1 s of accepted estimates + HSO qualification. */
+    init();binary_d_ripple=0.8f;assert(StHso_Start(3));reach_control();
+    /* Finite, stable measurements still must pass strength/direction/phase. */
+    const float phases[]={0,3.14159265359f,1.0471975512f};
+    const StHsoReason gates[]={ST_HSO_REASON_EMF_LOW,ST_HSO_REASON_FREQUENCY,ST_HSO_REASON_ANGLE};
+    for(unsigned k=0;k<3;++k) {
+        init();binary_phase=phases[k];if(k==0) binary_flux=0.0005f;
+        assert(StHso_Start(10));
+        for(unsigned i=0;i<60001;++i) step();
+        assert(!StHso_IsRunning() && state().reason==ST_HSO_REASON_LEARN_TIMEOUT && state().entry_reason==gates[k]);
+        assert(state().flux_wb>0);StHso_GetConfig(&c);assert(c.flux_wb==0);
     }
-    StHso_GetSnapshot(&s);
-    assert(!StHso_IsUsable() && s.qualified_samples==1999 && s.qualify_paused_samples==8);
-    angle=0; step(true,true); assert(StHso_IsUsable() && StHso_CanTakeover());
-    /* Never qualify on a sustained 17-degree error. */
-    step(true,false); angle=0.30f;
-    for(unsigned i=0;i<3000;++i) step(true,true);
-    assert(!StHso_IsUsable()); StHso_GetSnapshot(&s); assert(s.qualified_samples==0);
-    angle=0;
-    for(unsigned i=0;i<100;++i) step(true,true);
-    angle=0.30f;
-    for(unsigned i=0;i<10;++i) step(true,true);
-    StHso_GetSnapshot(&s);
-    assert(s.qualified_samples==100 && s.qualify_bad_run==10);
-    step(true,true); StHso_GetSnapshot(&s);
-    assert(s.qualified_samples==0 && s.qualify_bad_run==0);
-    assert(fabsf(s.qualify_reset_angle_rad-0.30f)<0.00001f);
-    /* An attempt has a fixed total pause budget, even for isolated spikes. */
-    for(unsigned i=0;i<50;++i) { angle=0; step(true,true); angle=0.30f; step(true,true); }
-    StHso_GetSnapshot(&s); assert(s.qualified_samples==50 && s.qualify_paused_samples==50);
-    angle=0; step(true,true); angle=0.30f; step(true,true);
-    StHso_GetSnapshot(&s); assert(s.qualified_samples==0 && s.qualify_paused_samples==0);
-    angle=0; step(true,true); angle=0.36f; step(true,true);
-    StHso_GetSnapshot(&s); assert(s.qualified_samples==0); /* >=20 deg resets immediately. */
-    /* ANGLE's first-reason label cannot mask a simultaneous frequency/flux failure. */
-    angle=0; step(true,true); angle=0.30f; speed_hz=13.1f; step(true,true);
-    StHso_GetSnapshot(&s); assert(s.qualified_samples==0 && s.qualify_paused_samples==0);
-    speed_hz=10; angle=0; step(true,true); angle=0.30f; flux=0.005f; step(true,true);
-    StHso_GetSnapshot(&s); assert(s.qualified_samples==0 && s.qualify_paused_samples==0);
-    flux=c.flux_wb; angle=0;
-    for(unsigned i=0;i<2000;++i) step(true,true);
-    assert(StHso_IsUsable() && StHso_CanTakeover());
-    /* Admission remains strict, but 15-degree boundary jitter no longer
-     * destroys a qualified observer. A new Use must still check this frame. */
-    angle=0.28f;
-    for(unsigned i=0;i<200;++i) step(true,true);
-    assert(StHso_IsUsable() && !StHso_CanTakeover());
-    StHso_GetSnapshot(&s);
-    assert(s.bad_samples==0 && s.entry_reason==ST_HSO_REASON_ANGLE);
-    angle=0.1f; step(true,true); assert(StHso_CanTakeover());
-    /* Brief hold-envelope spikes recover; 20 consecutive failures lose lock. */
-    angle=0.53f;
-    for(unsigned i=0;i<19;++i) step(true,true);
-    assert(StHso_IsUsable()); StHso_GetSnapshot(&s); assert(s.bad_samples==19);
-    angle=0; step(true,true);
-    assert(StHso_IsUsable()); StHso_GetSnapshot(&s); assert(s.bad_samples==0);
-    angle=0.53f;
-    for(unsigned i=0;i<20;++i) step(true,true);
-    assert(!StHso_IsUsable()); StHso_GetSnapshot(&s);
-    assert(s.reason==ST_HSO_REASON_ANGLE && s.bad_samples==20);
-    angle=0;
-    for(unsigned i=0;i<1999;++i) step(true,true);
-    assert(!StHso_IsUsable());
-    step(true,true);
-    assert(StHso_IsUsable());
-    /* A severe angle error must not wait for the 2 ms confirmation. */
-    angle=0.80f; step(true,true); assert(!StHso_IsUsable());
-    StHso_GetSnapshot(&s); assert(s.reason==ST_HSO_REASON_ANGLE);
-    angle=0;
-    for(unsigned i=0;i<2000;++i) step(true,true);
-    /* Frequency/flux hold failures have their own diagnosable causes. */
-    speed_hz=13.1f;
-    for(unsigned i=0;i<19;++i) step(true,true);
-    assert(StHso_IsUsable()); step(true,true); assert(!StHso_IsUsable());
-    StHso_GetSnapshot(&s); assert(s.reason==ST_HSO_REASON_FREQUENCY);
-    speed_hz=10;
-    for(unsigned i=0;i<2000;++i) step(true,true);
-    flux=0.005f;
-    for(unsigned i=0;i<20;++i) step(true,true);
-    assert(!StHso_IsUsable()); StHso_GetSnapshot(&s); assert(s.reason==ST_HSO_REASON_FLUX);
-    flux=c.flux_wb;
-    for(unsigned i=0;i<2000;++i) step(true,true);
-    speed_hz=-10; step(true,true); assert(!StHso_IsUsable());
-    StHso_GetSnapshot(&s); assert(s.reason==ST_HSO_REASON_FREQUENCY);
-    speed_hz=10;
-    for(unsigned i=0;i<2000;++i) step(true,true);
-    step(true,false); assert(!StHso_IsUsable());
-    StHso_GetSnapshot(&s); assert(s.reason==ST_HSO_REASON_ENCODER);
-    frame.sequence+=3; step(true,true); assert(configurations==2 && !StHso_IsUsable());
-    StHso_GetSnapshot(&s); assert(s.reason==ST_HSO_REASON_SEQUENCE);
-    frame.m1_voltage_raw[1]=4095; unsigned old_runs=runs;
-    step(true,true); StHso_GetSnapshot(&s); assert(s.state==ST_HSO_INPUT_RANGE && runs==old_runs);
-    frame.m1_voltage_raw[1]=1350; step(true,true); assert(configurations==3);
-    execution_cycles=18000; step(true,true); StHso_GetSnapshot(&s); assert(s.max_cycles==18000);
-    StHso_RecordControlCycles(18000); StHso_GetSnapshot(&s); assert(s.overruns==1);
-    execution_cycles=1000;
-    StHso_Enable(false); step(true,true); StHso_GetSnapshot(&s); assert(s.state==ST_HSO_OFF && !StHso_LearnFlux());
-    StHso_Enable(true);
-    /* Synthetic steady state: q EMF = omega*psi; include the known RC lag.
-     * Learner must recover physical Wb, not 2*pi-scaled MCSDK ratedFlux. */
-    c.flux_wb=0; c.sample_delay_cycles=0.2f; assert(StHso_SetConfig(&c));
-    float omega=encoder_speed*7, true_flux=0.003f, lag=omega/c.voltage_pole_rps;
-    float id=-0.1f, iq=0.2f;
-    float actual_d=c.rs_ohm*id-omega*c.ls_h*iq;
-    float actual_q=c.rs_ohm*iq+omega*(true_flux+c.ls_h*id);
-    float filtered_d=(actual_d+lag*actual_q)/(1+lag*lag);
-    float filtered_q=(actual_q-lag*actual_d)/(1+lag*lag);
-    float advance=omega*c.sample_delay_cycles*0.0001f;
-    float vd=filtered_d*cosf(advance)-filtered_q*sinf(advance);
-    float vq=filtered_d*sinf(advance)+filtered_q*cosf(advance);
-    frame.m1_voltage[0]=12+vd;
-    frame.m1_voltage[1]=12-0.5f*vd+0.86602540378f*vq;
-    frame.m1_voltage[2]=12-0.5f*vd-0.86602540378f*vq;
-    frame.m1_current[0]=id;
-    frame.m1_current[1]=-0.5f*id+0.86602540378f*iq;
-    frame.m1_current[2]=-frame.m1_current[0]-frame.m1_current[1];
-    assert(StHso_LearnFlux());
-    for(unsigned i=0;i<10000;++i) step(true,true);
-    StHso_GetConfig(&c); assert(fabsf(c.flux_wb-true_flux)<0.000002f);
-    step(true,true); StHso_GetSnapshot(&s); assert(s.reference_flux_wb>0 && s.state!=ST_HSO_LEARNING);
-    /* Negative rotation uses signed omega, not absolute speed. */
-    encoder_speed=-encoder_speed; speed_hz=-speed_hz;
-    for(unsigned i=0;i<2000;++i) step(true,true);
-    assert(StHso_IsUsable() && StHso_Velocity()<0);
-    /* Hard safety conditions bypass confirmation even after qualification. */
-    float saved_encoder_speed=encoder_speed;
-    encoder_speed=NAN; step(true,true); StHso_GetSnapshot(&s);
-    assert(!StHso_IsUsable() && s.reason==ST_HSO_REASON_NUMERIC);
-    encoder_speed=0; step(true,true); StHso_GetSnapshot(&s);
-    assert(!StHso_IsUsable() && s.reason==ST_HSO_REASON_SPEED);
-    encoder_speed=saved_encoder_speed;
-    for(unsigned i=0;i<2000;++i) step(true,true);
-    assert(StHso_IsUsable());
-    frame.sequence+=2; step(true,true); StHso_GetSnapshot(&s);
-    assert(!StHso_IsUsable() && s.reason==ST_HSO_REASON_SEQUENCE);
-    for(unsigned i=0;i<2000;++i) step(true,true);
-    assert(StHso_IsUsable());
-    step(false,true); StHso_GetSnapshot(&s);
-    assert(!StHso_IsUsable() && s.reason==ST_HSO_REASON_SAMPLE);
-    for(unsigned i=0;i<2000;++i) step(true,true);
-    assert(StHso_IsUsable());
-    StHso_RecordControlCycles(17500); StHso_GetSnapshot(&s);
-    assert(!StHso_IsUsable() && s.state==ST_HSO_TIMING && s.max_control_cycles==18000);
-    assert(s.reason==ST_HSO_REASON_TIMING);
-    /* A motor switch discards learned flux, usability and old timing state. */
-    StHso_Init(&MOTOR_4015); StHso_GetSnapshot(&s); StHso_GetConfig(&c);
-    assert(!StHso_IsUsable() && s.qualified_samples==0 && s.max_control_cycles==0);
-    assert(s.state==ST_HSO_WAIT_PARAM && c.rs_ohm==1.8f && c.ls_h==0.0013f && c.flux_wb==0);
-    step(true,true); assert(!StHso_IsUsable());
-    host_primask=1; StHso_GetSnapshot(&s); assert(host_primask==1);
-    puts("PASS: HSO scaling/learning, strict admission, hold hysteresis/2ms confirmation, hard faults, reason diagnostics, sequence gaps, ADC clipping, timing (ST binary mocked)");
+    init();binary_flux_vary=true;assert(StHso_Start(10));bool saw_ripple=false;
+    for(unsigned i=0;i<60001;++i) {step();saw_ripple |= state().entry_reason==ST_HSO_REASON_FLUX_RIPPLE;}
+    StHso_GetConfig(&c);assert(saw_ripple && !StHso_IsRunning() && c.flux_wb==0);
+    assert(state().entry_reason==ST_HSO_REASON_FLUX_RIPPLE);
+    assert(!strcmp(StHso_ReasonText(ST_HSO_REASON_EMF_LOW),"EMF LOW"));
+    assert(!strcmp(StHso_ReasonText(ST_HSO_REASON_LEARN_TIMEOUT),"FLUX TIMEOUT"));
+    for(unsigned reason=0;reason<=ST_HSO_REASON_PHASE_DRIFT;++reason)
+        assert(strlen(StHso_ReasonText((StHsoReason)reason))<16U);
+    for(unsigned state_id=0;state_id<=ST_HSO_FAULT;++state_id)
+        assert(strlen(StHso_StateText((StHsoState)state_id))<16U);
+    capture_tests();
+    phase_capture_tests();
+    voltage_alignment_tests();
+    puts("PASS: whole-electrical-cycle EMF averages, no favourable-sample selection, zero-mean phase ripple in both directions and low speed, finite candidate diagnostics, strength/direction/phase/variance rejection, timeout retains failing gate (ST binaries mocked)");
+    puts("PASS: encoder-free RsDC-style current alignment, I/F flux bootstrap, qualified HSO takeover, both directions, current ramp, no-EMF/alignment timeout, sample/sequence/range/timing/angle faults, idle admission and explicit restart (ST binaries mocked)");
     return 0;
 }

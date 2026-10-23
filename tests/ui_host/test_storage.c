@@ -16,6 +16,9 @@ void MT6701_2_FlashEnd(void) {}
 uint32_t HAL_GetTick(void) { return tick; }
 bool W25Q_Init(void) { return true; }
 uint32_t W25Q_ReadID(void) { return 0xEF4017; }
+uint32_t W25Q_LastFailure(void) { return 0x06010402U; }
+bool W25Q_LastFailureBusy(void) { return false; }
+uint8_t W25Q_LastStatus(void) { return 1; }
 bool W25Q_Read(uint32_t addr, uint8_t *data, uint32_t len) {
     assert((int32_t)(tick-busy_until)>=0);
     assert(addr+len<=sizeof(flash)); memcpy(data,flash+addr,len);
@@ -91,9 +94,11 @@ int main(void) {
     AppStorage_Get()->speed_x10=321; assert(AppStorage_RequestSave());
     service(10); tick=busy_until; assert(AppStorage_Init());
     assert(AppStorage_Get()->speed_x10==789);
-    fail_program=true; assert(AppStorage_RequestSave()); service(50); assert(!result());
+    fail_program=true; assert(AppStorage_RequestSave()); service(100); assert(!result());
+    assert(!strcmp(AppStorage_SaveErrorText(),"Save WRITE"));
     fail_program=false; assert(AppStorage_RequestSave()); service(50); assert(result()); service(10);
-    corrupt_read=true; assert(AppStorage_RequestSave()); service(50); assert(!result());
+    corrupt_read=true; assert(AppStorage_RequestSave()); service(100); assert(!result());
+    assert(!strcmp(AppStorage_SaveErrorText(),"Save VERIFY"));
     corrupt_read=false; service(20); assert(AppStorage_Init());
     /* Queued logs rotate across sector boundary without synchronous waits. */
     for(unsigned i=0;i<150;++i) {

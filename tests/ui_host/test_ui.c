@@ -19,6 +19,10 @@ GPIO_TypeDef host_gpio = {0xFFFFU};
 static uint32_t tick, dma_done;
 static bool dma_busy, healthy = true, aligned = true, drive_ready = true;
 static bool hso_active, hso_fault;
+static const char *save_error="Save OK";
+static bool save_result_ready,save_success;
+static uint32_t flash_error;
+static StHsoSnapshot hso_snapshot={.state=ST_HSO_WAIT_PARAM};
 static bool bus_data = true;
 static bool reference_data = true, reference_seen = true;
 static float bus_voltage = 24.0f;
@@ -60,9 +64,18 @@ uint8_t JerryFOC_useHSO(uint8_t en) {
     if(!en) { hso_fault=false; JerryFOC_Target_Iq=JerryFOC_Target_Velocity=0; }
     return 1;
 }
-void StHso_GetSnapshot(StHsoSnapshot *out) { *out=(StHsoSnapshot){.state=ST_HSO_WAIT_PARAM}; }
-const char *StHso_StateText(StHsoState state) { (void)state; return "WAIT FLUX"; }
-const char *StHso_ReasonText(StHsoReason reason) { (void)reason; return "OK"; }
+void StHso_GetSnapshot(StHsoSnapshot *out) { *out=hso_snapshot; }
+bool StHso_IsStarting(void) { return hso_active && hso_snapshot.state!=ST_HSO_CONTROL; }
+const char *StHso_StateText(StHsoState state) {
+    return state==ST_HSO_LEARNING ? "I/F FLUX" : state==ST_HSO_CONTROL ? "CONTROL" : "WAIT FLUX";
+}
+const char *StHso_ReasonText(StHsoReason reason) {
+    if(reason==ST_HSO_REASON_EMF_LOW) return "EMF LOW";
+    if(reason==ST_HSO_REASON_LEARN_TIMEOUT) return "FLUX TIMEOUT";
+    if(reason==ST_HSO_REASON_ANGLE) return "ANGLE";
+    if(reason==ST_HSO_REASON_PHASE_DRIFT) return "PHASE DRIFT";
+    return "OK";
+}
 float JerryFOC_getBusVoltage(void) { return bus_voltage; }
 const char *MotorSampling_GetStatusText(void) { return drive_ready ? "READY" : unready_status; }
 void MotorSampling_GetDiagnostics(MotorSamplingDiagnostics *out) {
@@ -78,6 +91,9 @@ uint16_t MT6701_GetRawAngle(void) { return 123; }
 uint32_t MT6701_GetErrorCounter(void) { return enc_diag.errors; }
 void MT6701_GetDiagnostics(MT6701Diagnostics *out) { *out=enc_diag; }
 void MT6701_2_GetDiagnostics(MT6701Diagnostics *out) { *out=enc2_diag; }
+void MT6701_2_GetBusDiagnostics(MT6701_2_BusDiagnostics *out) {
+    *out=(MT6701_2_BusDiagnostics){0x354,0x1700,0x80,3};
+}
 const char *MT6701_ErrorText(MT6701Error error) {
     const char *names[]={"--","ALL 0","CRC","FIELD","TRACK","SPI","ALL 1","DMA TMO"};
     return names[error];
@@ -117,7 +133,12 @@ AppSettings *AppStorage_Get(void) { return &settings; }
 void AppStorage_Load(void) {}
 bool AppStorage_Save(void) { return true; }
 bool AppStorage_RequestSave(void) { return true; }
-bool AppStorage_PollSaveResult(bool *success) { (void)success; return false; }
+bool AppStorage_PollSaveResult(bool *success) {
+    if(!save_result_ready) return false;
+    save_result_ready=false;*success=save_success;return true;
+}
+const char *AppStorage_SaveErrorText(void) { return save_error; }
+uint32_t AppStorage_FlashError(void) { return flash_error; }
 void AppStorage_ResetDefaults(void) { memset(&settings, 0, sizeof(settings)); settings.led_brightness = 100; }
 void AppStorage_Log(uint16_t event, uint32_t value) { (void)event; (void)value; }
 
@@ -174,6 +195,9 @@ static void reset(void) {
     healthy=true; aligned=true; drive_ready=true; bus_data=true; bus_voltage=24.0f; mode=JERRYFOC_MODE_TORQUE;
     unready_status="FRAME TIMEOUT";
     hso_active=hso_fault=false;
+    save_error="Save OK";save_result_ready=false;
+    flash_error=0;
+    hso_snapshot=(StHsoSnapshot){.state=ST_HSO_WAIT_PARAM};
     JerryFOC_Target_Iq=JerryFOC_Target_Velocity=JerryFOC_Target_Position=0; angle=0; current_loop=0;
     OLED_Abort(); assert(OLED_Init()==OLED_OK); OLED_SetRotation(OLED_ROTATION_270);
     ui_app_reset(tick); assert(KK_UI_Init(ui_app_get())==KK_UI_OK); settle();
@@ -553,12 +577,47 @@ int main(void) {
     assert(strcmp(status_value("H Gate"),"OK")==0);
     assert(strcmp(status_value("Feedback"),"ENCODER")==0);
     assert(strcmp(status_value("H Qual"),"0/200 ms 0/20")==0);
-    assert(strcmp(status_value("H Jitter"),"0/50 0/10")==0);
-    assert(strcmp(status_value("H Reset"),"0.0 deg")==0);
     assert(strcmp(status_value("H Lost"),"--")==0);
+    assert(strcmp(status_value("Save Last"),"Save OK")==0);
+    save_error="Save VERIFY";save_result_ready=true;save_success=false;flash_error=0x06010402U;step(0,501);
+    assert(strcmp(status_value("Save Last"),"Save VERIFY")==0);
+    assert(strcmp(status_value("Flash Err"),"6/1/04/02")==0);
+    assert(strcmp(status_value("SPI2 Fault"),"0354/1700/0080")==0);
+    assert(strcmp(status_value("SPI2 Reset"),"3")==0);
+    save_error="Save OK";save_result_ready=true;save_success=true;step(0,501);
+    assert(strcmp(status_value("Save Last"),"Save OK")==0);
     assert(strcmp(status_value("VREF"),"3.260 V")==0);
     assert(strcmp(status_value("RefState"),"OK")==0);
     assert(strcmp(status_value("Ref R/C"),"1518 / 1650")==0);
+    hso_snapshot=(StHsoSnapshot){.state=ST_HSO_LEARNING,.angle_error_rad=NAN,.qualified_samples=1230};
+    healthy=false; assert(MotorControl_SelectFeedback(true)); step(0,501);
+    assert(strcmp(status_value("HSO"),"I/F FLUX")==0);
+    assert(strcmp(status_value("H Qual"),"123/1000 ms 0/20")==0);
+    assert(strcmp(status_value("H Error"),"--")==0);
+    assert(strcmp(status_value("E1 State"),"ERROR")==0); /* Physical encoder stays visible. */
+    hso_snapshot.state=ST_HSO_FAULT;hso_snapshot.reason=ST_HSO_REASON_LEARN_TIMEOUT;
+    hso_snapshot.entry_reason=ST_HSO_REASON_EMF_LOW;hso_snapshot.flux_wb=0.012f;step(0,501);
+    assert(strcmp(status_value("H Qual"),"123/1000 ms 0/20")==0);
+    assert(strcmp(status_value("H Gate"),"EMF LOW")==0);
+    assert(strcmp(status_value("H Actual"),"12.0 mWb")==0);
+    hso_snapshot.reason=ST_HSO_REASON_CAPTURE_TIMEOUT;hso_snapshot.entry_reason=ST_HSO_REASON_ANGLE;
+    hso_snapshot.capture_reason=ST_HSO_REASON_ANGLE;hso_snapshot.capture_resets=17;
+    hso_snapshot.capture_angle_rad=0.6f;hso_snapshot.capture_frequency_error_hz=-2.3f;
+    hso_snapshot.capture_emf_ratio=1.4f;hso_snapshot.capture_drift_rad=-0.2f;
+    hso_snapshot.emf_offset_v=0.0412f;hso_snapshot.emf_offset_limit_v=0.05883f;step(0,501);
+    assert(strcmp(status_value("H Gate"),"ANGLE")==0);
+    assert(strcmp(status_value("H Reject"),"ANGLE")==0 && strcmp(status_value("H Reset"),"17")==0);
+    assert(strcmp(status_value("H R Deg"),"34.4")==0);
+    assert(strcmp(status_value("H R Hz"),"-2.3")==0);
+    assert(strcmp(status_value("H R EMF%"),"140.0")==0);
+    assert(strcmp(status_value("H R Drift"),"-11.5")==0);
+    assert(strcmp(status_value("H Off mV"),"41.2")==0 && strcmp(status_value("H Lim mV"),"58.8")==0);
+    hso_snapshot.entry_reason=hso_snapshot.capture_reason=ST_HSO_REASON_PHASE_DRIFT;step(0,501);
+    assert(strcmp(status_value("H Gate"),"PHASE DRIFT")==0 && strcmp(status_value("H Reject"),"PHASE DRIFT")==0);
+    hso_snapshot.reason=hso_snapshot.entry_reason=ST_HSO_REASON_NONE;
+    hso_snapshot.state=ST_HSO_CONTROL; hso_active=true; step(0,501);
+    assert(strcmp(status_value("HSO"),"CONTROL")==0);
+    hso_active=false; healthy=true; assert(MotorControl_SelectFeedback(false));
     reference_data=false; step(0,501);
     assert(strcmp(status_value("RefState"),"STALE")==0);
     assert(strcmp(status_value("VREF"),"3.260 V")==0); /* Mark retained estimate stale. */

@@ -441,6 +441,9 @@ static void follow_current_models(bool verify)
             a+1,gains[k],v,t.error_rms,t.ripple_rms,t.hand_ripple,t.torque_slew,t.min_speed);
     }
 }
+#ifdef MOTOR_HOST_REAL_HSO
+#define main unused_control_main
+#endif
 int main(int argc,char **argv)
 {
     if (argc>1 && !strcmp(argv[1],"follow-model")) { follow_models(false); return 0; }
@@ -657,3 +660,7 @@ int main(int argc,char **argv)
     puts("PASS: real dual FOC: independent/sync, passive hand masters in both directions, multi-turn/reverse/anchors, feedforward, SPI2 reservation, linked encoder faults, explicit restart and deadline");
     return 0;
 }
+
+#ifdef MOTOR_HOST_REAL_HSO
+#undef main
+#endif

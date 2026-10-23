@@ -1,6 +1,6 @@
 # ST HSO 接入与试运行（UI-R25-STOP）
 
-当前 **UI-R43-ZEROLOG** 仅在单 M1 模式开放 HSO 混合反馈，双电机固定使用编码器。本页早期版本说明保留作历史参考；当前反馈入口及上板步骤以 [Dual_motor_control.md](Dual_motor_control.md) 为准。
+当前 **UI-R53-SAMPLE** 已将 Single M1 的 HSO 改为独立无感速度启动，编码器未接也可执行限流对齐、I/F 磁链估算与 HSO 接管。当前操作、限制和验证以 [HSO_sensorless_startup.md](HSO_sensorless_startup.md) 为准；双电机仍固定编码器。本页下文是旧版混合反馈的历史记录，其 Learn/Use、编码器误差和 45rpm 回退规则不再适用于 R44。
 
 R25 增加 Run 停机快照和编码器错误分类，见 [Run_stop_diagnostics.md](Run_stop_diagnostics.md)。R24 支持 Settings 选择 2804/4015，切换后重载模型与极对数并清除旧磁链学习/资格，不自动接管。两套初始磁链均为 0，需要对各自电机重新辨识；4015 电感的测量口径仍需核实。见 [Motor_profiles.md](Motor_profiles.md)。
 

@@ -117,7 +117,12 @@ static char s_txt_hso[16], s_txt_hso_speed[24], s_txt_hso_error[24];
 static char s_txt_hso_flux[24], s_txt_hso_time[24];
 static char s_txt_hso_gate[16], s_txt_hso_qual[24], s_txt_hso_lost[16];
 static char s_txt_hso_flux_actual[24];
-static char s_txt_hso_jitter[24], s_txt_hso_reset[24];
+static char s_txt_hso_reject[16],s_txt_hso_resets[16];
+static char s_txt_hso_rangle[16],s_txt_hso_rfreq[16],s_txt_hso_remf[16],s_txt_hso_rdrift[16];
+static char s_txt_hso_offset[16],s_txt_hso_olimit[16];
+static char s_txt_save_result[16];
+static char s_txt_flash_error[16];
+static char s_txt_spi2_fault[16],s_txt_spi2_resets[8];
 static char s_txt_feedback[16];
 static uint32_t s_input_repeats;
 static uint32_t s_display_errors;
@@ -269,6 +274,16 @@ static void refresh_texts(void)
     fmt_fixed(s_txt_sync,sizeof(s_txt_sync),to_x100(MotorControl_GroupError()),100);
     snprintf(s_txt_control_time,sizeof(s_txt_control_time),"%lu us",(unsigned long)(MotorControl_MaxCycles()/170U));
     snprintf(s_txt_save,sizeof(s_txt_save),"%s",AppStorage_IsDeferred() ? "DEFERRED" : "AVAILABLE");
+    snprintf(s_txt_save_result,sizeof(s_txt_save_result),"%s",AppStorage_SaveErrorText());
+    uint32_t flash_error=AppStorage_FlashError();
+    MT6701_2_BusDiagnostics bus_diag;
+    MT6701_2_GetBusDiagnostics(&bus_diag);
+    snprintf(s_txt_spi2_fault,sizeof(s_txt_spi2_fault),"%04X/%04X/%04X",
+             (unsigned)bus_diag.cr1,(unsigned)bus_diag.cr2,(unsigned)bus_diag.sr);
+    snprintf(s_txt_spi2_resets,sizeof(s_txt_spi2_resets),"%u",(unsigned)bus_diag.resets);
+    snprintf(s_txt_flash_error,sizeof(s_txt_flash_error),"%lu/%lu/%02lX/%02lX",
+        (unsigned long)(flash_error>>24),(unsigned long)((flash_error>>16)&255U),
+        (unsigned long)((flash_error>>8)&255U),(unsigned long)(flash_error&255U));
     s_hso_choice=MotorControl_HsoAllowed();
     snprintf(s_txt_motor, sizeof(s_txt_motor), "%s", MotorParams_GetAxis(s_view_axis)->name);
     snprintf(s_txt_motor_menu, sizeof(s_txt_motor_menu), "M%u Motor: %s", (unsigned)s_view_axis+1U, s_txt_motor);
@@ -311,8 +326,8 @@ static void refresh_texts(void)
     fmt_fixed(v, sizeof(v), to_x100(state.ib), 100);
     snprintf(s_txt_ib, sizeof(s_txt_ib), "%s A", v);
 
-    snprintf(s_txt_enc, sizeof(s_txt_enc), "%s",
-             state.healthy ? "OK" : "ERROR");
+    strcpy(s_txt_enc,
+             (s_view_axis==MOTOR_AXIS_1 ? MT6701_IsHealthy()!=0U : state.healthy) ? "OK" : "ERROR");
     MT6701_2_Snapshot encoder2;
     MT6701_2_GetSnapshot(&encoder2);
     snprintf(s_txt_enc2, sizeof(s_txt_enc2), "%s %u",
@@ -322,25 +337,32 @@ static void refresh_texts(void)
              drive_status_text());
     StHsoSnapshot hso;
     StHso_GetSnapshot(&hso);
-    snprintf(s_txt_feedback, sizeof(s_txt_feedback), "%s", (s_view_axis==MOTOR_AXIS_1 ? JerryFOC_getFeedbackText() : "ENCODER"));
-    snprintf(s_txt_hso_gate, sizeof(s_txt_hso_gate), "%s",
-             StHso_ReasonText(JerryFOC_isHSOActive() ? hso.reason : hso.entry_reason));
-    snprintf(s_txt_hso_qual, sizeof(s_txt_hso_qual), "%lu/200 ms %lu/20",
-             (unsigned long)(hso.qualified_samples / 10U), (unsigned long)hso.bad_samples);
-    snprintf(s_txt_hso_jitter, sizeof(s_txt_hso_jitter), "%lu/50 %lu/10",
-             (unsigned long)hso.qualify_paused_samples, (unsigned long)hso.qualify_bad_run);
-    fmt_fixed(v, sizeof(v), to_x10(hso.qualify_reset_angle_rad * 57.2957795f), 10);
-    snprintf(s_txt_hso_reset, sizeof(s_txt_hso_reset), "%s deg", v);
-    snprintf(s_txt_hso_lost, sizeof(s_txt_hso_lost), "%s", JerryFOC_getHSOFaultText());
+    strcpy(s_txt_feedback,(s_view_axis==MOTOR_AXIS_1 ? JerryFOC_getFeedbackText() : "ENCODER"));
+    /* All reason literals fit these 16-byte application buffers. */
+    strcpy(s_txt_hso_gate,StHso_ReasonText(JerryFOC_isHSOActive() ? hso.reason : hso.entry_reason));
+    snprintf(s_txt_hso_qual, sizeof(s_txt_hso_qual), "%lu/%u ms %lu/20",
+             (unsigned long)(hso.qualified_samples / 10U),
+             hso.state==ST_HSO_LEARNING || hso.reason==ST_HSO_REASON_LEARN_TIMEOUT ? 1000U : 200U,
+             (unsigned long)hso.bad_samples);
+    strcpy(s_txt_hso_lost,JerryFOC_getHSOFaultText());
+    strcpy(s_txt_hso_reject,StHso_ReasonText(hso.capture_reason));
+    fmt_counter(s_txt_hso_resets,hso.capture_resets);
+    fmt_fixed(s_txt_hso_rangle,sizeof(s_txt_hso_rangle),to_x10(hso.capture_angle_rad*57.2957795f),10);
+    fmt_fixed(s_txt_hso_rfreq,sizeof(s_txt_hso_rfreq),to_x10(hso.capture_frequency_error_hz),10);
+    fmt_fixed(s_txt_hso_remf,sizeof(s_txt_hso_remf),to_x10(hso.capture_emf_ratio*100),10);
+    fmt_fixed(s_txt_hso_rdrift,sizeof(s_txt_hso_rdrift),to_x10(hso.capture_drift_rad*57.2957795f),10);
+    fmt_fixed(s_txt_hso_offset,sizeof(s_txt_hso_offset),to_x10(hso.emf_offset_v*1000),10);
+    fmt_fixed(s_txt_hso_olimit,sizeof(s_txt_hso_olimit),to_x10(hso.emf_offset_limit_v*1000),10);
     fmt_fixed(v, sizeof(v), to_x10(hso.flux_wb * 1000.0f), 10);
     snprintf(s_txt_hso_flux_actual, sizeof(s_txt_hso_flux_actual), "%s mWb", v);
-    snprintf(s_txt_hso, sizeof(s_txt_hso), "%s",
-             JerryFOC_isHSOActive() ? (JerryFOC_isHSOReturning() ? "RETURNING" : "CONTROL") :
-             ((s_view_axis==MOTOR_AXIS_1 && JerryFOC_hasHSOFault()) ? "LOST" : StHso_StateText(hso.state)));
+    strcpy(s_txt_hso,
+             (s_view_axis==MOTOR_AXIS_1 && JerryFOC_hasHSOFault()) ? "LOST" : StHso_StateText(hso.state));
     fmt_fixed(v, sizeof(v), to_x10(hso.velocity_rad_s), 10);
     snprintf(s_txt_hso_speed, sizeof(s_txt_hso_speed), "%s rad/s", v);
-    fmt_fixed(v, sizeof(v), to_x10(hso.angle_error_rad * 57.2957795f), 10);
-    snprintf(s_txt_hso_error, sizeof(s_txt_hso_error), "%s deg", v);
+    if (isfinite(hso.angle_error_rad)) {
+        fmt_fixed(v, sizeof(v), to_x10(hso.angle_error_rad * 57.2957795f), 10);
+        snprintf(s_txt_hso_error, sizeof(s_txt_hso_error), "%s deg", v);
+    } else strcpy(s_txt_hso_error,"--"); /* Do not convert the startup NaN to integer. */
     snprintf(s_txt_hso_flux, sizeof(s_txt_hso_flux), "%lu uWb", (unsigned long)(hso.reference_flux_wb * 1000000.0f));
     snprintf(s_txt_hso_time, sizeof(s_txt_hso_time), "%lu us / %lu", (unsigned long)(hso.max_control_cycles / 170U), (unsigned long)hso.overruns);
     snprintf(s_txt_align, sizeof(s_txt_align), "%s",
@@ -491,6 +513,9 @@ static const KK_UI_InfoRow status_rows[] = {
     {"Output",  s_txt_output},
     {"Cmd",s_txt_command}, {"Work",s_txt_work}, {"Axis",s_txt_axis}, {"M1 Model",s_txt_m1}, {"M2 Model",s_txt_m2},
     {"Sync Err",s_txt_sync}, {"Ctrl Max",s_txt_control_time}, {"Save Bus",s_txt_save},
+    {"Save Last",s_txt_save_result},
+    {"Flash Err",s_txt_flash_error},
+    {"SPI2 Fault",s_txt_spi2_fault}, {"SPI2 Reset",s_txt_spi2_resets},
 
     {"Run Stop",s_txt_run_stop},
     {"Stop Age",s_txt_stop_age},
@@ -539,8 +564,10 @@ static const KK_UI_InfoRow status_rows[] = {
     {"Feedback",s_txt_feedback},
     {"H Gate",  s_txt_hso_gate},
     {"H Qual",  s_txt_hso_qual},
-    {"H Jitter",s_txt_hso_jitter},
-    {"H Reset", s_txt_hso_reset},
+    {"H Reject",s_txt_hso_reject}, {"H Reset",s_txt_hso_resets},
+    {"H R Deg",s_txt_hso_rangle}, {"H R Hz",s_txt_hso_rfreq}, {"H R EMF%",s_txt_hso_remf},
+    {"H R Drift",s_txt_hso_rdrift},
+    {"H Off mV",s_txt_hso_offset}, {"H Lim mV",s_txt_hso_olimit},
     {"H Lost",  s_txt_hso_lost},
     {"H Speed", s_txt_hso_speed},
     {"H Error", s_txt_hso_error},
@@ -550,7 +577,7 @@ static const KK_UI_InfoRow status_rows[] = {
 };
 
 static const KK_UI_InfoRow about_rows[] = {
-    {"FW",      "UI-R43-ZEROLOG"},
+    {"FW",      "UI-R53-SAMPLE"},
     {"MCU",     "STM32G431"},
     {"Motor",   s_txt_motor},
     {"Control", "10kHz FOC"},
@@ -719,7 +746,7 @@ static bool request_settings_save(void)
     ui_store_current();
     st->speed_x10 = s_view_axis==MOTOR_AXIS_1 ? s_speed_x10 : st->speed_x10;
     if (!AppStorage_IsReady()) {
-        s_pending_toast = "Save failed";
+        s_pending_toast = AppStorage_SaveErrorText();
         return true;
     }
     return AppStorage_RequestSave();
@@ -891,7 +918,7 @@ void ui_app_update(uint32_t now_ms)
         (void)KK_UI_SetMenuItemState(UI_PAGE_SYSTEM,4U,hso_state);
     bool save_ok;
     if (AppStorage_PollSaveResult(&save_ok))
-        s_pending_toast = save_ok ? "Saved" : "Save failed";
+        s_pending_toast = save_ok ? "Saved" : AppStorage_SaveErrorText();
 
     uint8_t healthy = ui_state().healthy ? 1U : 0U;
     if (s_last_healthy != 0xFFU && s_last_healthy != 0U && healthy == 0U) {
@@ -1168,6 +1195,8 @@ void KK_UI_CustomOnInput(KK_UI_PageId page, KK_UI_InputEvent event)
                 KK_UI_Invalidate(); return;
             }
             *run_target(false) = *run_target(true);
+            if (MotorControl_HsoAllowed() && s_run_mode==JERRYFOC_MODE_VELOCITY && *run_target(true)==0)
+                s_run_active=false; /* Sensorless zero requests coast, not zero-speed holding. */
             ui_store_current();
             if (changed) mark_settings_dirty(HAL_GetTick());
         }
@@ -1275,13 +1304,14 @@ void KK_UI_CustomOnDraw(KK_UI_PageId page, int16_t x_offset,
     OLED_SetFont(ui_font_big);
     OLED_DrawUTF8(value_x, 19, v);
     OLED_SetFont(ui_font_body);
+    bool starting=MotorControl_HsoAllowed() && StHso_IsStarting();
     if (s_run_mode == JERRYFOC_MODE_POSITION) {
         fmt_fixed(v, sizeof(v), to_x100(motor_state.position - s_run_position_origin), 100);
         snprintf(buf, sizeof(buf), "Pos %s  Max %ld", v, (long)s_position_speed);
     } else {
         fmt_fixed(v, sizeof(v), to_x10(motor_state.velocity), 10);
         if (s_run_mode == JERRYFOC_MODE_VELOCITY)
-            snprintf(buf, sizeof(buf), "Act %s  Max %ld", v, (long)s_speed_limit);
+            snprintf(buf, sizeof(buf), "%s %s  Max %ld", starting ? "Ref" : "Act", v, (long)s_speed_limit);
         else
             snprintf(buf, sizeof(buf), "Act %s rad/s", v);
     }
@@ -1290,6 +1320,8 @@ void KK_UI_CustomOnDraw(KK_UI_PageId page, int16_t x_offset,
         snprintf(buf, sizeof(buf), "%s", drive_status_text());
     } else if (!s_run_active && strcmp(s_txt_run_stop, "--") != 0) {
         snprintf(buf, sizeof(buf), "%s", s_txt_run_stop);
+    } else if (starting) {
+        snprintf(buf, sizeof(buf), "%s", s_txt_hso);
     } else if (!motor_state.healthy || !motor_state.aligned) {
         snprintf(buf, sizeof(buf), "%s", motor_state.healthy ? "NOT ALIGNED" : MotorControl_EncoderLostText(s_view_axis));
     } else {
@@ -1303,7 +1335,7 @@ void KK_UI_CustomOnDraw(KK_UI_PageId page, int16_t x_offset,
         }
     }
     OLED_DrawUTF8((int16_t)(4 + x_offset), 51, buf);
-    if ((s_run_active || strcmp(s_txt_run_stop, "--") == 0) &&
+    if (!starting && (s_run_active || strcmp(s_txt_run_stop, "--") == 0) &&
         motor_state.ready && motor_state.healthy && motor_state.aligned) {
         fmt_fixed(v, sizeof(v), s_run_steps[s_run_mode], s_run_mode == JERRYFOC_MODE_VELOCITY ? 10 : 100);
         snprintf(buf, sizeof(buf), "Step %s", v);

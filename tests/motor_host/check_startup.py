@@ -59,11 +59,21 @@ for mode in ("Debug", "Release"):
     hal_calls = calls(tool("objdump", "-d", "--disassemble=HAL_Init", elf))
     assert hal_calls.index("HAL_InitTick") < hal_calls.index("HAL_MspInit"), (mode, hal_calls)
 
+    # ADC/TIM HAL now share LTO with the application. Their weak default
+    # callbacks may disappear as the real callbacks inline into dispatchers;
+    # verify the motor/observer paths survived in the linked dispatch code.
+    adc_calls=calls(tool("objdump", "-d", "--disassemble=HAL_ADC_IRQHandler", elf))
+    tim_calls=calls(tool("objdump", "-d", "--disassemble=HAL_TIM_IRQHandler", elf))
+    assert any(c.startswith("StHso_Process") for c in adc_calls), (mode, adc_calls)
+    assert "service_hso_feedback" in adc_calls, (mode, adc_calls)
+    assert "MotorControl_PositionVelocity" in tim_calls, (mode, tim_calls)
+    assert "MotorControl_VelocityControl" in tim_calls, (mode, tim_calls)
+
     image = (root / "FOC_two.bin").read_bytes()
-    assert b"UI-R43-ZEROLOG" in image and b"UI-R42-ENCRETRY" not in image, mode
+    assert b"UI-R53-SAMPLE" in image and b"UI-R52-OFFSET" not in image, mode
     with tempfile.TemporaryDirectory(prefix="startup-", dir=repo / "build") as scratch:
         output = Path(scratch) / "verified.bin"
         tool("objcopy", "-O", "binary", elf, output)
         assert image == output.read_bytes(), mode
-    print(f"PASS: {mode}: HAL_Init precedes clocks/peripherals; strong MSP; R43; "
+    print(f"PASS: {mode}: HAL_Init precedes clocks/peripherals; strong MSP; R53; "
           f"ELF/BIN match ({len(image)} B), SHA256 {hashlib.sha256(image).hexdigest()}")

@@ -4,6 +4,7 @@
 #include <string.h>
 #include "protocol.h"
 #include "JerryFOC.h"
+#include "motor_control.h"
 #include "st_hso.h"
 #include "usart.h"
 #include "usb_device.h"
@@ -121,6 +122,7 @@ static void command(const char *s) {
 }
 int main(void) {
     check_usb_telemetry();
+    MotorControl_SelectFeedback(true);
     command("HSO:Motor:2.3,0.00086,0.003");
     assert(Protocol_GetHsoResult()==1 && configurations==1 && config.flux_wb==0.003f);
     const char *invalid[]={"HSO:Motor:nan,1,1","HSO:Motor:2,inf,1","HSO:Motor:2,1,",
@@ -134,8 +136,8 @@ int main(void) {
     command("HSO:Motor:1,1,1"); assert(Protocol_GetHsoResult()==-3 && configurations==2);
     command("HSO:Learn"); assert(Protocol_GetHsoResult()==-3 && learns==0);
     command("Stop"); assert(!active && disables==1 && target==0);
-    velocity=0; command("HSO:Learn"); assert(Protocol_GetHsoResult()==-3 && learns==0);
-    velocity=10; command("HSO:Learn"); assert(Protocol_GetHsoResult()==1 && learns==1);
+    velocity=0; command("HSO:Learn"); assert(Protocol_GetHsoResult()==1 && learns==1);
+    velocity=10; command("HSO:Learn"); assert(Protocol_GetHsoResult()==1 && learns==2);
     command("HSO:Off"); assert(!observer_enabled);
     command("HSO:On"); assert(observer_enabled);
     command("HSO:Unsupported"); assert(Protocol_GetHsoResult()==-1);

@@ -14,6 +14,7 @@ typedef struct {
     float m2_current[2];
     float m1_voltage[3];
     uint32_t sequence;
+    bool m1_voltage_high_plateau; /* All M1 high sides stayed on across voltage ranks; sampled before arming. */
 } MotorSampleFrame;
 
 typedef enum {

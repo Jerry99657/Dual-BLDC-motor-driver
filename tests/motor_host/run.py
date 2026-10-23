@@ -11,6 +11,7 @@ subprocess.run([sys.executable, "tests/motor_host/check_spi_clock.py"],
                cwd=repo, check=True)
 for name, sources in {
     "control": ["mycode/JerryFOC.c", "mycode/motor_control.c", "mycode/protocol.c", "mycode/motor_params.c", "tests/motor_host/test_control.c"],
+    "sensorless": ["mycode/JerryFOC.c", "mycode/motor_control.c", "mycode/protocol.c", "mycode/st_hso.c", "mycode/motor_params.c", "tests/motor_host/test_sensorless.c"],
     "profiles": ["mycode/motor_params.c", "tests/motor_host/test_profiles.c"],
     "sampling": ["mycode/motor_sampling.c", "mycode/motor_params.c", "tests/motor_host/test_sampling.c"],
     "encoder": ["mycode/MT6701.c", "mycode/w25q64.c", "mycode/app_storage.c", "tests/motor_host/test_encoder.c"],
@@ -25,5 +26,5 @@ for name, sources in {
     subprocess.run(command, cwd=repo, check=True)
     subprocess.run([str(out / (name + ".exe"))], cwd=repo, check=True)
     if name == "encoder":
-        for scenario in ("missing", "timeout", "missing-wrap", "m1-recovery", "required-retry", "required-retry-wrap", "zero-m1", "zero-m2", "zero-poll"):
+        for scenario in ("missing", "timeout", "missing-wrap", "m1-recovery", "m2-recovery", "required-retry", "required-retry-wrap", "zero-m1", "zero-m2", "zero-poll", "hso-save", "busy-admission"):
             subprocess.run([str(out / "encoder.exe"), scenario], cwd=repo, check=True)

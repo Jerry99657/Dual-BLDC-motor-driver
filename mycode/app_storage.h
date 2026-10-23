@@ -76,6 +76,8 @@ bool AppStorage_RequestSave(void);
 bool AppStorage_IsDeferred(void); /* M2 real-time sampling currently owns SPI2. */
 void AppStorage_Service(uint32_t now_ms);
 bool AppStorage_PollSaveResult(bool *success);
+const char *AppStorage_SaveErrorText(void); /* Last settings I/O/verify stage, or Save OK. */
+uint32_t AppStorage_FlashError(void); /* Last failing settings transaction; W25Q_LastFailure layout. */
 /* 只恢复 RAM，应用通过 RequestSave 延迟持久化。 */
 void AppStorage_ResetDefaults(void);
 void AppStorage_Log(uint16_t event, uint32_t value);

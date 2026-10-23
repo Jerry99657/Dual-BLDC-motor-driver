@@ -42,6 +42,11 @@ static uint32_t s_save_addr;
 static bool s_save_pending;
 static bool s_save_result_ready;
 static bool s_save_success;
+static uint8_t s_save_retries;
+static uint32_t s_flash_error;
+uint32_t AppStorage_FlashError(void) { return s_flash_error; }
+static const char *s_save_error="Save OK";
+const char *AppStorage_SaveErrorText(void) { return s_save_error; }
 #define LOG_QUEUE_LENGTH 4U
 static LogRecord s_log_queue[LOG_QUEUE_LENGTH];
 static uint8_t s_log_head, s_log_count;
@@ -189,10 +194,13 @@ bool AppStorage_Init(void)
     s_store_state = STORE_IDLE;
     s_save_pending = false;
     s_save_result_ready = false;
+    s_save_error="Save OK";
+    s_flash_error=0;
     s_log_head = s_log_count = 0U;
     s_service_at = HAL_GetTick();
     s_ready = W25Q_Init();
     if (!s_ready) {
+        s_save_error="Save NO FLASH";
         settings_set_defaults();
         s_settings_valid = false;
         return false;
@@ -319,6 +327,9 @@ bool AppStorage_RequestSave(void)
 {
     if (!s_ready || s_save_pending) return false;
     s_save_result_ready=false;
+    s_save_retries=0U;
+    s_flash_error=0;
+    if (s_store_state==STORE_IDLE) s_store_started=HAL_GetTick();
     s_save_snapshot = s_settings;
     s_save_snapshot.magic = APP_SETTINGS_MAGIC;
     s_save_snapshot.version = APP_SETTINGS_VER;
@@ -339,13 +350,21 @@ bool AppStorage_PollSaveResult(bool *success)
     return true;
 }
 
-static void store_complete(bool success)
+static void store_complete(bool success,bool retry)
 {
     if (s_store_state == STORE_SETTINGS_ERASE || s_store_state == STORE_SETTINGS_PROGRAM) {
+        /* Keep the immutable snapshot and previous A/B copy. One transient
+         * SPI/readback failure gets one complete erase/program/verify retry;
+         * never publish success until the bytes and CRC pass. */
+        if (!success && retry && s_save_retries++==0U) {
+            s_store_state=STORE_IDLE; s_store_started=HAL_GetTick(); return;
+        }
         s_save_pending = false;
         s_save_result_ready = true;
         s_save_success = success;
         if (success) {
+            s_save_error="Save OK";
+            s_flash_error=0;
             s_active_addr = s_save_addr;
             s_settings.seq = s_save_snapshot.seq;
             s_settings_valid = true;
@@ -362,37 +381,56 @@ static void store_complete(bool success)
 
 bool AppStorage_IsDeferred(void) { return MT6701_2_StorageBlocked(); }
 
+static void storage_wait(uint32_t now_ms)
+{
+    uint32_t timeout=(s_store_state==STORE_SETTINGS_PROGRAM || s_store_state==STORE_LOG_PROGRAM) ? 10U : 1000U;
+    if ((s_store_state!=STORE_IDLE || s_save_pending) && now_ms-s_store_started>=timeout) {
+        if (s_store_state==STORE_IDLE) s_store_state=STORE_SETTINGS_ERASE;
+        if (s_save_pending) { s_save_error="Save BUSY TMO"; s_flash_error=(4UL<<24)|W25Q_LastStatus(); }
+        store_complete(false,false);
+    }
+}
+
 static void storage_step(uint32_t now_ms)
 {
     if (!s_ready || now_ms == s_service_at) return;
     s_service_at = now_ms;
     if (s_store_state == STORE_IDLE && !s_save_pending && s_log_count == 0U) return;
+    /* Timestamp successful command completion, then allow at least one full
+     * millisecond for the internal cycle to start (2 tick edges). */
+    if (s_store_state!=STORE_IDLE && now_ms-s_store_started<2U) return;
     bool busy;
     if (!W25Q_PollBusy(&busy)) {
         if (s_store_state == STORE_IDLE && s_save_pending) s_store_state = STORE_SETTINGS_ERASE;
-        store_complete(false);
+        if (s_save_pending) { s_save_error="Save STATUS"; s_flash_error=W25Q_LastFailure(); }
+        store_complete(false,true);
         return;
     }
     if (busy) {
-        uint32_t timeout = (s_store_state == STORE_SETTINGS_PROGRAM ||
-                            s_store_state == STORE_LOG_PROGRAM) ? 10U : 1000U;
-        if (s_store_state != STORE_IDLE && now_ms - s_store_started >= timeout)
-            store_complete(false);
+        storage_wait(now_ms);
         return;
     }
+    uint8_t previous_state=s_store_state;
+    uint32_t previous_started=s_store_started;
     bool ok = true;
     switch (s_store_state) {
     case STORE_SETTINGS_ERASE:
         s_store_state = STORE_SETTINGS_PROGRAM;
-        s_store_started = now_ms;
+        s_save_error="Save WRITE";
         ok = W25Q_BeginPageProgram(s_save_addr, (const uint8_t *)&s_save_snapshot,
                                    sizeof(s_save_snapshot));
+        s_store_started=HAL_GetTick();
         break;
     case STORE_SETTINGS_PROGRAM: {
         AppSettings verify;
-        ok = W25Q_Read(s_save_addr, (uint8_t *)&verify, sizeof(verify)) &&
-             memcmp(&verify, &s_save_snapshot, sizeof(verify)) == 0 && settings_is_valid(&verify);
-        store_complete(ok);
+        s_save_error="Save READ";
+        ok = W25Q_Read(s_save_addr, (uint8_t *)&verify, sizeof(verify));
+        s_flash_error=ok ? 0 : W25Q_LastFailure();
+        if (ok) {
+            s_save_error="Save VERIFY";
+            ok=memcmp(&verify, &s_save_snapshot, sizeof(verify))==0 && settings_is_valid(&verify);
+        }
+        store_complete(ok,true);
         return;
     }
     case STORE_LOG_ERASE:
@@ -400,11 +438,12 @@ static void storage_step(uint32_t now_ms)
         s_store_state = STORE_IDLE;
         break;
     case STORE_LOG_PROGRAM:
-        store_complete(true);
+        store_complete(true,false);
         break;
     default:
         if (s_save_pending) {
             s_store_state = STORE_SETTINGS_ERASE;
+            s_save_error="Save ERASE";
             ok = W25Q_BeginSectorErase(s_save_addr);
         } else if (s_log_count != 0U) {
             if (s_log_addr + sizeof(LogRecord) > W25Q64_SECTOR_SIZE) {
@@ -416,16 +455,28 @@ static void storage_step(uint32_t now_ms)
                     (const uint8_t *)&s_log_queue[s_log_head], sizeof(LogRecord));
             }
         }
-        s_store_started = now_ms;
+        s_store_started = HAL_GetTick();
         break;
     }
-    if (!ok) store_complete(false);
+    if (!ok) {
+        if (W25Q_LastFailureBusy()) {
+            /* Begin did not issue the program/erase. Keep its previous phase,
+             * original deadline and snapshot; BUSY is not a failed attempt. */
+            s_store_state=previous_state; s_store_started=previous_started;
+            if (s_save_pending) { s_save_error="Save WAIT"; s_flash_error=W25Q_LastFailure(); }
+            storage_wait(HAL_GetTick()); return;
+        }
+        if (s_save_pending && (s_store_state==STORE_SETTINGS_ERASE || s_store_state==STORE_SETTINGS_PROGRAM))
+            s_flash_error=W25Q_LastFailure();
+        store_complete(false,true);
+    }
 }
 
 void AppStorage_Service(uint32_t now_ms)
 {
     if (MT6701_2_StorageBlocked() || !MT6701_2_FlashBegin()) return;
-    storage_step(now_ms);
+    (void)now_ms;
+    storage_step(HAL_GetTick()); /* Main's loop timestamp may predate the last command. */
     MT6701_2_FlashEnd();
 }
 
