@@ -9,8 +9,8 @@
 static uint8_t flash[3*W25Q64_SECTOR_SIZE];
 static uint32_t tick, busy_until;
 static unsigned sync_calls;
-static bool fail_program, corrupt_read;
-bool MT6701_2_StorageBlocked(void) { return false; }
+static bool fail_program, corrupt_read, storage_blocked;
+bool MT6701_2_StorageBlocked(void) { return storage_blocked; }
 bool MT6701_2_FlashBegin(void) { return true; }
 void MT6701_2_FlashEnd(void) {}
 uint32_t HAL_GetTick(void) { return tick; }
@@ -62,6 +62,7 @@ static uint32_t crc32(const void *data,unsigned len) {
 }
 int main(void) {
     memset(flash,255,sizeof(flash)); assert(AppStorage_Init());
+    assert(AppStorage_GetSaveState()==APP_SAVE_IDLE);
     assert(sync_calls==0);
     assert(((AppStorage_Get()->flags & APP_SPEED_LIMIT_MASK)>>APP_SPEED_LIMIT_SHIFT)==100);
     assert(!(AppStorage_Get()->flags & APP_FLAG_MOTOR_4015));
@@ -72,13 +73,15 @@ int main(void) {
     AppStorage_Get()->speed_step_x10=6;
     AppStorage_Get()->torque_step_x100=7;
     AppStorage_Get()->position_step_x100=4;
-    assert(AppStorage_RequestSave()); service(10);
+    assert(AppStorage_RequestSave()); assert(AppStorage_GetSaveState()==APP_SAVE_PENDING);
+    storage_blocked=true; service(500); assert(AppStorage_GetSaveState()==APP_SAVE_DEFERRED);
+    storage_blocked=false; service(10); assert(AppStorage_GetSaveState()==APP_SAVE_WRITING);
     bool success; assert(!AppStorage_PollSaveResult(&success));
     assert(!AppStorage_RequestSave()); /* snapshot in flight is immutable */
     AppStorage_Get()->speed_x10=456;
     AppStorage_Get()->flags=(AppStorage_Get()->flags & ~APP_SPEED_LIMIT_MASK) |
                             (234UL<<APP_SPEED_LIMIT_SHIFT);
-    service(50); assert(result());
+    service(50); assert(result()); assert(AppStorage_GetSaveState()==APP_SAVE_SAVED);
     assert(AppStorage_Get()->speed_x10==456); /* live edit survives completion */
     assert(((AppStorage_Get()->flags & APP_SPEED_LIMIT_MASK)>>APP_SPEED_LIMIT_SHIFT)==234);
     service(10); assert(sync_calls==0);
@@ -95,6 +98,8 @@ int main(void) {
     service(10); tick=busy_until; assert(AppStorage_Init());
     assert(AppStorage_Get()->speed_x10==789);
     fail_program=true; assert(AppStorage_RequestSave()); service(100); assert(!result());
+    assert(AppStorage_GetSaveState()==APP_SAVE_FAILED);
+    service(100); assert(AppStorage_GetSaveState()==APP_SAVE_FAILED);
     assert(!strcmp(AppStorage_SaveErrorText(),"Save WRITE"));
     fail_program=false; assert(AppStorage_RequestSave()); service(50); assert(result()); service(10);
     corrupt_read=true; assert(AppStorage_RequestSave()); service(100); assert(!result());
@@ -163,11 +168,11 @@ int main(void) {
     assert((migrated->flags & APP_FLAG_MOTOR_4015) && migrated->torque_step_x100==9);
     assert(migrated->gear_ratio_x100==100 && migrated->control_config==0);
     assert(migrated->axis2_speed_step_x10==5 && migrated->axis2_speed_x10==0);
-    AppStorage_Get()->control_config=18; AppStorage_Get()->gear_ratio_x100=-125;
+    AppStorage_Get()->control_config=18 | APP_CONFIG_FOCUS_M2; AppStorage_Get()->gear_ratio_x100=-125;
     AppStorage_Get()->axis2_speed_x10=432; AppStorage_Get()->axis2_position_step_x100=12;
     assert(AppStorage_RequestSave()); service(80); assert(result());
     assert(AppStorage_Init()); migrated=AppStorage_Get();
-    assert(migrated->control_config==18 && migrated->gear_ratio_x100==-125);
+    assert(migrated->control_config==(18 | APP_CONFIG_FOCUS_M2) && migrated->gear_ratio_x100==-125);
     assert(migrated->axis2_speed_x10==432 && migrated->axis2_position_step_x100==12);
     /* An actual pre-extension v3 record uses only bits[13:8] for Pos Speed. */
     AppSettings legacy3=*migrated;

@@ -448,6 +448,25 @@ int main(int argc,char **argv)
 {
     if (argc>1 && !strcmp(argv[1],"follow-model")) { follow_models(false); return 0; }
     if (argc>1 && !strcmp(argv[1],"follow-current")) { follow_current_models(false); return 0; }
+    /* The independent view is a v3 spare bit, not a run request. Preserve it
+     * across profile/feedback/mode writes and restore only in Independent. */
+    boot(MOTOR_WORK_INDEPENDENT);
+    assert(MotorControl_GetFocus()==MOTOR_AXIS_1);
+    MotorControl_SetFocus(MOTOR_AXIS_2);
+    assert(settings.control_config & APP_CONFIG_FOCUS_M2);
+    assert(MotorControl_SelectWork(MOTOR_WORK_SINGLE_M1));
+    assert(MotorControl_GetFocus()==MOTOR_AXIS_1 && (settings.control_config & APP_CONFIG_FOCUS_M2));
+    assert(MotorControl_SelectFeedback(true));
+    assert(MotorControl_SelectFeedback(false));
+    assert(settings.control_config & APP_CONFIG_FOCUS_M2);
+    assert(MotorControl_SelectWork(MOTOR_WORK_INDEPENDENT));
+    assert(MotorControl_GetFocus()==MOTOR_AXIS_2);
+    MotorControl_Init();
+    assert(MotorControl_GetFocus()==MOTOR_AXIS_2 && !output_requested && !output2);
+    MotorControl_SetFocus(MOTOR_AXIS_1);
+    assert(!(settings.control_config & APP_CONFIG_FOCUS_M2));
+    MotorControl_SetFocus(MOTOR_AXIS_COUNT);
+    assert(MotorControl_GetFocus()==MOTOR_AXIS_1);
     boot(MOTOR_WORK_SINGLE_M1);
     assert(!MotorControl_HsoAllowed());
     assert(!MotorControl_Command(MOTOR_AXIS_2,JERRYFOC_MODE_VELOCITY,10,0,false));
@@ -632,6 +651,11 @@ int main(int argc,char **argv)
     boot(MOTOR_WORK_SINGLE_M1);
     assert(MotorControl_SelectProfile(MOTOR_AXIS_1,MOTOR_PROFILE_4015));
     assert(vel_loop_M0.P==0.1f && vel_loop_M0.I==1.0f && pos_loop_M0.P==6.0f);
+    settings.flags=(600UL<<APP_SPEED_LIMIT_SHIFT)|AppSettings_EncodePositionSpeed(600)|APP_FLAG_MOTOR_4015;
+    aligned=true;
+    assert(MotorControl_Command(MOTOR_AXIS_1,JERRYFOC_MODE_VELOCITY,500,0,false));
+    assert(JerryFOC_Target_Velocity==500);
+    MotorControl_StopAll();
     JerryFOC_useCurrentLoop(1); assert(vel_loop_M0.P==0.05f && vel_loop_M0.I==0.5f);
     JerryFOC_useCurrentLoop(0); assert(vel_loop_M0.P==0.1f && vel_loop_M0.I==1.0f);
 

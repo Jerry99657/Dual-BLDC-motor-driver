@@ -18,10 +18,14 @@
 GPIO_TypeDef host_gpio = {0xFFFFU};
 static uint32_t tick, dma_done;
 static bool dma_busy, healthy = true, aligned = true, drive_ready = true;
-static bool hso_active, hso_fault;
+static bool hso_active, hso_fault,hso_at_rest=true;
 static const char *save_error="Save OK";
 static bool save_result_ready,save_success;
 static uint32_t flash_error;
+static AppSaveState save_state=APP_SAVE_SAVED;
+static uint32_t save_done;
+static unsigned save_requests;
+static AppSettings saved_settings;
 static StHsoSnapshot hso_snapshot={.state=ST_HSO_WAIT_PARAM};
 static bool bus_data = true;
 static bool reference_data = true, reference_seen = true;
@@ -41,6 +45,7 @@ static bool output_requested=true;
 static bool aligning;
 static MT6701Diagnostics enc_diag,enc2_diag;
 extern void ControlStub_SetSecondState(MotorAxisSnapshot s);
+extern void ControlStub_SetDeferred(bool value);
 volatile float JerryFOC_Target_Velocity, JerryFOC_Target_Position, JerryFOC_Target_Iq;
 volatile uint8_t g_openloop_debug;
 static AppSettings settings;
@@ -65,8 +70,13 @@ uint8_t JerryFOC_useHSO(uint8_t en) {
     return 1;
 }
 void StHso_GetSnapshot(StHsoSnapshot *out) { *out=hso_snapshot; }
+float StHso_MinSpeed(void) { return 6.283185307f*5/MotorParams_GetAxis(MOTOR_AXIS_1)->pole_pairs; }
+bool StHso_AtRest(void) { return hso_at_rest; }
 bool StHso_IsStarting(void) { return hso_active && hso_snapshot.state!=ST_HSO_CONTROL; }
 const char *StHso_StateText(StHsoState state) {
+    if(state==ST_HSO_ALIGN) return "DC ALIGN";
+    if(state==ST_HSO_RAMP) return "I/F RAMP";
+    if(state==ST_HSO_CAPTURE) return "CAPTURE";
     return state==ST_HSO_LEARNING ? "I/F FLUX" : state==ST_HSO_CONTROL ? "CONTROL" : "WAIT FLUX";
 }
 const char *StHso_ReasonText(StHsoReason reason) {
@@ -132,9 +142,21 @@ bool AppStorage_IsReady(void) { return true; }
 AppSettings *AppStorage_Get(void) { return &settings; }
 void AppStorage_Load(void) {}
 bool AppStorage_Save(void) { return true; }
-bool AppStorage_RequestSave(void) { return true; }
+bool AppStorage_RequestSave(void) {
+    if(save_state==APP_SAVE_WRITING) return false;
+    save_state=APP_SAVE_WRITING; save_done=tick+50; ++save_requests;
+    saved_settings=settings;
+    return true;
+}
+AppSaveState AppStorage_GetSaveState(void) {
+    return save_state==APP_SAVE_WRITING && AppStorage_IsDeferred() ? APP_SAVE_DEFERRED : save_state;
+}
 bool AppStorage_PollSaveResult(bool *success) {
+    if(save_state==APP_SAVE_WRITING && !AppStorage_IsDeferred() && (int32_t)(tick-save_done)>=0) {
+        save_result_ready=true; save_success=true;
+    }
     if(!save_result_ready) return false;
+    save_state=save_success ? APP_SAVE_SAVED : APP_SAVE_FAILED;
     save_result_ready=false;*success=save_success;return true;
 }
 const char *AppStorage_SaveErrorText(void) { return save_error; }
@@ -168,11 +190,12 @@ static void step(uint8_t keys, unsigned ms) {
             OLED_InternalTransferFinished(fail_next_frame?OLED_ERROR:OLED_OK);
             fail_next_frame=false;
         }
-        ui_app_update(tick);
-        static const uint16_t pins[]={KEY_Up_Pin,KEY_Down_Pin,KEY_OK_Pin,KEY_Left_Pin,KEY_Right_Pin,KEY2_Pin};
+        static const uint16_t pins[]={KEY_Up_Pin,KEY_Down_Pin,KEY_OK_Pin,KEY_Left_Pin,KEY_Right_Pin,KEY2_Pin,KEY1_Pin};
         host_gpio.pins=0xFFFFU;
-        for(unsigned key=0;key<6;++key) if(keys&(1U<<key)) host_gpio.pins&=~pins[key];
-        KK_UI_Status status=KK_UI_Update(tick,(KK_UI_Input){.keys=ui_input_poll()});
+        for(unsigned key=0;key<7;++key) if(keys&(1U<<key)) host_gpio.pins&=~pins[key];
+        uint8_t raw_keys=ui_input_poll();
+        ui_app_update(tick);
+        KK_UI_Status status=KK_UI_Update(tick,(KK_UI_Input){.keys=raw_keys});
         if(status==KK_UI_DISPLAY_ERROR || status==KK_UI_DISPLAY_TIMEOUT) {
             ++recoveries;
             ui_app_note_display_error();
@@ -187,6 +210,7 @@ static void press(uint8_t key) { step(key,30); step(0,30); }
 static void settle(void) { step(0,600); }
 static void back(void) { press(KK_UI_KEY_BACK); settle(); }
 static void reset(void) {
+    ControlStub_SetDeferred(false);
     MotorParams_Select(MOTOR_PROFILE_2804); velocity=0;
     output_requested=true;
     aligning=false;
@@ -194,8 +218,8 @@ static void reset(void) {
     memset(&settings,0,sizeof(settings)); settings.led_brightness=100;
     healthy=true; aligned=true; drive_ready=true; bus_data=true; bus_voltage=24.0f; mode=JERRYFOC_MODE_TORQUE;
     unready_status="FRAME TIMEOUT";
-    hso_active=hso_fault=false;
-    save_error="Save OK";save_result_ready=false;
+    hso_active=hso_fault=false;hso_at_rest=true;
+    save_error="Save OK";save_result_ready=false;save_state=APP_SAVE_SAVED;save_requests=0;
     flash_error=0;
     hso_snapshot=(StHsoSnapshot){.state=ST_HSO_WAIT_PARAM};
     JerryFOC_Target_Iq=JerryFOC_Target_Velocity=JerryFOC_Target_Position=0; angle=0; current_loop=0;
@@ -213,6 +237,29 @@ static void snapshot(const char *name) {
         fputc((fb[(py/8)*80+px] & (1U<<(py%8))) ? 255 : 0,file);
     }
     fclose(file);
+}
+static bool displayed_pixel(unsigned x,unsigned y) {
+    unsigned px=y,py=159U-x;
+    return (displayed[(py/8U)*80U+px] & (1U<<(py%8U)))!=0;
+}
+static void assert_home_label_center(unsigned selected) {
+    const char *label=ui_app_get()->home_pages[0].items[selected].label;
+    OLED_SetFont(ui_font_title);
+    int width=(OLED_GetUTF8Width(label)+13)&~1;
+    int left=80-width/2,min_x=160,max_x=-1,min_y=80,max_y=-1;
+    /* Dark glyph pixels inside the white focus box; omit rounded corners. */
+    for(int y=48;y<68;++y) for(int x=left+4;x<left+width-4;++x) {
+        if(displayed_pixel((unsigned)x,(unsigned)y)) continue;
+        if(x<min_x)min_x=x;
+        if(x>max_x)max_x=x;
+        if(y<min_y)min_y=y;
+        if(y>max_y)max_y=y;
+    }
+    assert(max_y>=min_y && max_x>=min_x);
+    assert(abs((min_y-48)-(67-max_y))<=2);
+    assert(abs((min_x-left)-(left+width-1-max_x))<=2);
+    /* Original 12px glyph sizes: descenders make Settings two pixels taller. */
+    assert(max_y-min_y+1==(selected==1 ? 10 : 8));
 }
 static void assert_home_continuity(uint8_t direction) {
     uint8_t before[OLED_BUFFER_SIZE];
@@ -238,7 +285,7 @@ static void select_setting(const char *name) {
     const KK_UI_MenuPage *menu=&ui_app_get()->menu_pages[0];
     unsigned index;
     for(index=0;index<menu->item_count;++index)
-        if(strcmp(menu->items[index].label,name)==0) break;
+        if(strcmp(menu->items[index].label,name)==0 || (!strcmp(name,"System") && menu->items[index].ref==UI_PAGE_SYSTEM && menu->items[index].type==KK_UI_MENU_PAGE)) break;
     assert(index<menu->item_count);
     while(kk_ui.current.selected!=index) press(KK_UI_KEY_DOWN);
 }
@@ -247,11 +294,264 @@ static void adjust_editor(int16_t delta) {
     assert(KK_UI_Update(tick,(KK_UI_Input){.encoder_delta=delta})==KK_UI_OK);
 }
 static const char *status_value(const char *name) {
-    const KK_UI_InfoPage *page=&ui_app_get()->info_pages[0];
-    for(unsigned i=0;i<page->row_count;++i)
-        if(strcmp(page->rows[i].name,name)==0) return page->rows[i].value;
+    for(unsigned p=0;p<ui_app_get()->info_page_count;++p) {
+        if(p==1) continue; /* About includes the same Motor label. */
+        const KK_UI_InfoPage *page=&ui_app_get()->info_pages[p];
+        for(unsigned i=0;i<page->row_count;++i)
+            if(strcmp(page->rows[i].name,name)==0) return page->rows[i].value;
+    }
     fprintf(stderr,"Missing Status row: %s\n",name);
     assert(0); return "";
+}
+/* Capture text from the real asynchronous UI draw, including its actual font
+ * metrics. No mirrored renderer or manual refresh is used for these checks. */
+static bool probe_enabled;
+static struct { char text[80]; int x,y,width; } probe[128];
+static unsigned probe_count;
+int16_t __real_OLED_DrawUTF8(int16_t x,int16_t y,const char *text);
+int16_t __wrap_OLED_DrawUTF8(int16_t x,int16_t y,const char *text) {
+    if(probe_enabled && probe_count<128) {
+        unsigned n=probe_count++;
+        snprintf(probe[n].text,sizeof(probe[n].text),"%s",text);
+        probe[n].x=x; probe[n].y=y; probe[n].width=OLED_GetUTF8Width(text);
+        for(const unsigned char *p=(const unsigned char *)text;*p;++p)
+            if(*p>=32 && *p<127) assert(OLED_GetGlyphAdvance(*p)>0);
+        if(y==1 || y==19 || y==24 || y==38 || y==51 || y==67) {
+            if(x<0 || x+probe[n].width>160)
+                fprintf(stderr,"Draw overflow: %s x=%d width=%d y=%d\n",text,x,probe[n].width,y);
+            assert(x>=0 && x+probe[n].width<=160);
+        }
+    }
+    return __real_OLED_DrawUTF8(x,y,text);
+}
+static void probe_frame(void) {
+    probe_count=0; probe_enabled=true; KK_UI_Invalidate(); step(0,120); probe_enabled=false;
+    assert(probe_count>0);
+}
+static bool drew(const char *text) {
+    for(unsigned i=0;i<probe_count;++i) if(!strcmp(probe[i].text,text)) return true;
+    fprintf(stderr,"Missing draw: %s\n",text); return false;
+}
+static void assert_run_value_center(void) {
+    bool found=false;
+    for(unsigned i=0;i<probe_count;++i) {
+        const char *text=probe[i].text;
+        if(probe[i].y!=19 || (text[0]!='-' && (text[0]<'0' || text[0]>'9'))) continue;
+        found=true;
+        bool unit=false;
+        for(unsigned j=i+1;j<probe_count;++j) {
+            if(probe[j].y!=24) continue;
+            const char *s=probe[j].text;
+            if(strcmp(s,"rad/s") && strcmp(s,"rad") && strcmp(s,"V") && strcmp(s,"A")) continue;
+            assert(probe[j].x==probe[i].x+probe[i].width+4);
+            assert(probe[j].x+probe[j].width<=156);
+            assert(abs(probe[i].x+probe[j].x+probe[j].width-160)<=1);
+            unit=true; break;
+        }
+        assert(unit);
+    }
+    assert(found);
+}
+static const char *save_label(void) {
+    const KK_UI_MenuPage *page=&ui_app_get()->menu_pages[0];
+    for(unsigned i=0;i<page->item_count;++i)
+        if(!strncmp(page->items[i].label,"Save: ",6)) return page->items[i].label;
+    assert(0); return "";
+}
+static void title_coverage(void) {
+    const KK_UI_App *app=ui_app_get();
+    OLED_SetFont(ui_font_title);
+    for(unsigned i=0;i<app->menu_page_count;++i)
+        for(const unsigned char *p=(const unsigned char *)app->menu_pages[i].title;*p;++p)
+            assert(OLED_GetGlyphAdvance(*p)>0);
+    for(unsigned i=0;i<app->info_page_count;++i)
+        for(const unsigned char *p=(const unsigned char *)app->info_pages[i].title;*p;++p)
+            assert(OLED_GetGlyphAdvance(*p)>0);
+    for(unsigned i=0;i<app->home_pages[0].item_count;++i)
+        for(const unsigned char *p=(const unsigned char *)app->home_pages[0].items[i].label;*p;++p)
+            assert(OLED_GetGlyphAdvance(*p)>0);
+    OLED_SetFont(ui_font_body);
+    for(unsigned c=32;c<127;++c) assert(OLED_GetGlyphAdvance(c)>0);
+}
+
+static void hso_run(MotorProfile profile,int32_t speed,unsigned limit) {
+    reset(); MotorControl_StopAll(); MotorControl_SelectWork(MOTOR_WORK_SINGLE_M1);
+    MotorControl_SelectFeedback(true); MotorParams_Select(profile);
+    settings.flags=(profile==MOTOR_PROFILE_4015 ? APP_FLAG_MOTOR_4015 : 0U) |
+        (limit<<APP_SPEED_LIMIT_SHIFT);
+    settings.speed_x10=speed;
+    ui_app_reset(tick); assert(KK_UI_Init(ui_app_get())==KK_UI_OK); settle();
+    press(KK_UI_KEY_OK); settle();
+    assert(KK_UI_GetCurrentPage()==UI_PAGE_RUN);
+}
+static void run_delta(bool up,unsigned steps) {
+    KK_UI_CustomOnInput(UI_PAGE_RUN,(KK_UI_InputEvent){up ? KK_UI_INPUT_UP : KK_UI_INPUT_DOWN,
+        KK_UI_INPUT_REPEAT,(uint16_t)steps});
+}
+static void check_r57(void) {
+    /* Real button repeats enter the legal grid in both directions. */
+    const KK_UI_App *app=ui_app_get();
+    for(unsigned p=0;p<2;++p) {
+        int minimum=p ? 29 : 45;
+        hso_run(p ? MOTOR_PROFILE_4015 : MOTOR_PROFILE_2804,0,600);
+        press(KK_UI_KEY_UP); probe_frame(); assert(drew(p ? "2.9" : "4.5"));
+        press(KK_UI_KEY_DOWN); probe_frame(); assert(drew("0.0"));
+        press(KK_UI_KEY_DOWN); probe_frame(); assert(drew(p ? "-2.9" : "-4.5"));
+        press(KK_UI_KEY_OK); assert(JerryFOC_Target_Velocity==-(float)minimum/10);
+        run_delta(true,10000); probe_frame(); assert(drew("0.0") && drew("OK:Stop K2:Back")); /* Cannot skip zero. */
+        run_delta(true,1); probe_frame(); assert(drew("0.0")); /* Running reverse blocked. */
+        assert(JerryFOC_Target_Velocity==-(float)minimum/10 && output_requested);
+        step(0,1400); press(KK_UI_KEY_OK); /* Explicit zero coasts in real backend. */
+        assert(JerryFOC_Target_Velocity==0 && !output_requested);
+        probe_frame(); assert(drew("Act 0.0 0=Coast"));
+        press(KK_UI_KEY_UP); hso_at_rest=false; press(KK_UI_KEY_OK);
+        assert(!output_requested && JerryFOC_Target_Velocity==0);
+        hso_at_rest=true; step(0,1400); press(KK_UI_KEY_OK);
+        assert(output_requested && JerryFOC_Target_Velocity==(float)minimum/10);
+        run_delta(true,10000); step(0,1400); probe_frame();
+        assert(drew(p ? "228.4" : "359.0"));
+        press(KK_UI_KEY_OK); assert(JerryFOC_Target_Velocity==(p ? 228.4f : 359.0f));
+        run_delta(false,10000); probe_frame(); assert(drew("0.0"));
+        assert_run_value_center();
+        back();
+    }
+    /* A retained encoder target is adapted only as a draft, before explicit OK. */
+    hso_run(MOTOR_PROFILE_4015,1,600); probe_frame();
+    assert(drew("2.9") && settings.speed_x10==1 && drew("OK:Start K2:Back"));
+    snapshot("r57-hso-min");
+    hso_run(MOTOR_PROFILE_4015,-6000,600); probe_frame(); assert(drew("-228.4"));
+    hso_run(MOTOR_PROFILE_4015,0,2); press(KK_UI_KEY_UP); step(0,1400);
+    probe_frame(); assert(drew("0.0"));
+    assert(!strcmp(status_value("H Max"),"No run range"));
+    /* Long hold still repeats; only the first zero-to-minimum step jumps. */
+    hso_run(MOTOR_PROFILE_4015,0,100); step(KK_UI_KEY_UP,1600); step(0,30);
+    probe_frame(); press(KK_UI_KEY_OK);
+    assert(JerryFOC_Target_Velocity>2.9f && JerryFOC_Target_Velocity<100);
+    back();
+    /* Real menu navigation, six Info routes, return stack and axis actions. */
+    reset(); MotorControl_StopAll(); MotorControl_SelectFeedback(false);
+    MotorControl_SelectWork(MOTOR_WORK_INDEPENDENT);
+    ui_app_reset(tick); assert(KK_UI_Init(app)==KK_UI_OK); settle();
+    press(KK_UI_KEY_RIGHT); press(KK_UI_KEY_RIGHT); press(KK_UI_KEY_OK); settle();
+    assert(KK_UI_GetCurrentPage()==UI_PAGE_STATUS && app->menu_pages[4].item_count==8);
+    step(0,2000); snapshot("r57-status-menu");
+    for(unsigned i=0;i<6;++i) {
+        while(kk_ui.current.selected!=i) press(KK_UI_KEY_DOWN);
+        press(KK_UI_KEY_OK); settle();
+        assert(KK_UI_GetCurrentPage()==UI_PAGE_DRIVE+i);
+        probe_frame(); title_coverage();
+        if(i==0) snapshot("r57-drive");
+        if(i==4) snapshot("r57-hso-limits");
+        press(KK_UI_KEY_DOWN); settle(); assert(kk_ui.current.scroll_q8>0);
+        back(); assert(KK_UI_GetCurrentPage()==UI_PAGE_STATUS && kk_ui.current.selected==i);
+    }
+    while(kk_ui.current.selected!=7) press(KK_UI_KEY_DOWN);
+    press(KK_UI_KEY_OK); settle();
+    assert(MotorControl_GetFocus()==MOTOR_AXIS_2 && strstr(app->menu_pages[4].title,"M2"));
+    assert(!strcmp(status_value("E2 State"),"OK"));
+    assert(strstr(app->info_pages[3].title,"M2") && strstr(app->info_pages[5].title,"M1"));
+    while(kk_ui.current.selected!=6) press(KK_UI_KEY_UP);
+    press(KK_UI_KEY_OK); settle(); assert(MotorControl_GetFocus()==MOTOR_AXIS_1);
+    /* Auxiliary units retain SI targets and identify wrapped Status angles. */
+    velocity=-10; angle=-0.5f*PI; JerryFOC_Target_Velocity=-10; mode=JERRYFOC_MODE_VELOCITY;
+    step(0,3500);
+    assert(!strcmp(status_value("Speed"),"-10.0 rad/s"));
+    assert(!strcmp(status_value("Speed rpm"),"-95.5 rpm"));
+    assert(!strcmp(status_value("Target rpm"),"-95.5 rpm"));
+    assert(!strcmp(status_value("Mech 0-360"),"270.0 deg"));
+    assert(!strcmp(status_value("Elec 0-360"),"0.0 deg"));
+    while(kk_ui.current.selected!=1) press(KK_UI_KEY_UP);
+    press(KK_UI_KEY_OK); settle();
+    snapshot("r57-motion"); press(KK_UI_KEY_DOWN); settle(); back();
+    mode=JERRYFOC_MODE_POSITION; JerryFOC_Target_Position=2*PI+0.5f*PI; step(0,501);
+    assert(!strcmp(status_value("Tgt 0-360"),"90.0 deg"));
+    angle=10000*2*PI+0.5f*PI; step(0,501);
+    float degree; assert(sscanf(status_value("Mech 0-360"),"%f",&degree)==1 && degree>=0 && degree<360);
+    angle=NAN; step(0,501); assert(!strcmp(status_value("Mech 0-360"),"--"));
+    MotorControl_SelectWork(MOTOR_WORK_SINGLE_M1); reset();
+    settings.speed_x10=100; ui_app_reset(tick); assert(KK_UI_Init(app)==KK_UI_OK); settle();
+    press(KK_UI_KEY_OK); settle(); press(KK_UI_KEY_RIGHT); velocity=10;
+    probe_frame(); assert(drew("Act 10.0 95rpm") && drew("95rpm")); snapshot("r57-run-rpm");
+    press(KK_UI_KEY_RIGHT); angle=PI/2;
+    probe_frame(); assert(drew("Act 1.57 90deg") && drew("0deg")); snapshot("r57-run-deg");
+    back();
+    puts("PASS: R57 HSO legal grid/min/max/zero/reversal/rest/repeat; six Status routes/axis context; signed rpm, wrapped degrees and unchanged SI commands");
+}
+static void enter_independent_run(void) {
+    reset(); MotorControl_StopAll(); MotorControl_SelectFeedback(false);
+    MotorControl_SelectWork(MOTOR_WORK_INDEPENDENT); MotorControl_SetFocus(MOTOR_AXIS_1);
+    ControlStub_SetSecondState((MotorAxisSnapshot){.healthy=true,.aligned=true,.ready=true,.status="READY"});
+    ui_app_reset(tick); assert(KK_UI_Init(ui_app_get())==KK_UI_OK); settle();
+    press(KK_UI_KEY_OK); settle(); assert(KK_UI_GetCurrentPage()==UI_PAGE_RUN);
+}
+static void check_run_lr_gestures(void) {
+    for(unsigned run_mode=0;run_mode<3;++run_mode) {
+        enter_independent_run();
+        for(unsigned i=0;i<run_mode;++i) press(KK_UI_KEY_RIGHT);
+        press(KK_UI_KEY_UP); press(KK_UI_KEY_OK);
+        float target=motor_target(run_mode);
+        assert(output_requested && target>0 && mode==(JerryFOC_ControlMode)run_mode);
+        step(KK_UI_KEY_RIGHT,450);
+        assert(MotorControl_GetFocus()==MOTOR_AXIS_1 && output_requested && mode==(JerryFOC_ControlMode)run_mode);
+        step(KK_UI_KEY_RIGHT,200);
+        assert(MotorControl_GetFocus()==MOTOR_AXIS_2 && output_requested && motor_target(run_mode)==target);
+        step(KK_UI_KEY_RIGHT,1400); step(0,30);
+        MotorAxisSnapshot second; MotorControl_GetAxis(MOTOR_AXIS_2,&second); assert(!second.active);
+        step(KK_UI_KEY_LEFT,650); step(0,30);
+        assert(MotorControl_GetFocus()==MOTOR_AXIS_1 && output_requested && mode==(JerryFOC_ControlMode)run_mode);
+        assert(motor_target(run_mode)==target);
+        press(KK_UI_KEY_OK); assert(!output_requested);
+        step(KK_UI_KEY_RIGHT,650); step(0,30); back(); step(0,2600);
+        assert(saved_settings.control_config & APP_CONFIG_FOCUS_M2);
+    }
+    /* Release bounce counts as one short action; OK still acts on press. */
+    enter_independent_run(); press(KK_UI_KEY_UP); press(KK_UI_KEY_OK);
+    step(KK_UI_KEY_RIGHT,100); assert(output_requested);
+    step(0,10); step(KK_UI_KEY_RIGHT,10); assert(output_requested);
+    step(0,30); assert(!output_requested && MotorControl_GetFocus()==MOTOR_AXIS_1);
+    press(KK_UI_KEY_UP); press(KK_UI_KEY_OK);
+    assert(mode==JERRYFOC_MODE_VELOCITY && JerryFOC_Target_Velocity==0.5f);
+    for(unsigned priority=0;priority<4;++priority) {
+        enter_independent_run(); press(KK_UI_KEY_UP); press(KK_UI_KEY_OK);
+        step(KK_UI_KEY_RIGHT,priority==3 ? 600 : 100);
+        uint8_t other=priority==0 ? KK_UI_KEY_UP : priority==1 ? KK_UI_KEY_DOWN :
+            priority==2 ? KK_UI_KEY_OK : KK_UI_KEY_BACK;
+        step(KK_UI_KEY_RIGHT|other,80); step(0,30);
+        assert(MotorControl_GetFocus()==MOTOR_AXIS_1);
+        if(priority<2) assert(output_requested && mode==JERRYFOC_MODE_TORQUE && JerryFOC_Target_Iq==0.05f);
+        else {
+            assert(!output_requested);
+            if(priority==2) { press(KK_UI_KEY_OK); assert(mode==JERRYFOC_MODE_TORQUE && JerryFOC_Target_Iq==0.05f); }
+            else { settle(); assert(KK_UI_GetCurrentPage()==UI_PAGE_HOME); }
+        }
+    }
+    enter_independent_run();
+    step(KK_UI_KEY_LEFT|KK_UI_KEY_RIGHT,1000); step(0,30);
+    assert(MotorControl_GetFocus()==MOTOR_AXIS_1);
+    /* A press that began during entry cannot leak into a selection. */
+    back(); press(KK_UI_KEY_OK); step(KK_UI_KEY_RIGHT,1200); step(0,30);
+    assert(MotorControl_GetFocus()==MOTOR_AXIS_1);
+    step(KK_UI_KEY_RIGHT,650); step(0,30); assert(MotorControl_GetFocus()==MOTOR_AXIS_2);
+    /* A queued gesture is canceled by external focus/work changes or faults. */
+    enter_independent_run(); step(KK_UI_KEY_RIGHT,100);
+    MotorControl_SetFocus(MOTOR_AXIS_2); step(KK_UI_KEY_RIGHT,800); step(0,30);
+    MotorAxisSnapshot second; MotorControl_GetAxis(MOTOR_AXIS_2,&second); assert(!second.active);
+    enter_independent_run(); step(KK_UI_KEY_RIGHT,100);
+    MotorControl_StopAll(); MotorControl_SelectWork(MOTOR_WORK_SINGLE_M1);
+    step(KK_UI_KEY_RIGHT,800); step(0,30); assert(MotorControl_GetFocus()==MOTOR_AXIS_1);
+    enter_independent_run(); press(KK_UI_KEY_UP); press(KK_UI_KEY_OK);
+    step(KK_UI_KEY_RIGHT,100); drive_ready=false; step(KK_UI_KEY_RIGHT,30);
+    drive_ready=true; step(KK_UI_KEY_RIGHT,800); step(0,30);
+    assert(MotorControl_GetFocus()==MOTOR_AXIS_1 && !output_requested);
+    /* Long-release classification also survives a stalled foreground. */
+    enter_independent_run(); press(KK_UI_KEY_UP); press(KK_UI_KEY_OK);
+    step(KK_UI_KEY_RIGHT,50); tick+=700; step(0,30);
+    assert(MotorControl_GetFocus()==MOTOR_AXIS_2 && output_requested && JerryFOC_Target_Iq==0.05f);
+    tick=UINT32_MAX-2200U; enter_independent_run();
+    step(KK_UI_KEY_RIGHT,650); step(0,30);
+    assert(tick<1000 && MotorControl_GetFocus()==MOTOR_AXIS_2);
+    back(); MotorControl_SelectWork(MOTOR_WORK_SINGLE_M1); MotorControl_SetFocus(MOTOR_AXIS_1);
+    puts("PASS: R56 release-only short modes, absolute long L/R selection in all modes, no stop/repeat on hold, release bounce, KEY1 reservation, chord/OK/Back priority, context/fault cancellation, entry blocking, saved focus, foreground stalls and tick wrap");
 }
 int main(void) {
     ui_input_init(); assert(ui_input_poll()==0);
@@ -262,6 +562,11 @@ int main(void) {
         reset(); kk_ui.current.selected=i;
         assert_home_continuity(KK_UI_KEY_RIGHT);
         settle(); assert_home_continuity(KK_UI_KEY_LEFT);
+    }
+    const char *home_names[]={"home-run-centered","home-settings-centered","home-status-centered","home-about-centered"};
+    for(unsigned i=0;i<4;++i) {
+        reset(); for(unsigned j=0;j<i;++j) press(KK_UI_KEY_RIGHT); settle();
+        assert_home_label_center(i); snapshot(home_names[i]);
     }
     reset();
     assert(strcmp(status_value("Bus"),"24.0 V")==0);
@@ -320,25 +625,27 @@ int main(void) {
         snapshot(home_index==2 ? "status-transition" : "about-transition");
         settle(); assert(frame_changes-before>=6);
         assert(KK_UI_GetCurrentPage()==(home_index==2?UI_PAGE_STATUS:UI_PAGE_ABOUT));
+        if(home_index==2) { press(KK_UI_KEY_OK); settle(); assert(KK_UI_GetCurrentPage()==UI_PAGE_DRIVE); }
         press(KK_UI_KEY_RIGHT); assert(kk_ui.current.scroll_q8==0);
         press(KK_UI_KEY_DOWN); assert(kk_ui.current.scroll_q8>0);
         snapshot(home_index==2 ? "status" : "about");
-        back(); assert(KK_UI_GetCurrentPage()==UI_PAGE_HOME);
+        back(); if(home_index==2) { assert(KK_UI_GetCurrentPage()==UI_PAGE_STATUS); back(); }
+        assert(KK_UI_GetCurrentPage()==UI_PAGE_HOME);
     }
     reset(); press(KK_UI_KEY_RIGHT); press(KK_UI_KEY_OK); settle();
     assert(KK_UI_GetCurrentPage()==UI_PAGE_SETTINGS);
     press(KK_UI_KEY_RIGHT); assert(kk_ui.current.selected==0);
-    press(KK_UI_KEY_OK); settle(); /* bool: only horizontal */
+    select_setting("Curr Loop"); press(KK_UI_KEY_OK); settle(); /* bool: only horizontal */
     press(KK_UI_KEY_UP); assert(kk_ui.overlay.draft==0);
     press(KK_UI_KEY_RIGHT); assert(kk_ui.overlay.draft==1);
     back(); assert(settings.flags==0); /* Back cancels draft */
-    press(KK_UI_KEY_DOWN); press(KK_UI_KEY_DOWN); press(KK_UI_KEY_OK); settle();
+    select_setting("LED Bright"); press(KK_UI_KEY_OK); settle();
     assert(kk_ui.overlay.type==KK_UI_OVERLAY_INT);
     press(KK_UI_KEY_DOWN); assert(kk_ui.overlay.draft==95);
     press(KK_UI_KEY_LEFT); assert(kk_ui.overlay.draft==95);
     back(); assert(settings.led_brightness==100);
     /* Confirm Back cancels, never resets. */
-    select_setting("Reset"); press(KK_UI_KEY_OK); settle();
+    select_setting("Restore Defaults"); press(KK_UI_KEY_OK); settle();
     assert(kk_ui.overlay.type==KK_UI_OVERLAY_CONFIRM); back();
     assert(settings.led_brightness==100); back();
     /* Boot-held, opposite keys, transition-held and timer wrap. */
@@ -423,7 +730,7 @@ int main(void) {
     }
     /* Reset restores the default range as well as the target. */
     back(); press(KK_UI_KEY_RIGHT); press(KK_UI_KEY_OK); settle();
-    select_setting("Reset"); press(KK_UI_KEY_OK); settle();
+    select_setting("Restore Defaults"); press(KK_UI_KEY_OK); settle();
     press(KK_UI_KEY_RIGHT); press(KK_UI_KEY_OK); settle();
     select_setting("Speed Limit"); press(KK_UI_KEY_OK); settle();
     assert(kk_ui.overlay.draft==100); back();
@@ -570,7 +877,7 @@ int main(void) {
     press(KK_UI_KEY_OK); settle(); fail_next_frame=true;
     step(KK_UI_KEY_LEFT,1000); step(0,30); press(KK_UI_KEY_OK); settle();
     assert(settings.torque_step_x100==5);
-    const KK_UI_InfoPage *status=&ui_app_get()->info_pages[0];
+    const KK_UI_InfoPage *status=&ui_app_get()->info_pages[3];
     assert(strcmp(status_value("HSO"),"WAIT FLUX")==0);
     assert(strcmp(status_value("H Flux"),"0 uWb")==0);
     assert(strcmp(status_value("H Time"),"0 us / 0")==0);
@@ -625,10 +932,8 @@ int main(void) {
     assert(strcmp(status_value("RefState"),"WAIT")==0);
     assert(strcmp(status_value("VREF"),"NO DATA")==0); /* Never show a guessed value as measured. */
     reference_data=reference_seen=true; step(0,501);
-    for(unsigned row=0;row<status->row_count;++row) {
-        if(strcmp(status->rows[row].name,"DispErr")==0) assert(strcmp(status->rows[row].value,"2")==0);
-        if(strcmp(status->rows[row].name,"KeyRpt")==0) assert(strcmp(status->rows[row].value,"0")!=0);
-    }
+    assert(strcmp(status_value("DispErr"),"2")==0);
+    assert(strcmp(status_value("KeyRpt"),"0")!=0);
     /* HSO fault acknowledgement is explicit and never restarts the motor. */
     reset(); press(KK_UI_KEY_OK); settle();
     press(KK_UI_KEY_UP); press(KK_UI_KEY_OK); settle();
@@ -708,7 +1013,7 @@ int main(void) {
     assert(strcmp(ui_app_get()->info_pages[1].rows[2].value,"4015")==0);
     snapshot("motor-4015"); back();
     select_setting("Speed Limit"); press(KK_UI_KEY_OK); settle();
-    adjust_editor(-1000); assert(kk_ui.overlay.draft==120); back();
+    adjust_editor(-1000); assert(kk_ui.overlay.draft==600); back();
     back(); press(KK_UI_KEY_LEFT); press(KK_UI_KEY_OK); settle();
     press(KK_UI_KEY_UP); press(KK_UI_KEY_OK); assert(JerryFOC_Target_Iq==0); /* No alignment yet. */
     aligned=true; press(KK_UI_KEY_OK); assert(JerryFOC_Target_Iq>0);
@@ -729,7 +1034,7 @@ int main(void) {
     ui_app_reset(tick); assert(KK_UI_Init(ui_app_get())==KK_UI_OK); settle();
     press(KK_UI_KEY_RIGHT); press(KK_UI_KEY_OK); settle();
     select_setting("Speed Limit"); press(KK_UI_KEY_OK); settle();
-    assert(kk_ui.overlay.draft==120); back();
+    assert(kk_ui.overlay.draft==600); back();
     /* The same Run control adopts the selected motor's dq and voltage ranges. */
     back(); press(KK_UI_KEY_LEFT); press(KK_UI_KEY_OK); settle();
     KK_UI_CustomOnInput(UI_PAGE_RUN,(KK_UI_InputEvent){KK_UI_INPUT_UP,KK_UI_INPUT_ENCODER,10000});
@@ -740,7 +1045,7 @@ int main(void) {
     KK_UI_CustomOnInput(UI_PAGE_RUN,(KK_UI_InputEvent){KK_UI_INPUT_UP,KK_UI_INPUT_ENCODER,10000});
     press(KK_UI_KEY_OK); assert(fabsf(JerryFOC_Target_Iq-1.2f)<0.001f); back();
     press(KK_UI_KEY_RIGHT); press(KK_UI_KEY_OK); settle();
-    select_setting("Reset"); press(KK_UI_KEY_OK); settle();
+    select_setting("Restore Defaults"); press(KK_UI_KEY_OK); settle();
     press(KK_UI_KEY_RIGHT); press(KK_UI_KEY_OK); settle();
     assert(MotorParams_GetActiveProfile()==MOTOR_PROFILE_2804 && !(settings.flags & APP_FLAG_MOTOR_4015));
     /* Export the user's two exact home sequences and rapid reversals. */
@@ -764,7 +1069,7 @@ int main(void) {
     for(unsigned a=0;a<2;++a) for(unsigned p=0;p<2;++p) {
         reset(); MotorControl_StopAll(); MotorControl_SetFocus((MotorAxis)a);
         MotorParams_SelectAxis((MotorAxis)a,(MotorProfile)p);
-        unsigned maximum=p==MOTOR_PROFILE_4015 ? 120U : 600U;
+        unsigned maximum=600U;
         uint32_t flags=(maximum<<APP_SPEED_LIMIT_SHIFT)|AppSettings_EncodePositionSpeed(30);
         if(a==0) settings.flags=flags|(p ? APP_FLAG_MOTOR_4015 : 0U);
         else settings.axis2_flags=flags;
@@ -788,8 +1093,8 @@ int main(void) {
         select_setting("Pos Speed"); press(KK_UI_KEY_OK); settle(); assert(kk_ui.overlay.draft==17); back();
     }
     MotorControl_SetFocus(MOTOR_AXIS_1);
-    puts("PASS: M1/M2 2804/4015 Pos Speed dynamic range 1..Speed Limit, 600/120 persistence and downward clamping");
-    /* New System route, independent drafts and KEY1 without stopping M1. */
+    puts("PASS: M1/M2 2804/4015 Pos Speed dynamic range 1..Speed Limit, 600 persistence and downward clamping");
+    /* Independent drafts and long L/R selection without stopping either motor. */
     reset(); press(KK_UI_KEY_RIGHT); press(KK_UI_KEY_OK); settle();
     select_setting("System"); press(KK_UI_KEY_OK); settle();
     assert(KK_UI_GetCurrentPage()==UI_PAGE_SYSTEM);
@@ -801,30 +1106,37 @@ int main(void) {
     assert(KK_UI_GetCurrentPage()==UI_PAGE_RUN);
     press(KK_UI_KEY_UP); press(KK_UI_KEY_OK); assert(output_requested);
     assert(fabsf(JerryFOC_Target_Iq-0.05f)<0.001f);
-    /* Bounce <20ms is ignored; a held KEY1 produces exactly one axis change. */
-    for(unsigned i=0;i<10;++i) {
-        host_gpio.pins &= ~KEY1_Pin; ui_input_poll(); ++tick;
-        host_gpio.pins |= KEY1_Pin; ui_input_poll(); ++tick;
-    }
-    ui_app_update(tick); assert(MotorControl_GetFocus()==MOTOR_AXIS_1);
-    for(unsigned i=0;i<1000;++i) {
-        ++tick; host_gpio.pins &= ~KEY1_Pin; ui_input_poll(); ui_app_update(tick);
-    }
+    /* KEY1 is reserved. A short bounce cannot change mode or motor. */
+    step(1U<<6,1000); step(0,30);
+    assert(MotorControl_GetFocus()==MOTOR_AXIS_1 && output_requested);
+    assert(mode==JERRYFOC_MODE_TORQUE && fabsf(JerryFOC_Target_Iq-0.05f)<0.001f);
+    step(KK_UI_KEY_RIGHT,5); step(0,30);
+    assert(MotorControl_GetFocus()==MOTOR_AXIS_1 && output_requested);
+    /* No short mode action while holding; 600 ms after debounce selects M2. */
+    step(KK_UI_KEY_RIGHT,600);
+    assert(MotorControl_GetFocus()==MOTOR_AXIS_1 && output_requested);
+    step(KK_UI_KEY_RIGHT,30);
     assert(MotorControl_GetFocus()==MOTOR_AXIS_2 && output_requested);
-    host_gpio.pins |= KEY1_Pin;
-    for(unsigned i=0;i<30;++i) { ++tick; ui_input_poll(); ui_app_update(tick); }
+    assert(settings.control_config & APP_CONFIG_FOCUS_M2);
+    step(KK_UI_KEY_RIGHT,2000); step(0,30);
+    assert(MotorControl_GetFocus()==MOTOR_AXIS_2 && output_requested);
+    assert(mode==JERRYFOC_MODE_TORQUE && fabsf(JerryFOC_Target_Iq-0.05f)<0.001f);
     press(KK_UI_KEY_RIGHT); press(KK_UI_KEY_UP); press(KK_UI_KEY_OK);
     MotorAxisSnapshot second; MotorControl_GetAxis(MOTOR_AXIS_2,&second);
     assert(second.active && second.mode==JERRYFOC_MODE_VELOCITY && second.target_velocity==0.5f);
     assert(output_requested && fabsf(JerryFOC_Target_Iq-0.05f)<0.001f);
     settle(); snapshot("run-dual-m2");
-    OLED_SetFont(ui_font_body); assert(OLED_GetUTF8Width("OK:Stop K1:Axis K2:Back")<=152);
-    for(unsigned i=0;i<30;++i) { ++tick; host_gpio.pins &= ~KEY1_Pin; ui_input_poll(); ui_app_update(tick); }
+    OLED_SetFont(ui_font_body); assert(OLED_GetUTF8Width("OK:Stop LR hold K2:Back")<=152);
+    assert(OLED_GetUTF8Width("OK:Apply LR hold K2:Back")<=152);
+    press(KK_UI_KEY_UP); probe_frame(); assert(drew("OK:Apply LR hold K2:Back"));
+    snapshot("run-dual-m2-apply"); press(KK_UI_KEY_DOWN);
+    step(KK_UI_KEY_LEFT,650);
     assert(MotorControl_GetFocus()==MOTOR_AXIS_1 && output_requested);
-    host_gpio.pins |= KEY1_Pin;
-    for(unsigned i=0;i<30;++i) { ++tick; ui_input_poll(); ui_app_update(tick); }
+    step(KK_UI_KEY_LEFT,1000); step(0,30);
+    assert(MotorControl_GetFocus()==MOTOR_AXIS_1 && output_requested);
     press(KK_UI_KEY_OK); assert(!output_requested); /* Unchanged M1 target toggles M1 only. */
     MotorControl_GetAxis(MOTOR_AXIS_2,&second); assert(second.active);
+    probe_frame(); assert(drew("M1:STOP") && drew("M2:RUN"));
     back(); MotorControl_GetAxis(MOTOR_AXIS_2,&second); assert(!second.active);
     settle(); step(0,2500);
     assert(settings.voltage_x100==5 && settings.axis2_speed_x10==5);
@@ -908,7 +1220,108 @@ int main(void) {
         back();
     }
     MotorControl_SelectWork(MOTOR_WORK_SINGLE_M1); MotorControl_SetFocus(MOTOR_AXIS_1);
-    puts("PASS: System/work routes, independent M1/M2 confirmed targets, KEY1 bounce/hold/view-only switching and KEY2 group stop");
+    /* R54: applied Work mark is independent of the selection cursor. */
+    reset(); press(KK_UI_KEY_RIGHT); press(KK_UI_KEY_OK); settle();
+    const KK_UI_App *app=ui_app_get();
+    assert(strstr(app->menu_pages[0].items[0].label,"System:") &&
+           !strcmp(app->menu_pages[0].items[app->menu_pages[0].item_count-1].label,"Restore Defaults"));
+    unsigned model_links=0;
+    for(unsigned p=0;p<app->menu_page_count;++p) for(unsigned i=0;i<app->menu_pages[p].item_count;++i)
+        if(app->menu_pages[p].items[i].type==KK_UI_MENU_PAGE && app->menu_pages[p].items[i].ref==UI_PAGE_MOTOR) ++model_links;
+    assert(model_links==1);
+    select_setting("System"); press(KK_UI_KEY_OK); settle(); press(KK_UI_KEY_OK); settle();
+    assert(KK_UI_GetCurrentPage()==UI_PAGE_WORK);
+    const KK_UI_MenuPage *work_menu=&app->menu_pages[3];
+    press(KK_UI_KEY_DOWN); settle();
+    assert(kk_ui.current.selected==1 && work_menu->items[0].label[0]=='*' && work_menu->items[1].label[0]==' ');
+    snapshot("work-current-marker");
+    press(KK_UI_KEY_OK); settle();
+    assert(MotorControl_GetWork()==MOTOR_WORK_SINGLE_M2 && work_menu->items[1].label[0]=='*');
+    assert(strstr(app->menu_pages[0].items[0].label,"Single M2"));
+    title_coverage();
+    MotorControl_SelectWork(MOTOR_WORK_SINGLE_M1); MotorControl_SetFocus(MOTOR_AXIS_1);
+    /* HSO displays ON without changing the saved encoder-loop preference. */
+    reset(); MotorControl_SelectFeedback(true); settings.speed_x10=500;
+    ui_app_reset(tick); assert(KK_UI_Init(app)==KK_UI_OK); settle();
+    press(KK_UI_KEY_RIGHT); press(KK_UI_KEY_OK); settle();
+    const KK_UI_MenuPage *settings_menu=&app->menu_pages[0];
+    const KK_UI_MenuItem *loop=&settings_menu->items[1];
+    assert(*app->bool_bindings[loop->ref].value);
+    assert(KK_UI_MenuGetItemState(settings_menu,1)==KK_UI_ITEM_DISABLED);
+    assert(!(settings.flags & APP_FLAG_CURRENT_LOOP));
+    snapshot("settings-hso-loop-on"); title_coverage();
+    back(); press(KK_UI_KEY_LEFT); press(KK_UI_KEY_OK); settle();
+    probe_frame(); assert(drew("M1 Speed HSO") && drew("24.0 V") && drew("OK:Start K2:Back"));
+    press(KK_UI_KEY_OK); hso_active=true; hso_snapshot.state=ST_HSO_ALIGN;
+    probe_frame(); assert(drew("RUN HSO DC ALIGN") && current_loop);
+    hso_snapshot.state=ST_HSO_RAMP; probe_frame(); assert(drew("RUN HSO I/F RAMP"));
+    hso_snapshot.state=ST_HSO_LEARNING; probe_frame(); assert(drew("RUN HSO I/F FLUX"));
+    snapshot("run-hso-start");
+    hso_snapshot.state=ST_HSO_CAPTURE; probe_frame(); assert(drew("RUN HSO CAPTURE"));
+    hso_snapshot.state=ST_HSO_CONTROL; probe_frame(); assert(drew("RUN HSO CONTROL"));
+    snapshot("run-hso-control");
+    back(); MotorControl_SelectFeedback(false); step(0,501);
+    assert(!*app->bool_bindings[loop->ref].value && !(settings.flags & APP_FLAG_CURRENT_LOOP));
+    /* Render signed endpoint edits with both draft and confirmed values. */
+    reset(); MotorParams_Select(MOTOR_PROFILE_4015);
+    settings.flags=APP_FLAG_MOTOR_4015 | (600UL<<APP_SPEED_LIMIT_SHIFT);
+    settings.speed_x10=6000;
+    ui_app_reset(tick); assert(KK_UI_Init(app)==KK_UI_OK); settle();
+    press(KK_UI_KEY_OK); settle(); press(KK_UI_KEY_RIGHT); press(KK_UI_KEY_OK);
+    assert(JerryFOC_Target_Velocity==600);
+    KK_UI_CustomOnInput(UI_PAGE_RUN,(KK_UI_InputEvent){KK_UI_INPUT_DOWN,KK_UI_INPUT_ENCODER,10000});
+    velocity=-600; probe_frame();
+    assert(drew("M1 Speed ENC") && drew("-600.0") && drew("Act -600.0 Set 600.0") && drew("OK:Apply K2:Back"));
+    snapshot("run-4015-draft-range"); velocity=0; back();
+    /* R55: signed short/maximum values remain centered in all three modes;
+     * units follow the number, including six-character -600.0 and -13.86. */
+    for(unsigned loop_mode=0;loop_mode<2;++loop_mode) {
+        reset(); MotorParams_Select(MOTOR_PROFILE_4015);
+        settings.flags=APP_FLAG_MOTOR_4015 | (600UL<<APP_SPEED_LIMIT_SHIFT) |
+            (loop_mode ? APP_FLAG_CURRENT_LOOP : 0U);
+        ui_app_reset(tick); assert(KK_UI_Init(app)==KK_UI_OK); settle();
+        press(KK_UI_KEY_OK); settle(); probe_frame(); assert_run_value_center();
+        for(unsigned mode_index=0;mode_index<3;++mode_index) {
+            for(unsigned negative=0;negative<2;++negative) {
+                KK_UI_CustomOnInput(UI_PAGE_RUN,(KK_UI_InputEvent){negative ? KK_UI_INPUT_DOWN : KK_UI_INPUT_UP,KK_UI_INPUT_ENCODER,10000});
+                probe_frame(); assert_run_value_center();
+            }
+            press(KK_UI_KEY_RIGHT);
+        }
+        back();
+    }
+    puts("PASS: R55 original Home 12px glyph sizes/pixel centering, signed Run value centering and adjacent units across voltage/current/speed/position");
+    /* Axis selection is delayed-saved; reopening UI restores M2 parameters
+     * with both outputs off. Real controller boot is checked separately. */
+    reset(); MotorControl_StopAll(); MotorControl_SelectWork(MOTOR_WORK_INDEPENDENT);
+    press(KK_UI_KEY_RIGHT); press(KK_UI_KEY_OK); settle();
+    select_setting("System"); press(KK_UI_KEY_OK); settle();
+    press(KK_UI_KEY_DOWN); press(KK_UI_KEY_DOWN); press(KK_UI_KEY_OK); settle();
+    assert(MotorControl_GetFocus()==MOTOR_AXIS_2 && (settings.control_config & APP_CONFIG_FOCUS_M2));
+    step(0,2600); assert(save_requests && (saved_settings.control_config & APP_CONFIG_FOCUS_M2));
+    settings=saved_settings; ui_app_reset(tick); assert(KK_UI_Init(app)==KK_UI_OK); settle();
+    assert(strstr(app->menu_pages[0].title,"M2") && !output_requested);
+    press(KK_UI_KEY_OK); settle(); probe_frame();
+    assert(drew("M1:STOP") && drew("M2:STOP") && drew("24.0 V") && drew("OK:Start LR hold K2:Back"));
+    snapshot("run-dual-stopped"); back();
+    MotorControl_SelectWork(MOTOR_WORK_SINGLE_M1); MotorControl_SetFocus(MOTOR_AXIS_1);
+    /* Save state survives toast expiry and distinguishes queued bus waits,
+     * the in-flight snapshot, verified success and a terminal failure. */
+    reset(); press(KK_UI_KEY_RIGHT); press(KK_UI_KEY_OK); settle();
+    select_setting("Pos Speed"); press(KK_UI_KEY_OK); settle(); press(KK_UI_KEY_UP);
+    press(KK_UI_KEY_OK); press(KK_UI_KEY_OK); settle();
+    assert(!strcmp(save_label(),"Save: Pending"));
+    ControlStub_SetDeferred(true); step(0,501); assert(!strcmp(save_label(),"Save: Wait bus"));
+    step(0,2200); assert(!strcmp(save_label(),"Save: Wait bus"));
+    ControlStub_SetDeferred(false); save_done=tick+1000; step(0,501);
+    assert(!strcmp(save_label(),"Save: Saving"));
+    step(0,1000); assert(!strcmp(save_label(),"Save: Saved"));
+    save_state=APP_SAVE_FAILED; step(0,2500); assert(!strcmp(save_label(),"Save: Failed"));
+    select_setting("Restore Defaults"); settle(); snapshot("settings-save-failed");
+    check_run_lr_gestures();
+    check_r57();
+    puts("PASS: R54 applied Work marker, axis-qualified settings, HSO forced ON with retained encoder preference, Run feedback/bus/stages/actions/ranges, idle focus persistence and durable save states");
+    puts("PASS: System/work routes, independent M1/M2 confirmed targets, reserved KEY1, long L/R view-only selection and KEY2 group stop");
     printf("PASS: GPIO, axes, bounce, repeat, Back/cancel, run modes, speed range, stop, fault, position origin, wrap, animations, async DMA (%u submissions)\n",submissions);
     return 0;
 }

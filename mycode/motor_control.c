@@ -81,7 +81,21 @@ bool MotorControl_HsoAllowed(void) { return work==MOTOR_WORK_SINGLE_M1 && hso_se
 bool MotorControl_MotionAllowed(MotorAxis axis) { return MotorControl_AxisEnabled(axis) && !MotorControl_IsPassive(axis) && !timing_fault; }
 MotorWorkMode MotorControl_GetWork(void) { return work; }
 MotorAxis MotorControl_GetFocus(void) { return focus; }
-void MotorControl_SetFocus(MotorAxis axis) { if ((unsigned)axis<MOTOR_AXIS_COUNT) focus=axis; }
+void MotorControl_SetFocus(MotorAxis axis)
+{
+    if ((unsigned)axis>=MOTOR_AXIS_COUNT) return;
+    focus=axis;
+    if (work==MOTOR_WORK_INDEPENDENT) {
+        AppSettings *s=AppStorage_Get();
+        s->control_config=(s->control_config & ~APP_CONFIG_FOCUS_M2) |
+            (axis==MOTOR_AXIS_2 ? APP_CONFIG_FOCUS_M2 : 0U);
+    }
+}
+static MotorAxis work_focus(void)
+{
+    return work==MOTOR_WORK_SINGLE_M2 || (work==MOTOR_WORK_INDEPENDENT &&
+        (AppStorage_Get()->control_config & APP_CONFIG_FOCUS_M2)) ? MOTOR_AXIS_2 : MOTOR_AXIS_1;
+}
 bool MotorControl_IsGroupActive(void) { return group_active; }
 float MotorControl_GroupError(void) { return group_error; }
 uint32_t MotorControl_MaxCycles(void) { return max_cycles; }
@@ -153,7 +167,7 @@ static bool stationary(void)
 static void save_config(void)
 {
     AppSettings *s=AppStorage_Get();
-    s->control_config=(uint32_t)work | (hso_selected ? 8U : 0U) |
+    s->control_config=(s->control_config & APP_CONFIG_FOCUS_M2) | (uint32_t)work | (hso_selected ? 8U : 0U) |
         (MotorParams_GetAxisProfile(MOTOR_AXIS_2)==MOTOR_PROFILE_4015 ? 16U : 0U);
 }
 bool MotorControl_SelectWork(MotorWorkMode mode)
@@ -164,7 +178,7 @@ bool MotorControl_SelectWork(MotorWorkMode mode)
     MotorControl_StopAll();
     work=mode;
     group_stop_reason=NULL;
-    focus=mode==MOTOR_WORK_SINGLE_M2 ? MOTOR_AXIS_2 : MOTOR_AXIS_1;
+    focus=work_focus();
     if (!MotorControl_HsoAllowed()) { (void)JerryFOC_useHSO(0); StHso_Enable(false); }
     else StHso_Enable(true);
     MT6701_2_SetRealtime(MotorControl_AxisEnabled(MOTOR_AXIS_2));
@@ -243,7 +257,7 @@ void MotorControl_Init(void)
     work=(MotorWorkMode)(s->control_config & 7U);
     if (work>=MOTOR_WORK_COUNT) work=MOTOR_WORK_SINGLE_M1;
     hso_selected=(s->control_config & 8U)!=0U;
-    focus=work==MOTOR_WORK_SINGLE_M2 ? MOTOR_AXIS_2 : MOTOR_AXIS_1;
+    focus=work_focus();
     (void)JerryFOC_selectMotor((s->flags & APP_FLAG_MOTOR_4015) ? MOTOR_PROFILE_4015 : MOTOR_PROFILE_2804);
     (void)MotorParams_SelectAxis(MOTOR_AXIS_2,(s->control_config & 16U) ? MOTOR_PROFILE_4015 : MOTOR_PROFILE_2804);
     reset_m2();

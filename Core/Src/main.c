@@ -19,6 +19,8 @@
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
 #include "adc.h"
+#include "comp.h"
+#include "dac.h"
 #include "dma.h"
 #include "fdcan.h"
 #include "i2c.h"
@@ -163,8 +165,8 @@ int main(void)
 
   /* MCU Configuration--------------------------------------------------------*/
 
-  /* Reset peripherals, initialize the Flash interface and SysTick. */
-  if (HAL_Init() != HAL_OK) Error_Handler();
+  /* Reset of all peripherals, Initializes the Flash interface and the Systick. */
+  HAL_Init();
 
   /* USER CODE BEGIN Init */
   g_boot_stage = 2U;
@@ -207,6 +209,8 @@ int main(void)
   MX_TIM2_Init();
   MX_USB_Device_Init();
   MX_TIM6_Init();
+  MX_COMP4_Init();
+  MX_DAC3_Init();
   /* USER CODE BEGIN 2 */
   g_boot_stage = 4U;
   /* 0. SPI2/SPI3 使用软件 NSS，清除 CubeMX 默认生成的 NSSP 位 */
@@ -377,8 +381,6 @@ void SystemClock_Config(void)
                               |RCC_CLOCKTYPE_PCLK1|RCC_CLOCKTYPE_PCLK2;
   RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_PLLCLK;
   RCC_ClkInitStruct.AHBCLKDivider = RCC_SYSCLK_DIV1;
-  /* Restore the original 664 kHz encoder clock at /256.
-   * SPI2 Flash /8 and SPI3 LCD /16 retain their existing wire rates. */
   RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV1;
   RCC_ClkInitStruct.APB2CLKDivider = RCC_HCLK_DIV1;
 

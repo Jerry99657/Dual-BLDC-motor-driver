@@ -1,10 +1,12 @@
 # 电机驱动板 UI 操作与验证
 
+当前固件 **UI-R57-INFO** 完成 B6／B7／B9：HSO 速度编辑跳过不可启动区、跨方向先确认停机；Status 拆为 Drive／Motion／Encoder／ADC／HSO／System；增加 rpm／deg 辅助显示，控制单位仍为 rad/s／rad。入口与详细规则见 [R57 说明](UI_R57_status_units.md)。长按左／右切轴与 KEY1 保留规则见 [R56 按键说明](UI_R56_axis_keys.md)。保留 Run 整体居中与首页原 12px 字形行高，见 [R55 对齐修复](UI_R55_alignment.md)，以及 [R54 第一批界面调整](UI_R54_first_batch.md)。控制算法保留 R53。
+
 R53 在有效 PWM 高平台上对齐三相电压的采样时间，针对 12 V 可接管、20 V 失败时随母线放大的共模错位误差；保留 R52 偏置估计、R51 固定相位窗口及 dq 交接。Status 的 H Off mV（最大绝对补偿分量）、H Lim mV（单轴上限），和 H Reject、H Reset、H R Deg、H R Hz、H R EMF%、H R Drift 均可停机后读取，见 [独立无感启动](HSO_sensorless_startup.md)。保留 SPI2 Fault / SPI2 Reset 和共享总线恢复，以及 Save WAIT 与 BUSY/WEL 检查，见 [保存恢复说明](W25Q64_HSO_save_recovery.md)。
 
 R46 在 Status 增加 Flash Err，显示 Flash 失败的操作/HAL返回值/HAL错误/SR1，区分 Save WRITE 中的写使能确认与命令/数据传输异常。Flash 发送改为同步收发；说明与当前资源见 [保存恢复说明](W25Q64_HSO_save_recovery.md)。
 
-当前 **UI-R53-SAMPLE** 增加 Status → Save Last，并将保存失败提示细分为状态、擦除、写入、读回、校验或忙超时；异步保存最多完整重试一次，见 [保存恢复说明](W25Q64_HSO_save_recovery.md)。
+R45 增加 Status → Save Last，并将保存失败提示细分为状态、擦除、写入、读回、校验或忙超时；异步保存最多完整重试一次，见 [保存恢复说明](W25Q64_HSO_save_recovery.md)。R54 在 Settings 另提供持久的 Save 状态行。
 
 R44 的 Single M1 → HSO Feedback 已改为独立无感速度启动：编码器可断开，未知磁链通过 I/F 启动估算，Speed:0 滑行停止。Run 显示启动阶段及 Ref/Act，H Error 不再相对编码器，删除 H Jitter/H Reset。操作及完整限制见 [HSO_sensorless_startup.md](HSO_sensorless_startup.md)。
 
@@ -28,7 +30,7 @@ R30 的失联提示增加 ENCODER1 / ENCODER2 编号，联动停机保留首次�
 
 R29 的 Pos Speed 范围、增益和手动跟随误差处理已更新，详见 [Position_response_tuning.md](Position_response_tuning.md)。已有 Pos Speed=30 不自动提升；从轴 Speed Limit=120 时可在 Pos Speed 中设置到 120。
 
-当前固件 **UI-R53-SAMPLE**：主从模式手转主轴、从轴位置跟随，主轴关闭功率输出且不自动对齐。Gear Ratio=100、Offset=0 时同向 1:1 跟随机械角度变化；先摆齐两轴再按 OK 建立共同起点。Run 显示 Hand M1 -> M2（或反向）、RUN/STOP 和位置误差，方向键不输入目标，OK 启停，KEY2 停止返回。保留单 M1 / 单 M2 / 双独立 / 速度同步 / 位置同步和逐路 2804/4015 参数。双电机固定编码器反馈；单 M1 可选独立 HSO。System 配置、KEY1 切换、SPI2 保存延期、Follow 命令及遥测映射见 [Dual_motor_control.md](Dual_motor_control.md)。编码器模式保留原 R26 滑行停止和 Speed=0 闭环减速。
+当前固件 **UI-R53-SAMPLE**：主从模式手转主轴、从轴位置跟随，主轴关闭功率输出且不自动对齐。Gear Ratio=100、Offset=0 时同向 1:1 跟随机械角度变化；先摆齐两轴再按 OK 建立共同起点。Run 显示 Hand M1 -> M2（或反向）、RUN/STOP 和位置误差，方向键不输入目标，OK 启停，KEY2 停止返回。保留单 M1 / 单 M2 / 双独立 / 速度同步 / 位置同步和逐路 2804/4015 参数。双电机固定编码器反馈；单 M1 可选独立 HSO。System 配置、长按左右切轴、SPI2 保存延期、Follow 命令及遥测映射见 [Dual_motor_control.md](Dual_motor_control.md)。编码器模式保留原 R26 滑行停止和 Speed=0 闭环减速。
 
 R25 让 Run 异常停止显示并保留具体原因，Status 新增 Run Stop、Stop Age/Err 及 M1 编码器分类诊断，详见 [Run_stop_diagnostics.md](Run_stop_diagnostics.md)。
 
@@ -36,7 +38,7 @@ R24 增加 `Settings → Motor → 2804 / 4015` 切换 M1 的控制与保护参�
 
 ## 按键
 
-工程 `.ioc` 中 PD8/9/10/11/12/14 均为上拉输入，默认低有效。上、下、左、右、OK 和 KEY2 各占独立键位；KEY1（PD13）在双独立 Run 页切换 M1/M2 视图，一直按住只切换一次。
+工程 `.ioc` 中 PD8/9/10/11/12/14 均为上拉输入，默认低有效。上、下、左、右、OK 和 KEY2 各占独立键位；KEY1（PD13）保留给后续全局暂停，本版不触发切轴。
 
 | 场景 | 上/下 | 左/右 | OK | KEY2 |
 | --- | --- | --- | --- | --- |
@@ -46,7 +48,7 @@ R24 增加 `Settings → Motor → 2804 / 4015` 切换 M1 的控制与保护参�
 | 整数编辑 | 增加/减少 | 编辑数值时无动作；退出编辑后移动按钮焦点 | 数值编辑→确认按钮→提交 | 取消草稿 |
 | 开关编辑 | 无动作 | 左关、右开；退出编辑后移动按钮焦点 | 编辑→确认→提交 | 取消草稿 |
 | 确认框 | 无动作 | 取消/确定 | 执行当前选择 | 取消 |
-| Run | 增加/减少待确认目标，支持长按 | Torque / Speed / Position 切换 | 改值后确认；未改值时启动/停止 | 停止输出并返回 |
+| Run | 增加/减少待确认目标，支持长按 | 短按切模式；双独立时长按左选 M1、右选 M2 | 改值后确认；未改值时启动/停止 | 停止输出并返回 |
 | Run 手动主从 | 无动作，手转主轴提供位置目标 | 无动作 | 启用跟随并记录起点 / 停止 | 停止跟随并返回 |
 | Run Steps | 选择模式行 | 减少/增加该模式步长 | 保存三行并返回 | 放弃草稿并返回 |
 
@@ -56,9 +58,9 @@ R24 增加 `Settings → Motor → 2804 / 4015` 切换 M1 的控制与保护参�
 
 进入时为 STOP；上下键短按或长按都修改待确认目标。数值不同于上次确认值时，OK 一定提交该数值：停止时启动，运行中更新目标并继续运行。提交直接调用电机控制接口，不等待 Flash 保存。数值未变化时，OK 交替执行启动和停止；改值后又调回已确认值，也按未变化处理。
 
-底部随状态显示 `OK:Confirm` / `OK:Cancel`。有未确认修改时，右上角显示 `EDIT`（停止中）或 `RUN*`（仍按上次确认目标运行）；确认后显示 `RUN`。例如 Speed 已确认 0.5 rad/s 并运行，长按修改为 3.5 后仍按 0.5 运行，按 OK 当即更新为 3.5，再按一次 OK 才停止。
+底部随行为显示 `OK:Start` / `OK:Apply` / `OK:Stop`。数值与单位整体居中，状态行显示 `EDIT`（停止中有修改）或 `RUN*`（仍按上次确认目标运行），有修改时第二行显示之前确认的 `Set` 值；确认后显示 `RUN`。双独立模式在当前轴状态后加 `*`。例如 Speed 已确认 0.5 rad/s 并运行，长按修改为 3.5 后仍按 0.5 运行，按 OK 当即更新为 3.5，再按一次 OK 才停止。页首始终区分 ENC / HSO 并显示有效 VBUS。
 
-模式切换先停止输出，保留各模式本次页面内的草稿，新的模式需要再次按 OK 启动。KEY2 在退出动画开始时即清零输出，放弃未确认的修改，页面离开回调再次兜底。重新进入时读取已确认值，电流目标仍从零开始。编码器异常、失去标定或检测到其他控制模式接管时停止本次运行，编码器恢复后需要重新按 OK。编码器未就绪时确认失败，保留待确认目标供重试。
+模式切换先停止输出，保留各模式本次页面内的草稿，新的模式需要再次按 OK 启动。双独立 Run 的短按模式切换延迟到松手后，长按约 600 ms 只选择电机，不先执行短按动作；单机等其他模式保留按下切模式的时机。KEY2 在退出动画开始时即清零输出，放弃未确认的修改，页面离开回调再次兜底。重新进入时读取已确认值，电流目标仍从零开始。编码器异常、失去标定或检测到其他控制模式接管时停止本次运行，编码器恢复后需要重新按 OK。编码器未就绪时确认失败，保留待确认目标供重试。
 
 | 模式 | 目标范围 | 默认步长 | 单位 |
 | --- | --- | --- | --- |
@@ -67,7 +69,7 @@ R24 增加 `Settings → Motor → 2804 / 4015` 切换 M1 的控制与保护参�
 | Speed | -Speed Limit～+Speed Limit，默认 ±100.0 | 0.5 | rad/s |
 | Position | -3.14～+3.14 | 0.05 | rad，相对本次启动位置 |
 
-`Settings → Speed Limit` 调节 Speed 模式的目标范围上限：2804 可设 1～600 rad/s，4015 可设 1～120 rad/s，默认 100 rad/s，每次上下键调整 1 rad/s，支持长按连发。设为 100 时，Run 的 Speed 目标范围为 -100.0～+100.0 rad/s；设为 20 时则为 -20.0～+20.0 rad/s。Run 的 Speed 页面 `Max` 显示此值。
+`Settings → Speed Limit` 调节 Speed 模式的目标范围上限：2804、4015 均可设 1～600 rad/s，默认 100 rad/s，每次上下键调整 1 rad/s，支持长按连发。设为 100 时，Run 的 Speed 目标范围为 -100.0～+100.0 rad/s；设为 20 时则为 -20.0～+20.0 rad/s。Run 无草稿修改时 `Max` 显示此值。软件范围不代表电机实际可达到的速度；HSO 的电气频率校验独立保留。
 
 编辑时按 OK 进入确认按钮，再按 OK 提交；KEY2 放弃本次修改。上限提交后立即应用，已有正向或反向目标超出新范围时会收回到对应边界，例如 -80.0 在上限改为 20 后变为 -20.0。返回 Run 仍需 OK 才会启动，不会因改范围自动运行。恢复默认设置时，上限恢复为 100、目标恢复为零。Speed Limit 约束 Run 的目标；此外控制接口统一遵守所选型号的最高机械速度，串口也不能超过该硬上限。Pos Speed、Torque 限幅和 Run Steps 分别设置。
 
@@ -101,7 +103,7 @@ ST7735 DMA 完成/出错 IRQ 只记录结果，主循环在每轮开头调用 `O
 
 运行时 W25Q64 保存和日志使用 Begin/Poll 分步状态机，每次主循环只推进一步，不在芯片擦写期间忙等。设置保存使用固定快照、A/B 备份和读回校验；只在校验成功后提示 Saved。日志采用 4 条固定队列，队列满时放弃新日志，不阻塞 UI。启动读取、扫描以及维护用同步接口仍保留。
 
-Debug 的 FOC 文件使用 -Og，保留调试信息并缩减 Flash 与高频中断代码；其余现有优化规则继续使用。串口浮点解析使用 strtof，与控制器 float 类型一致。
+Debug 保留调试符号；FOC、采样和主循环按既有 -Os／LTO 策略，HSO 算术 -O2。R57 的紧凑数值解析器保留既有数字格式，最终结果仍为控制器使用的 float，详见 R57 的 Flash 与验证说明。
 
 ## 固件识别与连发诊断
 
@@ -109,7 +111,7 @@ UI-R23-LCD 按用户提供的 BOE 屏幕示例将可见区偏移从 26/1 修正�
 
 当前版本增加了 VREFINT 平均与低通滤波，使用测得的 VREF+ 统一换算电流、母线和相电压。Status 新增 VREF（有效估算的电压）、RefState、Ref R/C、RefCnt、RefErr；显示精度不代表测量精度。首个有效平均值完成前不使能电机，参考估计超时锁存 ADC REF。CubeMX 工程和 ADC 初始化均已同步修改，配置、滤波参数与上板核对见 [VREFINT_reference_tracking.md](VREFINT_reference_tracking.md)。
 
-本轮固件在 `About` 首行 `FW` 显示 **UI-R53-SAMPLE**。ENC2 停止/重连见 [Encoder_reconnect_clock_restore.md](Encoder_reconnect_clock_restore.md)，USB 修复见 [USB_CDC_tx_recovery.md](USB_CDC_tx_recovery.md)。HSO 的启动、最低速度、停止和失锁恢复采用 [R44 独立无感规则](HSO_sensorless_startup.md)，不再按编码器实测 45rpm 自动回退。H Gate 为当前校验原因，H Qual 为学习/接管进度和保持异常计数，H Lost 保留上次异常，H Actual 为观测磁链。手动加载过载预算见 [2804_current_limits.md](2804_current_limits.md)。Status 的 I Trip、IU/IV/IW R/Z 和 ChipRev 见 [current_adc_diagnostics.md](current_adc_diagnostics.md)。
+本轮固件在 `About` 首行 `FW` 显示 **UI-R57-INFO**。ENC2 停止/重连见 [Encoder_reconnect_clock_restore.md](Encoder_reconnect_clock_restore.md)，USB 修复见 [USB_CDC_tx_recovery.md](USB_CDC_tx_recovery.md)。HSO 的启动、最低速度、停止和失锁恢复采用 [R44 独立无感规则](HSO_sensorless_startup.md)，不再按编码器实测 45rpm 自动回退。H Gate 为当前校验原因，H Qual 为学习/接管进度和保持异常计数，H Lost 保留上次异常，H Actual 为观测磁链。手动加载过载预算见 [2804_current_limits.md](2804_current_limits.md)。Status → ADC 的 I Trip、IU/IV/IW R/Z 和 ChipRev 见 [current_adc_diagnostics.md](current_adc_diagnostics.md)。
 
 `Status → Bus` 为 ADC 实测母线电压。`Drive` 显示采样/电流零点的具体状态或锁存故障，编码器在线与对齐另看 Encoder / Aligned。BusRaw 是最新母线原始值，BusCnt / FrameCnt 是规则组样本数 / 完整注入帧数，正常约每秒增加 2000 / 10000；ADC1Err / ADC2Err 显示 HAL 错误码。Enc2 显示第二路 MT6701 的健康状态和原始角度，Enc2Err 为其错误累计值。第二路目前只有诊断采样，没有启用功率输出。
 
@@ -148,4 +150,4 @@ Run 在采样未就绪时显示具体原因并拒绝确认启动；运行中采�
 
 尚未烧录或连接电机验证。实屏帧率、物理按键电平、实际负载下三模式运行和电流环参数需要上板确认；主机模拟不代表这些项目已经验收。
 
-最终构建占用（2026-10-23，UI-R53-SAMPLE）：Debug Flash 131068 B / RAM 22344 B；Release Flash 130252 B / RAM 22264 B。Debug 保留 `-g3`，HSO 算术 -O2 加 LTO，启动、交接辅助与判定/诊断 -Os，定点数学 -O2。Flash 余量有限，详见双电机文档。固件分别为 `build/Debug/FOC_two.elf`、`build/Release/FOC_two.elf` 和各自同目录的 `FOC_two.bin`。独立 HSO 的启动、磁链估算与接管操作见 [HSO_sensorless_startup.md](HSO_sensorless_startup.md)，两套控制及保护参数见 [Motor_profiles.md](Motor_profiles.md)。
+最终构建占用（2026-10-23，UI-R57-INFO）：Debug Flash 121524 B / RAM 22592 B；Release Flash 120784 B / RAM 22496 B。Debug 保留 `-g3`，HSO 算术 -O2 加 LTO，启动、交接辅助与判定/诊断 -Os，定点数学 -O2。紧凑数值解析释放 Flash 后，Debug 余量为 9548 B，详见 [R57 说明](UI_R57_status_units.md)。固件分别为 `build/Debug/FOC_two.elf`、`build/Release/FOC_two.elf` 和各自同目录的 `FOC_two.bin`、`FOC_two.map`。独立 HSO 的启动、磁链估算与接管操作见 [HSO_sensorless_startup.md](HSO_sensorless_startup.md)，两套控制及保护参数见 [Motor_profiles.md](Motor_profiles.md)。

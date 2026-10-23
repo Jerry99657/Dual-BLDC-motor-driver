@@ -16,6 +16,12 @@ enum {
     UI_PAGE_MOTOR,
     UI_PAGE_SYSTEM,
     UI_PAGE_WORK,
+    UI_PAGE_DRIVE,
+    UI_PAGE_MOTION,
+    UI_PAGE_ENCODER,
+    UI_PAGE_ADC,
+    UI_PAGE_HSO,
+    UI_PAGE_DIAGNOSTICS,
 };
 
 const KK_UI_App *ui_app_get(void);

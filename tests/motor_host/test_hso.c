@@ -227,6 +227,7 @@ int main(void) {
         StHsoConfig bad=c;float *v[]={&bad.rs_ohm,&bad.ls_h,&bad.flux_wb,&bad.voltage_pole_rps,&bad.sample_delay_cycles};
         *v[field]=kind==0 ? NAN : kind==1 ? INFINITY : -INFINITY;assert(!StHso_SetConfig(&bad));
     }
+    assert(StHso_ValidTarget(200) && !StHso_ValidTarget(600)); /* Independent <400 electrical Hz gate. */
     assert(StHso_Start(10) && StHso_IsStarting() && StHso_CurrentD()==0);
     for(unsigned i=0;i<2500;++i) step();
     assert(!binary_offsets); /* Alignment remains frozen, unlike rotating CAPTURE. */

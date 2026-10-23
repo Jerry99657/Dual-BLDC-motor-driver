@@ -189,8 +189,8 @@ int main(void) {
     JerryFOC_alignFinish(); aligned=1;
     JerryFOC_useCurrentLoop(1); JerryFOC_setCurrent(9);
     assert(JerryFOC_Target_Iq==MOTOR_4015.rated_current && vel_loop_M0.limit==MOTOR_4015.rated_current);
-    command("Speed:999"); assert(JerryFOC_Target_Velocity==120);
-    JerryFOC_setAbsolutePosition(1,999); assert(pos_loop_M0.limit==120);
+    command("Speed:999"); assert(JerryFOC_Target_Velocity==600);
+    JerryFOC_setAbsolutePosition(1,999); assert(pos_loop_M0.limit==600);
     ready=false; assert(JerryFOC_selectMotor(MOTOR_PROFILE_2804));
     assert(!JerryFOC_isDriveReady()); /* Switching never clears a sampling fault. */
     assert(selected_pp==7 && hso_motor==&MOTOR_2804);

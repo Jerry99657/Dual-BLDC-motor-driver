@@ -14,6 +14,8 @@ int main(void)
     assert(MotorParams_GetAxis(MOTOR_AXIS_2)->pole_pairs == 11);
     assert(MotorParams_GetActive()->max_current == 2.0f);
     assert(MotorParams_GetAxis(MOTOR_AXIS_2)->max_current == 2.5f);
+    assert(MOTOR_2804.max_speed_mech==600 && MOTOR_4015.max_speed_mech==600);
+    assert(MOTOR_4015.rated_speed_mech==104.72f); /* UI ceiling is not a motor rating. */
 
     MotorParams_Select(MOTOR_PROFILE_4015);
     assert(MotorParams_SelectAxis(MOTOR_AXIS_2, MOTOR_PROFILE_2804));

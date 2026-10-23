@@ -42,6 +42,7 @@ static uint32_t s_save_addr;
 static bool s_save_pending;
 static bool s_save_result_ready;
 static bool s_save_success;
+static bool s_save_failed;
 static uint8_t s_save_retries;
 static uint32_t s_flash_error;
 uint32_t AppStorage_FlashError(void) { return s_flash_error; }
@@ -193,6 +194,7 @@ bool AppStorage_Init(void)
 {
     s_store_state = STORE_IDLE;
     s_save_pending = false;
+    s_save_failed = false;
     s_save_result_ready = false;
     s_save_error="Save OK";
     s_flash_error=0;
@@ -362,6 +364,7 @@ static void store_complete(bool success,bool retry)
         s_save_pending = false;
         s_save_result_ready = true;
         s_save_success = success;
+        s_save_failed = !success;
         if (success) {
             s_save_error="Save OK";
             s_flash_error=0;
@@ -380,6 +383,18 @@ static void store_complete(bool success,bool retry)
 }
 
 bool AppStorage_IsDeferred(void) { return MT6701_2_StorageBlocked(); }
+
+AppSaveState AppStorage_GetSaveState(void)
+{
+    if (!s_ready) return APP_SAVE_FAILED;
+    if (s_save_pending) {
+        if (AppStorage_IsDeferred()) return APP_SAVE_DEFERRED;
+        return s_store_state==STORE_SETTINGS_ERASE || s_store_state==STORE_SETTINGS_PROGRAM ?
+            APP_SAVE_WRITING : APP_SAVE_PENDING;
+    }
+    if (s_save_failed) return APP_SAVE_FAILED;
+    return s_settings_valid ? APP_SAVE_SAVED : APP_SAVE_IDLE;
+}
 
 static void storage_wait(uint32_t now_ms)
 {

@@ -42,7 +42,7 @@ const MotorParams MOTOR_4015 = {
     .bus_voltage = 24.0f,
     .rated_current = 1.2f, .max_current = 2.5f,
     .overload_current = 1.4f, .overload_budget_s = 3.0f,
-    .rated_speed_mech = 104.72f, .max_speed_mech = 120.0f,
+    .rated_speed_mech = 104.72f, .max_speed_mech = 600.0f,
     .cur_bandwidth = 250.0f,
     .cur_P = 0.325f, .cur_I = 450.0f,
     .cur_limit = 24.0f, .cur_ramp = 100000.0f,

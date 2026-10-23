@@ -70,10 +70,10 @@ for mode in ("Debug", "Release"):
     assert "MotorControl_VelocityControl" in tim_calls, (mode, tim_calls)
 
     image = (root / "FOC_two.bin").read_bytes()
-    assert b"UI-R53-SAMPLE" in image and b"UI-R52-OFFSET" not in image, mode
+    assert b"UI-R57-INFO" in image and b"UI-R56-KEYS" not in image, mode
     with tempfile.TemporaryDirectory(prefix="startup-", dir=repo / "build") as scratch:
         output = Path(scratch) / "verified.bin"
         tool("objcopy", "-O", "binary", elf, output)
         assert image == output.read_bytes(), mode
-    print(f"PASS: {mode}: HAL_Init precedes clocks/peripherals; strong MSP; R53; "
+    print(f"PASS: {mode}: HAL_Init precedes clocks/peripherals; strong MSP; R57; "
           f"ELF/BIN match ({len(image)} B), SHA256 {hashlib.sha256(image).hexdigest()}")

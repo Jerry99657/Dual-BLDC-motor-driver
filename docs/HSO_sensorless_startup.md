@@ -1,6 +1,6 @@
-# UI-R53-SAMPLE：M1 独立无感启动
+# M1 独立无感启动
 
-当前固件为 **UI-R53-SAMPLE**，在有效 PWM 高平台上对齐三相电压采样时间，减少错时采样把 PWM 共模变成假差分电压的问题。保留 R52 偏置估计使能修复、R51 固定相位窗口和 dq 电流交接、R49 周期平均磁链学习、R50 有限资格窗口，以及 R48 的 SPI2/保存修复，见 [W25Q64_HSO_save_recovery.md](W25Q64_HSO_save_recovery.md)。
+当前固件为 **UI-R57-INFO**，HSO 速度编辑边界、Status 分组和辅助单位见 [R57 UI 说明](UI_R57_status_units.md)。HSO 控制沿用 R53：在有效 PWM 高平台上对齐三相电压采样时间，减少错时采样把 PWM 共模变成假差分电压的问题。保留 R52 偏置估计使能修复、R51 固定相位窗口和 dq 电流交接、R49 周期平均磁链学习、R50 有限资格窗口，以及 R48 的 SPI2/保存修复，见 [W25Q64_HSO_save_recovery.md](W25Q64_HSO_save_recovery.md)。
 
 本版把 Single M1 的 HSO Feedback 改为独立无感速度控制。编码器不参与启动、磁链估算、角度资格、速度反馈或故障后回退；允许 MT6701 未连接。双电机模式及 Single M2 继续使用编码器，原有主从跟随算法和 E1/E2 诊断保留。
 
@@ -189,9 +189,9 @@ Edq = rotate(Eαβ, -θ_virtual)
 
 本轮 **无需修改 CubeMX**。保留现有 170 MHz、10 kHz 同步 PWM/注入采样、VREFINT、DMA 和中断配置。
 
-1. 烧录 Debug 或 Release 的 `FOC_two.bin`/ELF，确认 About → FW 为 **UI-R53-SAMPLE**。
-2. 停止输出，Settings → System → Work Mode 选择 Single M1，查看 M1，并将 Motor Model 设为 4015。
-3. Settings → System → HSO Feedback 开启，等待 Status 的 HSO=READY。Run 此时只提供 Speed；即使设置中 Curr Loop=Off，无感运行也会强制使用电流环。
+1. 烧录 Debug 或 Release 的 `FOC_two.bin`/ELF，确认 About → FW 为 **UI-R54-UI**。
+2. 停止输出，Settings → System → Mode（Work Mode 页）选择 Single M1，Axis 选择 M1，再回 Settings → Motor 设为 4015。
+3. Settings → System → HSO Feedback 开启，等待 Status 的 HSO=READY。Run 此时只提供 Speed；Settings 的 Curr Loop 显示 ON 并禁用编辑，无感运行强制使用电流环，编码器模式原有设置保留。
 4. 先空载用 Run 确认 10 rad/s，或单独发送带换行的 `Speed:10`。观察 DC ALIGN → I/F RAMP → I/F FLUX → CAPTURE → CONTROL。启动中 Run 的 **Ref** 是虚拟参考速度，进入 CONTROL 后 **Act** 才是 HSO 观测速度。
 5. 若停在 WAIT ADC/STOP，检查 Drive、Bus、VREF 及电流/相电压；若启动失败，记录 H Gate、H Lost、H Flux、H Actual、H Time、Ctrl Max 以及实际转动现象。相序/采样极性错误不会靠取消编码器校验自动解决。
 

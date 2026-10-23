@@ -2,6 +2,9 @@
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
+#include <float.h>
+#include <stdint.h>
 #include "protocol.h"
 #include "JerryFOC.h"
 #include "motor_control.h"
@@ -120,6 +123,37 @@ static void command(const char *s) {
     Protocol_Feed(PROTO_SRC_USB,(const uint8_t *)s,(uint32_t)strlen(s));
     Protocol_Feed(PROTO_SRC_USB,(const uint8_t *)"\r\n",2);
 }
+
+static void check_numbers(void) {
+    const char *valid[]={"0","-0","+.5","-.25"," 1.25","\t1e1","1E-3","1e+2",
+        "0x1.8p+2","-0X1.Ap-2","0x1e","0x.8p1","0x1.","1e-45","1e-1000",
+        "0e9999","-0e-9999","3.4028235e38","1.17549435e-38",
+        "123456789012345678901234567890123456789012345678901e-49"};
+    for(unsigned i=0;i<sizeof(valid)/sizeof(*valid);++i) {
+        char line[64]; snprintf(line,sizeof(line),"Speed:%s",valid[i]);
+        float expected=strtof(valid[i],NULL); command(line);
+        assert(Protocol_GetControlResult()==1 && target==expected);
+        assert((signbit(target)!=0)==(signbit(expected)!=0));
+    }
+    const char *invalid[]={"","+",".","1e","1e+","1e-","1.2.3","0x","0x.p1",
+        "0x1p","nan","NAN(0)","inf","-Infinity","1e1000","0x1p9999","1 ","1,2","1junk"};
+    for(unsigned i=0;i<sizeof(invalid)/sizeof(*invalid);++i) {
+        char line[64]; snprintf(line,sizeof(line),"Speed:%s",invalid[i]); float before=target;
+        command(line); assert(Protocol_GetControlResult()==-2 && target==before);
+    }
+    /* Deterministic binary32 samples round-trip through the actual USB parser.
+     * Permit one float ULP for decimal->double->float rounding at a tie. */
+    uint32_t rng=0x12345678;
+    for(unsigned i=0;i<20000;++i) {
+        rng=rng*1664525U+1013904223U;
+        float value; memcpy(&value,&rng,sizeof(value)); if(!isfinite(value)) continue;
+        char line[64]; snprintf(line,sizeof(line),"Speed:%.9g",(double)value);
+        command(line); assert(Protocol_GetControlResult()==1);
+        assert(fabsf(target-value)<=fmaxf(FLT_TRUE_MIN,fabsf(value)*FLT_EPSILON));
+    }
+    command("Speed:20");
+    puts("PASS: compact finite-number parser: decimal/exponent/hex/sign/whitespace, malformed/overflow rejection, subnormals and 20000 binary32 round trips");
+}
 int main(void) {
     check_usb_telemetry();
     MotorControl_SelectFeedback(true);
@@ -153,6 +187,7 @@ int main(void) {
     command("Speed:20"); assert(target==20 && mode==JERRYFOC_MODE_VELOCITY);
     Protocol_Feed(PROTO_SRC_USART,(uint8_t *)"ter:20000,0.01\n",sizeof("ter:20000,0.01\n")-1U);
     assert(configurations==4 && config.voltage_pole_rps==20000);
+    check_numbers();
     assert(host_primask==0);
     puts("PASS: real HSO protocol parsing, strict numbers, gates, stop, overflow discard, independent fragmented transports");
     return 0;

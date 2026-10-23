@@ -23,6 +23,23 @@ for name in ("home-forward", "home-reverse", "home-rapid"):
         sheet.paste(frame, (x, y+24))
         painter.text((x+8, y+5), str((0,11,14,18,22,31,35,39,43,50)[index]*20)+" ms", fill="white")
     sheet.save(root / (name + "-timeline.png"))
-for name in ("run-steps", "run-speed", "run-edit-stopped", "run-edit-running", "speed-limit", "run-speed-limit"):
-    Image.open(root / (name + ".pgm")).resize((640,320), Image.Resampling.NEAREST).save(root / (name + ".png"))
-print("Rendered home animations, timelines, Run confirmation states, and step settings.")
+for path in root.glob("*.pgm"):
+    Image.open(path).resize((640,320), Image.Resampling.NEAREST).save(path.with_suffix(".png"))
+for output_name,names in (
+    ("r54-preview", ("settings-hso-loop-on", "work-current-marker", "run-hso-start", "run-hso-control",
+                     "run-edit-running", "run-4015-draft-range", "run-dual-m2", "run-hand-follow",
+                     "run-steps", "settings-save-failed")),
+    ("r55-preview", ("home-run-centered", "home-settings-centered", "home-status-centered", "home-about-centered",
+                     "run-speed", "run-4015-draft-range", "run-current", "run-hso-control")),
+    ("r56-preview", ("run-dual-m2", "run-dual-m2-apply", "run-dual-stopped", "run-speed")),
+    ("r57-preview", ("r57-status-menu", "r57-drive", "r57-motion", "r57-hso-limits",
+                     "r57-hso-min", "r57-run-rpm", "r57-run-deg", "run-hso-control")),
+):
+    sheet = Image.new("RGB", (1280, 344*((len(names)+1)//2)), (20,20,20))
+    painter = ImageDraw.Draw(sheet)
+    for index,name in enumerate(names):
+        x,y = (index%2)*640, (index//2)*344
+        sheet.paste(Image.open(root/(name+".png")), (x,y+24))
+        painter.text((x+8,y+5), name, fill="white")
+    sheet.save(root/(output_name+".png"))
+print("Rendered home animations and R54/R55/R56/R57 settings/Run framebuffer previews.")

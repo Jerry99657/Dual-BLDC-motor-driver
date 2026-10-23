@@ -11,7 +11,7 @@ sources += [repo / p for p in ("mycode/ui_app.c", "mycode/ui_input.c", "mycode/u
 includes = ["tests/ui_host", "mycode", "mycode/kk_ui/include", "mycode/kk_ui/src", "mycode/kk_oled/include", "mycode/kk_oled/graphics", "mycode/kk_oled/driver"]
 command = [shutil.which("gcc") or "gcc", "-std=c11", "-Wall", "-Wextra", "-Werror", "-O1", "-DKK_OLED_TEST", "-DCONTROL_STUB_UI"]
 command += ["-I" + str(repo / p) for p in includes]
-command += [str(p) for p in sources] + ["-lm", "-o", str(output / "test_ui.exe")]
+command += [str(p) for p in sources] + ["-Wl,--wrap=OLED_DrawUTF8", "-lm", "-o", str(output / "test_ui.exe")]
 subprocess.run(command, cwd=repo, check=True)
 subprocess.run([str(output / "test_ui.exe")], cwd=repo, check=True)
 

@@ -30,6 +30,8 @@ static inline uint32_t AppSettings_EncodePositionSpeed(uint32_t speed)
 #define APP_SPEED_LIMIT_MAX 600
 /* Spare v2 flags bit: old records/defaults select 2804, CRC/layout unchanged. */
 #define APP_FLAG_MOTOR_4015 (1UL << 24)
+/* Spare v3 control_config bit; old records select M1 without migration. */
+#define APP_CONFIG_FOCUS_M2 (1UL << 5)
 
 typedef struct {
     uint32_t magic;
@@ -44,7 +46,7 @@ typedef struct {
     int32_t speed_step_x10;       /* 1..100: 0.1..10.0 rad/s */
     int32_t torque_step_x100;     /* 1..100: 0.01..1.00 V or A */
     int32_t position_step_x100;   /* 1..100: 0.01..1.00 rad */
-    uint32_t control_config;     /* work mode[2:0], HSO[3], M2 4015[4] */
+    uint32_t control_config;     /* work[2:0], HSO[3], M2 4015[4], independent focus M2[5] */
     int32_t gear_ratio_x100;     /* Signed mechanical follower ratio; default 100. */
     int32_t gear_offset_x100;    /* Relative position offset, 0.01 rad. */
     uint32_t axis2_flags;        /* Current loop and per-axis speed limits. */
@@ -74,6 +76,11 @@ void AppStorage_Load(void);
 bool AppStorage_Save(void); /* 同步保存，仅用于启动/维护阶段。 */
 bool AppStorage_RequestSave(void);
 bool AppStorage_IsDeferred(void); /* M2 real-time sampling currently owns SPI2. */
+typedef enum {
+    APP_SAVE_IDLE, APP_SAVE_PENDING, APP_SAVE_WRITING, APP_SAVE_DEFERRED,
+    APP_SAVE_SAVED, APP_SAVE_FAILED
+} AppSaveState;
+AppSaveState AppStorage_GetSaveState(void);
 void AppStorage_Service(uint32_t now_ms);
 bool AppStorage_PollSaveResult(bool *success);
 const char *AppStorage_SaveErrorText(void); /* Last settings I/O/verify stage, or Save OK. */

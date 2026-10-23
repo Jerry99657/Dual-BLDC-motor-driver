@@ -41,7 +41,13 @@ static AppSettings settings;
 AppSettings *AppStorage_Get(void) { return &settings; }
 bool AppStorage_RequestSave(void) { return false; }
 #endif
+#ifdef CONTROL_STUB_UI
+static bool storage_deferred;
+void ControlStub_SetDeferred(bool value) { storage_deferred=value; }
+bool AppStorage_IsDeferred(void) { return storage_deferred; }
+#else
 bool AppStorage_IsDeferred(void) { return false; }
+#endif
 static MotorWorkMode work;
 static MotorAxis focus;
 static bool hso=false;
@@ -70,21 +76,41 @@ void MotorControl_RecordCycles(uint32_t c) { (void)c; }
 void MotorControl_Telemetry(float d[25]) { (void)d; }
 MotorWorkMode MotorControl_GetWork(void) { return work; }
 MotorAxis MotorControl_GetFocus(void) { return focus; }
-void MotorControl_SetFocus(MotorAxis a) { focus=a; }
-const char *MotorControl_WorkText(void) { return "Single M1"; }
+void MotorControl_SetFocus(MotorAxis a) {
+    focus=a;
+    if(work==MOTOR_WORK_INDEPENDENT)
+        AppStorage_Get()->control_config=(AppStorage_Get()->control_config & ~APP_CONFIG_FOCUS_M2) |
+            (a==MOTOR_AXIS_2 ? APP_CONFIG_FOCUS_M2 : 0U);
+}
+const char *MotorControl_WorkText(void) {
+    static const char *const names[]={"Single M1","Single M2","Independent","Sync speed","Sync position","Master M1","Master M2"};
+    return names[work];
+}
 const char *MotorControl_CommandText(void) { return "READY"; }
 const char *MotorControl_EncoderLostText(MotorAxis a) { return a==MOTOR_AXIS_1 ? "ENCODER1 LOST" : "ENCODER2 LOST"; }
 bool MotorControl_IsCoupled(void) { return work>=MOTOR_WORK_SYNC_SPEED; }
 bool MotorControl_IsGroupActive(void) { return following; }
 float MotorControl_GroupError(void) { return 0; }
 uint32_t MotorControl_MaxCycles(void) { return 0; }
-bool MotorControl_SelectWork(MotorWorkMode m) { work=m; focus=m==MOTOR_WORK_SINGLE_M2 ? MOTOR_AXIS_2 : MOTOR_AXIS_1; return true; }
-bool MotorControl_SelectFeedback(bool e) { hso=e; return true; }
+bool MotorControl_SelectWork(MotorWorkMode m) {
+    work=m;
+    focus=m==MOTOR_WORK_SINGLE_M2 || (m==MOTOR_WORK_INDEPENDENT && (AppStorage_Get()->control_config & APP_CONFIG_FOCUS_M2)) ? MOTOR_AXIS_2 : MOTOR_AXIS_1;
+    AppStorage_Get()->control_config=(AppStorage_Get()->control_config & ~7U) | m;
+    return true;
+}
+bool MotorControl_SelectFeedback(bool e) {
+    hso=e;
+    AppStorage_Get()->control_config=(AppStorage_Get()->control_config & ~8U) | (e ? 8U : 0U);
+    return true;
+}
 bool MotorControl_SelectProfile(MotorAxis a,MotorProfile p)
 { return a==MOTOR_AXIS_1 && JerryFOC_selectMotor ? JerryFOC_selectMotor(p)!=0 : MotorParams_SelectAxis(a,p)!=0; }
 bool MotorControl_SetGear(int32_t r,int32_t o) { (void)o; return r!=0; }
 bool MotorControl_RequestAlign(MotorAxis a) { (void)a; return true; }
-bool MotorControl_ModeAllowed(JerryFOC_ControlMode m) { return !MotorControl_IsHandFollow() || m==JERRYFOC_MODE_POSITION; }
+bool MotorControl_ModeAllowed(JerryFOC_ControlMode m) {
+    if(MotorControl_HsoAllowed()) return m==JERRYFOC_MODE_VELOCITY;
+    return !MotorControl_IsHandFollow() || m==JERRYFOC_MODE_POSITION;
+}
 void MotorControl_Stop(MotorAxis a) {
     if (MotorControl_IsCoupled()) { MotorControl_StopAll(); return; }
 #ifdef CONTROL_STUB_UI
@@ -102,6 +128,9 @@ void MotorControl_StopAll(void) {
 bool MotorControl_Command(MotorAxis a,JerryFOC_ControlMode m,float t,float l,bool c)
 {
 #ifdef CONTROL_STUB_UI
+    if (a==MOTOR_AXIS_1 && MotorControl_HsoAllowed() && m==JERRYFOC_MODE_VELOCITY && t==0) {
+        JerryFOC_stop(); return true; /* Real HSO zero is coast. */
+    }
     if (a==MOTOR_AXIS_2) {
         second_ui.active=true; second_ui.mode=m; second_ui.current_loop=c;
         if (m==JERRYFOC_MODE_VELOCITY) second_ui.target_velocity=t;
@@ -112,7 +141,7 @@ bool MotorControl_Command(MotorAxis a,JerryFOC_ControlMode m,float t,float l,boo
 #endif
     (void)a;
     g_openloop_debug=0;
-    JerryFOC_useCurrentLoop(c); JerryFOC_setMode(m);
+    JerryFOC_useCurrentLoop(c || MotorControl_HsoAllowed()); JerryFOC_setMode(m);
     if (m==JERRYFOC_MODE_VELOCITY) JerryFOC_setVelocity(t);
     else if (m==JERRYFOC_MODE_POSITION) {
         if (JerryFOC_setAbsolutePosition) JerryFOC_setAbsolutePosition(t,l);
