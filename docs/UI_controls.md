@@ -1,6 +1,16 @@
 # 电机驱动板 UI 操作与验证
 
-当前固件 **UI-R59-STOP** 接入 KEY1 全局停止：任意页面下中断关闭 M1/M2 输出，取消对齐、HSO 和主从；松开稳定 30 ms 后仍需手动重新启动。KEY1 不再由 UI 初始化或扫描。操作及验证见 [KEY1 全局停止](KEY1_global_stop.md)。
+R71 针对“2804 预设与 ESC 同为 Throttle 20%，只有 ESC 能运行”的反馈，统一两条路径的六步启动信号资格；没有放宽过零或增大电流。Speed 启动参考不主动超过目标，原模式与界面继续保留。对照测试与当前固件见 [R71 启动资格](Six_step_capture_R71.md)。
+
+当前固件 **UI-R71-ESC**（2026-10-25）：`Single M1 + Six Step ON` 下，`Settings → Motor` 新增 `ESC Auto`。通用 Run 仅提供油门 0～100%，显示电气 Hz，机械 rpm 为 `--`；左右短按不切换到其他控制模式。确认后清空目标，停止后后台保存，掉电恢复但不自动运行。选择 2804／4015 返回原预设及 Speed 模式。通用启动不读取电机 Rs／Ls／极对数，既有两套预设共用的六步启动也改为固定电流 PI 与实测电压交接；具体电流边界、模型验证和实板复测步骤见 [R70 ESC Auto](Six_step_ESC_R70.md)。无需修改 CubeMX。
+
+此前 R69 为启动时的 W25Q64 识别加入最多三次尝试及错误保留，SPI2 速率／模式／片选保持原值，详见 [R69 Flash 初始化](Flash_init_retry_R69.md)。R68 的无感型号切换修复继续保留。About 的 Flash 是固定型号文字，不是实际 Flash ID；诊断看 Status → Diagnostics 的 Flash Err、SPI2 Fault／Reset。
+
+R68 已修复 Single M1 无感模式下 Motor 菜单先 Stop 清空静止计数、随后必然拒绝切换型号的问题。已停止的六步／HSO 保留静止资格，仍运行时先停止并等待资格后重试；无感模式提示 `Wait for stop`／`Motor set`，不要求编码器或编码器对齐。切换清空目标且不自动运行，后端静止和保护检查保留。详见 [R68 型号切换](Six_step_sensorless.md)。下述 R67 采样行为沿用。
+
+R67 起在六步 SYNC／RUN 中按实际 PWM 占空比选择较长的 OFF／ON 采样窗口，保留 ALIGN→SINE→SYNC→RUN。Status → Drive 的 `6S ZC` 周期比增加一位小数，新增 `6S Cause`（相位过早／过晚、周期比过小／过大）与 `6S Sample`（OFF／ON）；拒绝原因及最近六个候选周期在故障后保留，周期轨迹通过六步 JustFloat 通道 8～13 发布，单位 ms。原 `6S Hold`／`6S Start EMF`、油门／Speed、双机、HSO、保护和按键保留，无需修改 CubeMX。实现、通道表、对照验证及实板复测边界见 [R67 采样说明](Six_step_R67_sampling.md)。
+
+此前 **UI-R59-STOP** 接入 KEY1 全局停止：任意页面下中断关闭 M1/M2 输出，取消对齐、HSO 和主从；松开稳定 30 ms 后仍需手动重新启动。KEY1 不再由 UI 初始化或扫描。本版继续保留并覆盖六步，操作及验证见 [KEY1 全局停止](KEY1_global_stop.md)。
 
 此前 **UI-R58-IBUS** 已接入 M1 母线硬件过流保护。Settings → M1 Protection 调门限（默认 3000 mA，500～4000 mA、步长 100 mA）及确认清除故障；Status → ADC 可查 DAC 门限、比较器状态和锁存计数。清除后保持输出关闭，上电对齐若被中断需手动重试。工作模式／型号切换保留门限，操作与验证见 [M1 IBUS 硬件保护](M1_IBUS_hardware_protection.md)。
 
@@ -34,7 +44,7 @@ R30 的失联提示增加 ENCODER1 / ENCODER2 编号，联动停机保留首次�
 
 R29 的 Pos Speed 范围、增益和手动跟随误差处理已更新，详见 [Position_response_tuning.md](Position_response_tuning.md)。已有 Pos Speed=30 不自动提升；从轴 Speed Limit=120 时可在 Pos Speed 中设置到 120。
 
-当前固件 **UI-R53-SAMPLE**：主从模式手转主轴、从轴位置跟随，主轴关闭功率输出且不自动对齐。Gear Ratio=100、Offset=0 时同向 1:1 跟随机械角度变化；先摆齐两轴再按 OK 建立共同起点。Run 显示 Hand M1 -> M2（或反向）、RUN/STOP 和位置误差，方向键不输入目标，OK 启停，KEY2 停止返回。保留单 M1 / 单 M2 / 双独立 / 速度同步 / 位置同步和逐路 2804/4015 参数。双电机固定编码器反馈；单 M1 可选独立 HSO。System 配置、长按左右切轴、SPI2 保存延期、Follow 命令及遥测映射见 [Dual_motor_control.md](Dual_motor_control.md)。编码器模式保留原 R26 滑行停止和 Speed=0 闭环减速。
+**UI-R53-SAMPLE** 起：主从模式手转主轴、从轴位置跟随，主轴关闭功率输出且不自动对齐。Gear Ratio=100、Offset=0 时同向 1:1 跟随机械角度变化；先摆齐两轴再按 OK 建立共同起点。Run 显示 Hand M1 -> M2（或反向）、RUN/STOP 和位置误差，方向键不输入目标，OK 启停，KEY2 停止返回。保留单 M1 / 单 M2 / 双独立 / 速度同步 / 位置同步和逐路 2804/4015 参数。双电机固定编码器反馈；单 M1 可选独立 HSO。System 配置、长按左右切轴、SPI2 保存延期、Follow 命令及遥测映射见 [Dual_motor_control.md](Dual_motor_control.md)。编码器模式保留原 R26 滑行停止和 Speed=0 闭环减速。
 
 R25 让 Run 异常停止显示并保留具体原因，Status 新增 Run Stop、Stop Age/Err 及 M1 编码器分类诊断，详见 [Run_stop_diagnostics.md](Run_stop_diagnostics.md)。
 
@@ -115,9 +125,9 @@ UI-R23-LCD 按用户提供的 BOE 屏幕示例将可见区偏移从 26/1 修正�
 
 当前版本增加了 VREFINT 平均与低通滤波，使用测得的 VREF+ 统一换算电流、母线和相电压。Status 新增 VREF（有效估算的电压）、RefState、Ref R/C、RefCnt、RefErr；显示精度不代表测量精度。首个有效平均值完成前不使能电机，参考估计超时锁存 ADC REF。CubeMX 工程和 ADC 初始化均已同步修改，配置、滤波参数与上板核对见 [VREFINT_reference_tracking.md](VREFINT_reference_tracking.md)。
 
-本轮固件在 `About` 首行 `FW` 显示 **UI-R59-STOP**。ENC2 停止/重连见 [Encoder_reconnect_clock_restore.md](Encoder_reconnect_clock_restore.md)，USB 修复见 [USB_CDC_tx_recovery.md](USB_CDC_tx_recovery.md)。HSO 的启动、最低速度、停止和失锁恢复采用 [R44 独立无感规则](HSO_sensorless_startup.md)，不再按编码器实测 45rpm 自动回退。H Gate 为当前校验原因，H Qual 为学习/接管进度和保持异常计数，H Lost 保留上次异常，H Actual 为观测磁链。手动加载过载预算见 [2804_current_limits.md](2804_current_limits.md)。Status → ADC 的 I Trip、IU/IV/IW R/Z 和 ChipRev 见 [current_adc_diagnostics.md](current_adc_diagnostics.md)。
+本轮固件在 `About` 首行 `FW` 显示 **UI-R71-ESC**。ENC2 停止/重连见 [Encoder_reconnect_clock_restore.md](Encoder_reconnect_clock_restore.md)，USB 修复见 [USB_CDC_tx_recovery.md](USB_CDC_tx_recovery.md)。HSO 的启动、最低速度、停止和失锁恢复采用 [R44 独立无感规则](HSO_sensorless_startup.md)，不再按编码器实测 45rpm 自动回退。H Gate 为当前校验原因，H Qual 为学习/接管进度和保持异常计数，H Lost 保留上次异常，H Actual 为观测磁链。手动加载过载预算见 [2804_current_limits.md](2804_current_limits.md)。Status → ADC 的 I Trip、IU/IV/IW R/Z 和 ChipRev 见 [current_adc_diagnostics.md](current_adc_diagnostics.md)。
 
-`Status → Bus` 为 ADC 实测母线电压。`Drive` 显示采样/电流零点的具体状态或锁存故障，编码器在线与对齐另看 Encoder / Aligned。BusRaw 是最新母线原始值，BusCnt / FrameCnt 是规则组样本数 / 完整注入帧数，正常约每秒增加 2000 / 10000；ADC1Err / ADC2Err 显示 HAL 错误码。Enc2 显示第二路 MT6701 的健康状态和原始角度，Enc2Err 为其错误累计值。第二路目前只有诊断采样，没有启用功率输出。
+`Status → Bus` 为 ADC 实测母线电压。`Drive` 显示采样/电流零点的具体状态或锁存故障，编码器在线与对齐另看 Encoder / Aligned。BusRaw 是最新母线原始值，BusCnt / FrameCnt 是规则组样本数 / 完整注入帧数，正常约每秒增加 2000 / 10000；ADC1Err / ADC2Err 显示 HAL 错误码。Enc2 显示第二路 MT6701 的健康状态和原始角度，Enc2Err 为其错误累计值。第二路是否参与控制由 Work Mode 决定；Single M1 六步／HSO 不依赖编码器2，双有感的控制与故障恢复规则保持。
 
 Run 在采样未就绪时显示具体原因并拒绝确认启动；运行中采样异常则停止。上电没有电机母线电源时仍连续测量，Bus 显示 `0.0 V`，Drive / Run 显示 `WAIT BUS`。稍后接通母线会更新读数，并在电流零点完成、母线稳定后继续初始化，无需因最初 0 V 而复位。没有新样本时 Bus 显示 `NO DATA`。运行后的真实故障显示 `ADC PAIR`、`FRAME TIMEOUT`、`BUS TIMEOUT`、`ADC ERROR`、`BUS LOST` 等首因；功率输出关闭，但母线检测继续。锁存故障不会随母线恢复自动解除，处理后重新启动开发板。详见 [ADC / PWM 应用适配记录](ADC_dual_motor_review.md)。
 
@@ -154,4 +164,4 @@ Run 在采样未就绪时显示具体原因并拒绝确认启动；运行中采�
 
 尚未烧录或连接电机验证。实屏帧率、物理按键电平、实际负载下三模式运行和电流环参数需要上板确认；主机模拟不代表这些项目已经验收。
 
-最终构建占用（2026-10-24，UI-R59-STOP）：Debug Flash 127144 B / RAM 22832 B；Release Flash 126384 B / RAM 22728 B。Debug 保留调试符号，Flash 余量 3928 B。固件仍为 `build/Debug/FOC_two.elf`、`build/Release/FOC_two.elf` 和同目录的 BIN、MAP。KEY1 规则及验证见 [全局停止](KEY1_global_stop.md)；硬件保护见 [M1 IBUS 硬件保护](M1_IBUS_hardware_protection.md)，独立 HSO 见 [HSO_sensorless_startup.md](HSO_sensorless_startup.md)，两套电机参数见 [Motor_profiles.md](Motor_profiles.md)。
+最终构建占用（2026-10-25，UI-R71-ESC）：Debug、Release 均为 Flash 130992 B / RAM 23112 B，Flash 余量 80 B。Debug 保留调试符号；两套 ELF/BIN 一致性检查通过，本轮修改尚未实板验证。固件仍为 `build/Debug/FOC_two.elf`、`build/Release/FOC_two.elf` 和同目录的 BIN、MAP。通用六步操作、电流边界及 Flash 优化见 [R70 ESC Auto](Six_step_ESC_R70.md)；KEY1 见 [全局停止](KEY1_global_stop.md)，硬件保护见 [M1 IBUS 硬件保护](M1_IBUS_hardware_protection.md)，独立 HSO 见 [HSO_sensorless_startup.md](HSO_sensorless_startup.md)，两套电机参数见 [Motor_profiles.md](Motor_profiles.md)。

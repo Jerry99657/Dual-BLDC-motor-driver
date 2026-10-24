@@ -30,6 +30,7 @@ static bool next_wren_is_program;
 static bool busy_cycle,force_busy_admission,repeat_busy_race,first_status_idle;
 static unsigned false_idle_reads,status_race_index,ignored_busy_wren,erases,programs;
 static unsigned settings_erases,settings_programs;
+static unsigned jedec_attempts,bad_jedec;
 static HAL_StatusTypeDef flash_send(SPI_HandleTypeDef *,const uint8_t *,uint16_t,uint32_t);
 static void flash_finish(void) {
     if(busy_cycle && (int32_t)(tick-flash_busy_until)>=0) { busy_cycle=false;write_enabled=false; }
@@ -45,6 +46,7 @@ uint32_t HAL_GetTick(void) {
     if(preempt_on_tick) { preempt_on_tick=0; MT6701_Service(); }
     return tick;
 }
+void HAL_Delay(uint32_t ms) { assert(!fast_context && ms==2U); tick+=ms; }
 GPIO_PinState HAL_GPIO_ReadPin(GPIO_TypeDef *p,uint16_t pin) { return (p->pins & pin)?GPIO_PIN_SET:GPIO_PIN_RESET; }
 void HAL_GPIO_WritePin(GPIO_TypeDef *p,uint16_t pin,GPIO_PinState state) {
     if(state==GPIO_PIN_RESET) {
@@ -111,6 +113,7 @@ static HAL_StatusTypeDef flash_send(SPI_HandleTypeDef *h,const uint8_t *p,uint16
     if (flash_error_latched) return HAL_ERROR;
     if(command==0) {
         assert(n==1 || n==4); command=p[0];
+        if(command==0x9FU) ++jedec_attempts;
         if (command==fail_flash_command && flash_failures) {
             --flash_failures; flash_error_latched=true; flash_hal_error=0x20; h->State=2; return HAL_TIMEOUT;
         }
@@ -153,7 +156,10 @@ uint32_t HAL_SPI_GetError(const SPI_HandleTypeDef *h) { assert(h==&hspi2);return
 HAL_StatusTypeDef HAL_SPI_Receive(SPI_HandleTypeDef *h,uint8_t *p,uint16_t n,uint32_t timeout) {
     (void)timeout; assert(h==&hspi2);
     flash_finish();
-    memset(p,0,n); if(command==0x9FU) { assert(n==3); p[0]=0xEF; p[1]=0x40; p[2]=0x17; }
+    memset(p,0,n); if(command==0x9FU) {
+        assert(n==3); p[0]=0xEF; p[1]=0x40; p[2]=0x17;
+        if(bad_jedec) { --bad_jedec; memset(p,255,n); }
+    }
     else if(command==0x05U) {
         assert(n==2);
         uint8_t status=((int32_t)(tick-flash_busy_until)<0) | (write_enabled?2U:0U);
@@ -480,6 +486,37 @@ static void storage_result(bool expected,const char *text) {
     assert(hspi2.State==HAL_SPI_STATE_READY && !flash_error_latched);
     assert((gpio_b.pins & (W25_NSS_Pin|MT6701_CSN2_Pin))==(W25_NSS_Pin|MT6701_CSN2_Pin));
 }
+static void check_flash_init(void) {
+    assert(AppStorage_Init());
+    AppStorage_Get()->speed_x10=321; assert(AppStorage_RequestSave());
+    storage_service(100); storage_result(true,"Save OK");
+    unsigned saved_erases=settings_erases,saved_programs=settings_programs;
+    fail_flash_command=0x9F;
+    for(unsigned failures=1;failures<=3;++failures) {
+        unsigned before=jedec_attempts;
+        flash_failures=failures;
+        assert(AppStorage_Init()==(failures<3));
+        assert(jedec_attempts-before==(failures<3 ? failures+1 : 3));
+        assert((AppStorage_FlashError()>>24)==8 && !flash_failures);
+        if(failures<3) assert(AppStorage_Get()->speed_x10==321);
+        else {
+            assert(!AppStorage_IsReady() && !AppStorage_RequestSave());
+            assert(!strcmp(AppStorage_SaveErrorText(),"Save NO FLASH"));
+            MT6701_2_Service(tick); /* Cleanup of final failed attempt in normal main. */
+        }
+    }
+    fail_flash_command=0;
+    for(unsigned failures=1;failures<=3;++failures) {
+        unsigned before=jedec_attempts;
+        bad_jedec=failures;
+        assert(AppStorage_Init()==(failures<3));
+        assert(jedec_attempts-before==(failures<3 ? failures+1 : 3));
+        assert(AppStorage_FlashError()==(12UL<<24) && !bad_jedec);
+    }
+    assert(AppStorage_Init() && AppStorage_Get()->speed_x10==321 && !AppStorage_FlashError());
+    assert(settings_erases==saved_erases && settings_programs==saved_programs);
+    puts("PASS: actual Flash JEDEC startup retries: 1/2 transient timeouts or invalid IDs recover, max 3 failures stay NO FLASH with diagnostics, SPI2 cleanup/mode/CS and saved A/B retained without writes");
+}
 static void check_hso_save(void) {
     assert(AppStorage_Init());payload=0xFFFFFFU;
     AppStorage_Get()->control_config=0; assert(AppStorage_RequestSave());
@@ -578,6 +615,7 @@ int main(int argc,char **argv) {
         else if(strcmp(argv[1],"zero-m2")==0) check_zero_episode(1);
         else if(strcmp(argv[1],"zero-poll")==0) check_zero_poll();
         else if(strcmp(argv[1],"hso-save")==0) check_hso_save();
+        else if(strcmp(argv[1],"flash-init")==0) check_flash_init();
         else if(strcmp(argv[1],"busy-admission")==0) check_busy_admission();
         else check_absent_encoder(argv[1]);
         return 0;

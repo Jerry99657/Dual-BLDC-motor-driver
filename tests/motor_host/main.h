@@ -25,6 +25,12 @@ typedef struct { uint32_t CYCCNT; } HostDwt;
 extern HostDwt host_dwt;
 #define DWT (&host_dwt)
 #define __HAL_RCC_CORDIC_CLK_ENABLE() ((void)0)
+#ifdef MOTOR_MATH_CORDIC_HOST
+typedef struct { uint32_t CSR; } HostCordic;
+extern HostCordic host_cordic;
+#define CORDIC (&host_cordic)
+#define CORDIC_CSR_RRDY (1U<<31)
+#endif
 static inline uint32_t __get_PRIMASK(void) { return host_primask; }
 static inline void __disable_irq(void) { host_primask = 1; }
 static inline void __enable_irq(void) { host_primask = 0; }

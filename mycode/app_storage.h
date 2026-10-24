@@ -32,6 +32,10 @@ static inline uint32_t AppSettings_EncodePositionSpeed(uint32_t speed)
 #define APP_FLAG_MOTOR_4015 (1UL << 24)
 /* Spare v3 control_config bit; old records select M1 without migration. */
 #define APP_CONFIG_FOCUS_M2 (1UL << 5)
+#define APP_CONFIG_SIXSTEP (1UL << 14) /* Single M1 drive preference, v3 spare bit. */
+#define APP_CONFIG_ESC (1UL << 15) /* Generic six-step, throttle/electrical Hz; v3 spare bit. */
+#define APP_CONFIG_THROTTLE_SHIFT 16U
+#define APP_CONFIG_THROTTLE_MASK (127UL << APP_CONFIG_THROTTLE_SHIFT)
 /* v3 spare bits: 100mA units, zero/invalid legacy values use 3.0A. */
 #define APP_CONFIG_IBUS_SHIFT 8U
 #define APP_CONFIG_IBUS_MASK (63UL << APP_CONFIG_IBUS_SHIFT)
@@ -57,7 +61,7 @@ typedef struct {
     int32_t speed_step_x10;       /* 1..100: 0.1..10.0 rad/s */
     int32_t torque_step_x100;     /* 1..100: 0.01..1.00 V or A */
     int32_t position_step_x100;   /* 1..100: 0.01..1.00 rad */
-    uint32_t control_config;     /* work[2:0], HSO[3], M2 model[4], focus[5], IBUS 100mA[13:8] */
+    uint32_t control_config;     /* work[2:0], HSO[3], M2 model[4], focus[5], IBUS[13:8], six-step[14], ESC[15], throttle[22:16] */
     int32_t gear_ratio_x100;     /* Signed mechanical follower ratio; default 100. */
     int32_t gear_offset_x100;    /* Relative position offset, 0.01 rad. */
     uint32_t axis2_flags;        /* Current loop and per-axis speed limits. */

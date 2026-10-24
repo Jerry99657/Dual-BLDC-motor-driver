@@ -24,6 +24,7 @@ extern GPIO_TypeDef host_gpio;
 #define KEY2_GPIO_Port (&host_gpio)
 uint32_t HAL_GetTick(void);
 void HAL_GPIO_Init(GPIO_TypeDef *port, GPIO_InitTypeDef *init);
+void HAL_Delay(uint32_t ms);
 GPIO_PinState HAL_GPIO_ReadPin(GPIO_TypeDef *port, uint16_t pin);
 static inline uint32_t __get_PRIMASK(void) { return 0; }
 static inline void __disable_irq(void) {}

@@ -5,7 +5,12 @@
 #include "motor_sampling.h"
 #include "MT6701.h"
 #include "angle_src_encoder.h"
+#include "motor_sixstep.h"
 #define WEAK __attribute__((weak))
+#ifndef CONTROL_STUB_UI
+bool SixStep_IsGeneric(void) { return false; }
+void SixStep_SetGeneric(bool enable) { (void)enable; }
+#endif
 bool MotorControl_IsFastFollow(MotorAxis a) { (void)a; return false; }
 float MotorControl_SpeedReference(MotorAxis a,float previous,float target)
 {
@@ -58,6 +63,16 @@ void ControlStub_SetSecondState(MotorAxisSnapshot s) { second_ui=s; }
 int8_t Protocol_GetControlResult(void) { return 1; }
 #endif
 bool MotorControl_HsoAllowed(void) { return work==MOTOR_WORK_SINGLE_M1 && hso; }
+static bool sixstep;
+bool MotorControl_SixStepAllowed(void) { return work==MOTOR_WORK_SINGLE_M1 && sixstep; }
+bool MotorControl_SelectSixStep(bool e) {
+    if(work!=MOTOR_WORK_SINGLE_M1) return false;
+    sixstep=e; if(e) hso=false;
+    SixStep_SetGeneric(e && (AppStorage_Get()->control_config & APP_CONFIG_ESC));
+    AppStorage_Get()->control_config=(AppStorage_Get()->control_config & ~(APP_CONFIG_SIXSTEP|8U)) |
+        (e ? APP_CONFIG_SIXSTEP : 0U);
+    return true;
+}
 bool MotorControl_IsHandFollow(void) { return work>=MOTOR_WORK_MASTER_M1; }
 bool MotorControl_IsPassive(MotorAxis a) { return work==MOTOR_WORK_MASTER_M1+(unsigned)a; }
 float MotorControl_PositionVelocity(MotorAxis a,PIDController *p,float error)
@@ -94,20 +109,39 @@ float MotorControl_GroupError(void) { return 0; }
 uint32_t MotorControl_MaxCycles(void) { return 0; }
 bool MotorControl_SelectWork(MotorWorkMode m) {
     work=m;
+    SixStep_SetGeneric(MotorControl_SixStepAllowed() && (AppStorage_Get()->control_config & APP_CONFIG_ESC));
     focus=m==MOTOR_WORK_SINGLE_M2 || (m==MOTOR_WORK_INDEPENDENT && (AppStorage_Get()->control_config & APP_CONFIG_FOCUS_M2)) ? MOTOR_AXIS_2 : MOTOR_AXIS_1;
     AppStorage_Get()->control_config=(AppStorage_Get()->control_config & ~7U) | m;
     return true;
 }
 bool MotorControl_SelectFeedback(bool e) {
+    sixstep=false;
+    SixStep_SetGeneric(false);
+    AppStorage_Get()->control_config&=~APP_CONFIG_SIXSTEP;
     hso=e;
     AppStorage_Get()->control_config=(AppStorage_Get()->control_config & ~8U) | (e ? 8U : 0U);
     return true;
 }
 bool MotorControl_SelectProfile(MotorAxis a,MotorProfile p)
-{ return a==MOTOR_AXIS_1 && JerryFOC_selectMotor ? JerryFOC_selectMotor(p)!=0 : MotorParams_SelectAxis(a,p)!=0; }
+{
+    bool ok=a==MOTOR_AXIS_1 && JerryFOC_selectMotor ? JerryFOC_selectMotor(p)!=0 : MotorParams_SelectAxis(a,p)!=0;
+    if(ok && a==MOTOR_AXIS_1) {
+        AppStorage_Get()->control_config&=~APP_CONFIG_ESC;
+        SixStep_SetGeneric(false);
+    }
+    return ok;
+}
+bool MotorControl_SelectGeneric(void) {
+    if(!MotorControl_SixStepAllowed() || MotorSampling_IsOutputRequested()) return false;
+    AppStorage_Get()->control_config|=APP_CONFIG_ESC;
+    SixStep_SetGeneric(true);
+    return true;
+}
 bool MotorControl_SetGear(int32_t r,int32_t o) { (void)o; return r!=0; }
 bool MotorControl_RequestAlign(MotorAxis a) { (void)a; return true; }
 bool MotorControl_ModeAllowed(JerryFOC_ControlMode m) {
+    if(MotorControl_SixStepAllowed()) return m==JERRYFOC_MODE_TORQUE ||
+        (!SixStep_IsGeneric() && m==JERRYFOC_MODE_VELOCITY);
     if(MotorControl_HsoAllowed()) return m==JERRYFOC_MODE_VELOCITY;
     return !MotorControl_IsHandFollow() || m==JERRYFOC_MODE_POSITION;
 }
@@ -128,6 +162,7 @@ void MotorControl_StopAll(void) {
 bool MotorControl_Command(MotorAxis a,JerryFOC_ControlMode m,float t,float l,bool c)
 {
 #ifdef CONTROL_STUB_UI
+    if (MotorControl_SixStepAllowed() && t==0) { JerryFOC_setMode(m); JerryFOC_stop(); return true; }
     if (a==MOTOR_AXIS_1 && MotorControl_HsoAllowed() && m==JERRYFOC_MODE_VELOCITY && t==0) {
         JerryFOC_stop(); return true; /* Real HSO zero is coast. */
     }

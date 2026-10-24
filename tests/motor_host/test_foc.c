@@ -44,6 +44,9 @@ static float bus=12.0f;
 static bool ready=true, calibrated=true, complete=true;
 static bool output_requested=true;
 static bool global_stopped,global_pending,global_released=true;
+bool MotorSampling_SelectSixStep(bool enable) { (void)enable; return !output_requested; }
+bool MotorSampling_SixStepTimer(uint32_t us) { (void)us; return true; }
+bool MotorSampling_SixStepPattern(uint8_t sector,float duty) { (void)sector;(void)duty; return ready && !global_stopped; }
 bool MotorSampling_IsGlobalStopped(void) { return global_stopped; }
 bool MotorSampling_TakeGlobalStop(void) { bool p=global_pending; global_pending=false; return p; }
 bool MotorSampling_ResumeGlobalStop(void) {

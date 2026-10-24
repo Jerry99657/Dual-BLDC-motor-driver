@@ -14,6 +14,14 @@
 #include "app_storage.h"
 #include "motor_control.h"
 #include "ui_fonts.h"
+#include "motor_sixstep.h"
+float SixStep_MinSpeed(void) { return 75.398224f/MotorParams_GetActive()->pole_pairs; }
+float SixStep_MaxSpeed(void) { return 1256.637061f/MotorParams_GetActive()->pole_pairs; }
+static SixStepSnapshot six_ui={.gate='P',.phase_pct=50,.period_pct=100,.status="6STEP READY"};
+static bool generic;
+bool SixStep_IsGeneric(void) { return generic; }
+void SixStep_SetGeneric(bool g) { generic=g; if(g) six_ui.speed_control=false; }
+void SixStep_GetSnapshot(SixStepSnapshot *out) { *out=six_ui; }
 
 GPIO_TypeDef host_gpio = {0xFFFFU};
 static uint32_t tick, dma_done;
@@ -42,6 +50,7 @@ static JerryFOC_ControlMode mode;
 static float velocity, angle, iq;
 static uint8_t current_loop;
 static bool output_requested=true;
+static unsigned stop_calls;
 static bool aligning;
 static bool global_stopped;
 bool MotorSampling_IsGlobalStopped(void) { return global_stopped; }
@@ -131,11 +140,12 @@ void JerryFOC_setVelocity(float v) { JerryFOC_Target_Velocity = v; }
 void JerryFOC_setCurrent(float v) { JerryFOC_Target_Iq = v; }
 void JerryFOC_setAbsolutePosition(float v, float limit) { (void)limit; JerryFOC_Target_Position = v; }
 void JerryFOC_stop(void) {
+    ++stop_calls;
     output_requested=false; hso_active=false; current_loop=0; g_openloop_debug=0;
     mode=JERRYFOC_MODE_TORQUE;
     JerryFOC_Target_Iq=JerryFOC_Target_Velocity=JerryFOC_Target_Position=0;
 }
-uint8_t JerryFOC_startOutput(void) { output_requested=drive_ready && healthy && aligned; return output_requested; }
+uint8_t JerryFOC_startOutput(void) { output_requested=drive_ready && ((MotorControl_SixStepAllowed() || MotorControl_HsoAllowed()) || (healthy && aligned)); return output_requested; }
 bool MotorSampling_IsOutputRequested(void) { return output_requested; }
 bool MotorSampling_IsOutputEnabled(void) { return output_requested && drive_ready; }
 float JerryFOC_getVelocity(void) { return velocity; }
@@ -148,7 +158,7 @@ float JerryFOC_getElectricalAngle(void) { return 0; }
 float JerryFOC_getTargetVelocity(void) { return JerryFOC_Target_Velocity; }
 const MotorParams *JerryFOC_getMotorParams(void) { return MotorParams_GetActive(); }
 uint8_t JerryFOC_selectMotor(MotorProfile profile) {
-    if(!healthy || fabsf(velocity)>1) return 0;
+    if(!MotorControl_SixStepAllowed() && !MotorControl_HsoAllowed() && (!healthy || fabsf(velocity)>1)) return 0;
     MotorParams_Select(profile); aligned=false; current_loop=0;
     mode=JERRYFOC_MODE_TORQUE;
     JerryFOC_Target_Iq=JerryFOC_Target_Velocity=JerryFOC_Target_Position=0;
@@ -629,6 +639,142 @@ static void check_run_lr_gestures(void) {
     assert(tick<1000 && MotorControl_GetFocus()==MOTOR_AXIS_2);
     back(); MotorControl_SelectWork(MOTOR_WORK_SINGLE_M1); MotorControl_SetFocus(MOTOR_AXIS_1);
     puts("PASS: R56 release-only short modes, absolute long L/R selection in all modes, no stop/repeat on hold, release bounce, KEY1 excluded from UI routing, chord/OK/Back priority, context/fault cancellation, entry blocking, saved focus, foreground stalls and tick wrap");
+}
+static void check_r60(void) {
+    reset(); MotorControl_StopAll(); MotorControl_SelectWork(MOTOR_WORK_SINGLE_M1);
+    MotorControl_SelectFeedback(false);
+    settings.flags|=APP_FLAG_CURRENT_LOOP;
+    settings.voltage_x100=125;
+    ui_app_reset(tick); assert(KK_UI_Init(ui_app_get())==KK_UI_OK); settle();
+    press(KK_UI_KEY_RIGHT); press(KK_UI_KEY_OK); settle();
+    select_setting("System"); press(KK_UI_KEY_OK); settle();
+    const KK_UI_MenuPage *system=&ui_app_get()->menu_pages[2];
+    unsigned item=0;
+    while(item<system->item_count && strcmp(system->items[item].label,"Six Step")) ++item;
+    assert(item<system->item_count);
+    while(kk_ui.current.selected!=item) press(KK_UI_KEY_DOWN);
+    press(KK_UI_KEY_OK); settle();
+    assert(kk_ui.overlay.type==KK_UI_OVERLAY_BOOL);
+    OLED_SetFont(ui_font_title);
+    const char *title=ui_app_get()->bool_bindings[system->items[item].ref].title;
+    for(const unsigned char *p=(const unsigned char *)title;*p;++p) assert(OLED_GetGlyphAdvance(*p)>0);
+    OLED_SetFont(ui_font_body);
+    press(KK_UI_KEY_RIGHT); press(KK_UI_KEY_OK); press(KK_UI_KEY_OK); settle();
+    assert(MotorControl_SixStepAllowed() && !MotorControl_HsoAllowed());
+    assert(settings.control_config & APP_CONFIG_SIXSTEP);
+    snapshot("r60-system-sixstep");
+    back();
+    const KK_UI_MenuItem *loop=&ui_app_get()->menu_pages[0].items[1];
+    assert(!*ui_app_get()->bool_bindings[loop->ref].value);
+    assert(settings.flags & APP_FLAG_CURRENT_LOOP); /* Encoder preference retained. */
+    assert(KK_UI_MenuGetItemState(&ui_app_get()->menu_pages[0],1)==KK_UI_ITEM_DISABLED);
+    back(); press(KK_UI_KEY_LEFT); press(KK_UI_KEY_OK); settle();
+    probe_frame(); assert(drew("M1 Throttle 6STEP") && drew("%") && drew("0"));
+    assert(!strcmp(status_value("6S ZC"),"0/12 P 50/100.0"));
+    six_ui.quality=12; six_ui.gate='T'; six_ui.phase_pct=six_ui.period_pct=999;
+    settle();
+    assert(!strcmp(status_value("6S ZC"),"12/12 T 999/999.0"));
+      six_ui.startup_ms=500; six_ui.startup_emf=0.95f; settle();
+      assert(!strcmp(status_value("6S Hold"),"500/500 ms"));
+      assert(!strcmp(status_value("6S Start EMF"),"0.95 V"));
+      six_ui.period_fraction=9; six_ui.reject=SIX_REJECT_LONG; six_ui.sampling_off=true; settle();
+      assert(!strcmp(status_value("6S Cause"),"PERIOD HIGH"));
+      assert(!strcmp(status_value("6S Sample"),"OFF"));
+      assert(!strcmp(status_value("6S ZC"),"12/12 T 999/999.9"));
+    OLED_SetFont(ui_font_body);
+    assert(OLED_GetUTF8Width("6S ZC")+OLED_GetUTF8Width(status_value("6S ZC"))+15<=160);
+    six_ui=(SixStepSnapshot){.gate='P',.phase_pct=50,.period_pct=100,.status="6STEP READY"}; settle();
+    bool estimated=false;
+    for(unsigned p=0;p<probe_count;++p) if(probe[p].y==38 && !strncmp(probe[p].text,"Est ",4)) estimated=true;
+    assert(estimated);
+    press(KK_UI_KEY_UP); probe_frame(); assert(drew("1"));
+    step(KK_UI_KEY_UP,1000); step(0,30); press(KK_UI_KEY_OK);
+    assert(output_requested && JerryFOC_Target_Iq==7);
+    assert(((settings.control_config & APP_CONFIG_THROTTLE_MASK)>>APP_CONFIG_THROTTLE_SHIFT)==7);
+    press(KK_UI_KEY_UP); press(KK_UI_KEY_OK); assert(output_requested && JerryFOC_Target_Iq==8);
+    press(KK_UI_KEY_OK); assert(!output_requested); /* Unchanged OK stops. */
+    run_delta(false,10000); press(KK_UI_KEY_OK); assert(!output_requested);
+    run_delta(true,10000); probe_frame(); assert(drew("100"));
+    snapshot("r63-run-throttle");
+    press(KK_UI_KEY_OK); assert(output_requested && JerryFOC_Target_Iq==100);
+    settle();
+    assert(!strcmp(status_value("Mode"),"Throttle"));
+    assert(strchr(status_value("Target"),'%')!=NULL && settings.voltage_x100==125);
+    press(KK_UI_KEY_RIGHT); probe_frame(); assert(drew("M1 Speed 6STEP") && !output_requested);
+    press(KK_UI_KEY_UP); probe_frame(); assert(drew("10.8")); /* ceil(12 electrical Hz / 7 poles). */
+    run_delta(true,10000); probe_frame(); assert(drew("100.0")); /* Configured Speed Limit still applies. */
+    snapshot("r60-run-sixstep");
+    press(KK_UI_KEY_RIGHT); probe_frame(); assert(drew("M1 Throttle 6STEP") && drew("100")); /* Skips position. */
+    back(); press(KK_UI_KEY_OK); settle(); probe_frame();
+    assert(drew("100")); /* Confirmed target survives page entry. */
+    ui_app_reset(tick); assert(KK_UI_Init(ui_app_get())==KK_UI_OK); settle();
+    press(KK_UI_KEY_OK); settle(); probe_frame();
+    assert(drew("M1 Throttle 6STEP") && drew("100"));
+    assert(MotorControl_SelectProfile(MOTOR_AXIS_1,MOTOR_PROFILE_4015)); settle(); probe_frame();
+    assert(drew("0") && !(settings.control_config & APP_CONFIG_THROTTLE_MASK) && !output_requested);
+    back(); MotorControl_SelectSixStep(false);
+    puts("PASS: R63 six-step throttle 0..100, 1% held repeat, changed OK applies/unchanged stops, zero coast, separate saved target, Speed min/max retained, no position mode, HSO mutual exclusion and encoder-current preference/font coverage");
+}
+static void check_sensorless_profile_menu(void) {
+    for(unsigned six=0;six<2;++six) {
+        reset(); MotorControl_StopAll(); MotorControl_SelectWork(MOTOR_WORK_SINGLE_M1);
+        assert(MotorControl_SelectProfile(MOTOR_AXIS_1,MOTOR_PROFILE_4015));
+        if(six) assert(MotorControl_SelectSixStep(true));
+        else assert(MotorControl_SelectFeedback(true));
+        healthy=aligned=false; velocity=300; /* Disconnected/stale encoder is irrelevant. */
+        ui_app_reset(tick); assert(KK_UI_Init(ui_app_get())==KK_UI_OK); settle();
+        press(KK_UI_KEY_RIGHT); press(KK_UI_KEY_OK); settle();
+        select_setting("Motor"); press(KK_UI_KEY_OK); settle();
+        for(unsigned item=0;item<2;++item) {
+            while(kk_ui.current.selected!=item) press(KK_UI_KEY_DOWN);
+            press(KK_UI_KEY_OK); settle();
+            assert(kk_ui.overlay.type==KK_UI_OVERLAY_CONFIRM);
+            press(KK_UI_KEY_RIGHT);
+            unsigned before=stop_calls;
+            press(KK_UI_KEY_OK); settle();
+            assert(stop_calls==before); /* Preserve the backend's quiet qualification. */
+            assert(MotorParams_GetActiveProfile()==(item ? MOTOR_PROFILE_4015 : MOTOR_PROFILE_2804));
+            assert(!output_requested && !JerryFOC_Target_Velocity && !JerryFOC_Target_Iq);
+            assert(!strcmp(kk_ui.toast.text,"Motor set"));
+            assert(six ? MotorControl_SixStepAllowed() : MotorControl_HsoAllowed());
+        }
+    }
+    puts("PASS: real Motor menu confirms 4015/2804 both ways in six-step/HSO without encoder or redundant idle Stop; targets cleared, feedback retained and no auto-start");
+}
+static void check_generic_esc_menu(void) {
+    reset(); MotorControl_StopAll(); MotorControl_SelectWork(MOTOR_WORK_SINGLE_M1);
+    MotorControl_SelectFeedback(false);
+    assert(MotorControl_SelectSixStep(true));
+    healthy=aligned=false;
+    ui_app_reset(tick); assert(KK_UI_Init(ui_app_get())==KK_UI_OK); settle();
+    press(KK_UI_KEY_RIGHT); press(KK_UI_KEY_OK); settle();
+    select_setting("Motor"); press(KK_UI_KEY_OK); settle();
+    press(KK_UI_KEY_DOWN); press(KK_UI_KEY_DOWN); press(KK_UI_KEY_OK); settle();
+    assert(kk_ui.overlay.type==KK_UI_OVERLAY_CONFIRM);
+    back(); assert(!SixStep_IsGeneric());
+    press(KK_UI_KEY_OK); settle(); press(KK_UI_KEY_RIGHT); press(KK_UI_KEY_OK); settle();
+    assert(SixStep_IsGeneric() && (settings.control_config & APP_CONFIG_ESC));
+    assert(!output_requested && !strcmp(status_value("Motor"),"ESC"));
+    velocity=35; six_ui.velocity=35; settle();
+    assert(!strcmp(status_value("Speed"),"35.0 Hz") && !strcmp(status_value("Speed rpm"),"--"));
+    assert(!strcmp(status_value("6Step Speed"),"35.0 Hz"));
+    snapshot("r70-motor-esc"); back(); back();
+    press(KK_UI_KEY_LEFT); press(KK_UI_KEY_OK); settle();
+    probe_frame(); assert(drew("M1 Throttle ESC"));
+    assert(MotorControl_ModeAllowed(JERRYFOC_MODE_TORQUE) && !MotorControl_ModeAllowed(JERRYFOC_MODE_VELOCITY));
+    velocity=0; healthy=aligned=true;
+    run_delta(true,30); press(KK_UI_KEY_OK); assert(output_requested && JerryFOC_Target_Iq==30);
+    press(KK_UI_KEY_RIGHT); assert(output_requested); /* No alternate mode: never silently stop. */
+    probe_frame(); assert(drew("M1 Throttle ESC")); snapshot("r70-run-esc");
+    back(); assert(!output_requested);
+    assert(settings.control_config & APP_CONFIG_ESC);
+    ui_app_reset(tick); assert(KK_UI_Init(ui_app_get())==KK_UI_OK); settle();
+    press(KK_UI_KEY_RIGHT); press(KK_UI_KEY_OK); settle();
+    select_setting("Motor"); press(KK_UI_KEY_OK); settle();
+    press(KK_UI_KEY_OK); settle(); press(KK_UI_KEY_RIGHT); press(KK_UI_KEY_OK); settle();
+    assert(!SixStep_IsGeneric() && !(settings.control_config & APP_CONFIG_ESC));
+    assert(MotorControl_ModeAllowed(JERRYFOC_MODE_VELOCITY));
+    puts("PASS: ESC Auto confirm/cancel, throttle-only without L/R stop, electrical Hz/no false rpm, saved bit, 2804 preset exit and layout/font");
 }
 static void check_r59(void) {
     enter_independent_run();
@@ -1422,6 +1568,9 @@ int main(void) {
     check_r57();
     check_r58();
     check_r59();
+    check_r60();
+    check_sensorless_profile_menu();
+    check_generic_esc_menu();
     puts("PASS: R54 applied Work marker, axis-qualified settings, HSO forced ON with retained encoder preference, Run feedback/bus/stages/actions/ranges, idle focus persistence and durable save states");
     puts("PASS: System/work routes, independent M1/M2 confirmed targets, KEY1 excluded from UI routing, long L/R view-only selection and KEY2 group stop");
     printf("PASS: GPIO, axes, bounce, repeat, Back/cancel, run modes, speed range, stop, fault, position origin, wrap, animations, async DMA (%u submissions)\n",submissions);

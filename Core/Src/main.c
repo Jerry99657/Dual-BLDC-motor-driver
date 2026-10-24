@@ -317,7 +317,7 @@ int main(void)
     }
 
     if (!MotorSampling_IsGlobalStopped() && MotorControl_MotionAllowed(MOTOR_AXIS_1) &&
-        !MotorControl_HsoAllowed() &&
+        !MotorControl_HsoAllowed() && !MotorControl_SixStepAllowed() &&
         (g_need_align || JerryFOC_needsAlignment()) && !g_aligning &&
         MotorSampling_IsReady() && MotorSampling_IsCalibrated() && MT6701_IsHealthy()) {
         g_need_align = 0U;

@@ -8,6 +8,7 @@
 #include "motor_control.h"
 #include "app_storage.h"
 #include "MT6701.h"
+#include "motor_sixstep.h"
 
 static uint32_t now;
 static AppSettings settings;
@@ -505,11 +506,120 @@ static void check_global_control_stop(void)
     MotorControl_StopAll();
     puts("PASS: KEY1 real controllers: every work mode, both-axis cleanup, linked follow cancel, held commands/align/open-loop rejected, release never restarts, explicit run/align, configuration cannot revive pending alignment");
 }
+static void check_six_profile_switch(void)
+{
+    boot(MOTOR_WORK_SINGLE_M1);
+    assert(MotorControl_SelectProfile(MOTOR_AXIS_1,MOTOR_PROFILE_4015));
+    assert(MotorControl_SelectSixStep(true));
+    healthy=aligned=0; encoder_velocity=300;
+    for(unsigned i=0;i<2100;++i) MotorControl_Fast();
+    assert(SixStep_AtRest());
+    /* Reproduce the UI's old idle Stop -> immediate switch rejection. */
+    MotorControl_Stop(MOTOR_AXIS_1);
+    assert(!MotorControl_SelectProfile(MOTOR_AXIS_1,MOTOR_PROFILE_2804));
+    for(unsigned i=0;i<2000;++i) MotorControl_Fast();
+    /* Switching itself must not need the disconnected/stale encoder. */
+    assert(MotorControl_SelectProfile(MOTOR_AXIS_1,MOTOR_PROFILE_2804));
+    assert(MotorParams_GetActive()->pole_pairs==7 && MotorParams_GetActive()->rated_current==0.5f);
+    assert(MotorControl_SixStepAllowed() && !JerryFOC_needsAlignment() && !output_requested);
+    assert(!(settings.flags & APP_FLAG_MOTOR_4015));
+    assert(MotorControl_SelectGeneric() && SixStep_IsGeneric() && (settings.control_config & APP_CONFIG_ESC));
+    MotorControl_Init(); /* Same v3 record restores generic without changing the saved motor preset. */
+    assert(SixStep_IsGeneric() && MotorControl_SixStepAllowed());
+    assert(!MotorControl_ModeAllowed(JERRYFOC_MODE_VELOCITY));
+    assert(!MotorControl_Command(MOTOR_AXIS_1,JERRYFOC_MODE_VELOCITY,30,0,false));
+    assert(MotorControl_Command(MOTOR_AXIS_1,JERRYFOC_MODE_TORQUE,30,0,false));
+    assert(!MotorControl_SelectProfile(MOTOR_AXIS_1,MOTOR_PROFILE_4015));
+    MotorControl_StopAll();
+    for(unsigned i=0;i<2000;++i) MotorControl_Fast();
+    assert(MotorControl_SelectProfile(MOTOR_AXIS_1,MOTOR_PROFILE_2804));
+    assert(!SixStep_IsGeneric() && !(settings.control_config & APP_CONFIG_ESC));
+    assert(MotorControl_Command(MOTOR_AXIS_1,JERRYFOC_MODE_TORQUE,30,0,false));
+    assert(!MotorControl_SelectProfile(MOTOR_AXIS_1,MOTOR_PROFILE_4015));
+    assert(MotorParams_GetActiveProfile()==MOTOR_PROFILE_2804 && output_requested);
+    MotorControl_Stop(MOTOR_AXIS_1);
+    for(unsigned i=0;i<1999;++i) MotorControl_Fast();
+    assert(!MotorControl_SelectProfile(MOTOR_AXIS_1,MOTOR_PROFILE_4015));
+    MotorControl_Fast();
+    assert(MotorControl_SelectProfile(MOTOR_AXIS_1,MOTOR_PROFILE_4015));
+    assert(!output_requested && !JerryFOC_needsAlignment() && (settings.flags & APP_FLAG_MOTOR_4015));
+    assert(MotorControl_SelectGeneric());
+    assert(MotorControl_SelectWork(MOTOR_WORK_INDEPENDENT));
+    assert(!SixStep_IsGeneric() && (settings.control_config & APP_CONFIG_ESC));
+    assert(MotorControl_SelectWork(MOTOR_WORK_SINGLE_M1));
+    assert(SixStep_IsGeneric());
+    for(unsigned i=0;i<2000;++i) MotorControl_Fast();
+    assert(MotorControl_SelectProfile(MOTOR_AXIS_1,MOTOR_PROFILE_4015));
+    healthy=aligned=1; encoder_velocity=0;
+    puts("PASS: actual six-step profiles/generic without encoder after 200ms electrical rest; throttle-only, persistent v3 generic, no generic leakage to dual, active/coast rejection and no auto-start");
+}
+static void check_six_control(void)
+{
+    boot(MOTOR_WORK_SINGLE_M1);
+    assert(MotorControl_SelectProfile(MOTOR_AXIS_1,MOTOR_PROFILE_4015));
+    aligned=healthy=1;
+    if(JerryFOC_needsAlignment()) { JerryFOC_alignStart(); JerryFOC_alignFinish(); }
+    command("Throttle:20"); assert(Protocol_GetControlResult()==-1 && !output_requested);
+    settings.control_config|=APP_CONFIG_FOCUS_M2|(27UL<<APP_CONFIG_IBUS_SHIFT)|(37UL<<APP_CONFIG_THROTTLE_SHIFT);
+    command("Feedback:SixStep"); assert(Protocol_GetControlResult()==0);
+    Protocol_Service();
+    assert(MotorControl_SixStepAllowed() && !MotorControl_HsoAllowed());
+    assert(settings.control_config & APP_CONFIG_SIXSTEP);
+    healthy=aligned=0; /* Actual six-step start has no encoder admission. */
+    for(unsigned i=0;i<2100;++i) MotorControl_Fast();
+    assert(SixStep_AtRest() && !JerryFOC_needsAlignment());
+    assert(state(MOTOR_AXIS_1).healthy && state(MOTOR_AXIS_1).aligned);
+    command("Throttle:nan"); assert(Protocol_GetControlResult()==-2 && !output_requested);
+    command("Throttle:-1"); assert(Protocol_GetControlResult()==-1 && !output_requested);
+    command("Throttle:101"); assert(Protocol_GetControlResult()==-1 && !output_requested);
+    command("M2:Throttle:20"); assert(Protocol_GetControlResult()<0 && !output_requested);
+    command("Torque:20"); assert(Protocol_GetControlResult()==-1 && !output_requested);
+    command("Throttle:20"); assert(Protocol_GetControlResult()==1 && output_requested);
+    assert(state(MOTOR_AXIS_1).mode==JERRYFOC_MODE_TORQUE && state(MOTOR_AXIS_1).target_iq==20);
+    command("Throttle:35"); assert(Protocol_GetControlResult()==1 && state(MOTOR_AXIS_1).target_iq==35);
+    command("Speed:50"); assert(Protocol_GetControlResult()==-1); /* Stop before changing units. */
+    command("Throttle:0"); assert(Protocol_GetControlResult()==1 && !output_requested);
+    for(unsigned i=0;i<2100;++i) MotorControl_Fast();
+    assert(!MotorControl_Command(MOTOR_AXIS_1,JERRYFOC_MODE_POSITION,1,0,false));
+    assert(!MotorControl_Command(MOTOR_AXIS_1,JERRYFOC_MODE_VELOCITY,1,0,false));
+    assert(MotorControl_Command(MOTOR_AXIS_1,JERRYFOC_MODE_VELOCITY,50,0,true));
+    assert(output_requested && !state(MOTOR_AXIS_1).current_loop && state(MOTOR_AXIS_1).target_velocity==50);
+    assert(!MotorControl_SelectFeedback(true) && !MotorControl_SelectWork(MOTOR_WORK_INDEPENDENT));
+    assert(!MotorControl_Command(MOTOR_AXIS_1,JERRYFOC_MODE_VELOCITY,-50,0,false));
+    command("OpenLoop:10,1"); assert(!g_openloop_debug);
+    global_stopped=global_pending=true; global_released=false; output_requested=false;
+    MotorControl_Fast(); MotorControl_Service(now);
+    for(unsigned i=0;i<2100;++i) MotorControl_Fast();
+    assert(SixStep_AtRest() && !output_requested);
+    global_released=true;
+    assert(MotorControl_Command(MOTOR_AXIS_1,JERRYFOC_MODE_VELOCITY,50,0,false));
+    assert(output_requested && !global_stopped);
+    assert(MotorControl_Command(MOTOR_AXIS_1,JERRYFOC_MODE_VELOCITY,0,0,false));
+    for(unsigned i=0;i<2100;++i) MotorControl_Fast();
+    assert(!output_requested && SixStep_AtRest());
+    assert(MotorControl_SelectFeedback(true) && !MotorControl_SixStepAllowed());
+    assert(!(settings.control_config & APP_CONFIG_SIXSTEP));
+    assert(AppSettings_GetIbusLimit(settings.control_config)==2700);
+    assert(settings.control_config & APP_CONFIG_FOCUS_M2);
+    assert(((settings.control_config & APP_CONFIG_THROTTLE_MASK)>>APP_CONFIG_THROTTLE_SHIFT)==37);
+    assert(MotorControl_SelectSixStep(true));
+    for(unsigned i=0;i<2100;++i) MotorControl_Fast();
+    assert(MotorControl_SelectWork(MOTOR_WORK_INDEPENDENT));
+    assert(!MotorControl_SixStepAllowed() && (settings.control_config & APP_CONFIG_SIXSTEP));
+    assert(MotorControl_ModeAllowed(JERRYFOC_MODE_TORQUE));
+    assert(!MotorControl_SelectSixStep(true));
+    healthy=aligned=1;
+    assert(MotorControl_SelectProfile(MOTOR_AXIS_1,MOTOR_PROFILE_2804));
+    assert(!(settings.control_config & APP_CONFIG_THROTTLE_MASK));
+    puts("PASS: real six-step integration: encoder absent, throttle + Speed, strict protocol/axis/unit admission, zero coast, HSO mutual exclusion/persistence, untouched dual encoder modes, KEY1 and explicit restart, live mode/reverse/open-loop refusal");
+}
 int main(int argc,char **argv)
 {
     if (argc>1 && !strcmp(argv[1],"follow-model")) { follow_models(false); return 0; }
     if (argc>1 && !strcmp(argv[1],"follow-current")) { follow_current_models(false); return 0; }
     check_global_control_stop();
+    check_six_profile_switch();
+    check_six_control();
     /* The independent view is a v3 spare bit, not a run request. Preserve it
      * across profile/feedback/mode writes and restore only in Independent. */
     boot(MOTOR_WORK_INDEPENDENT);

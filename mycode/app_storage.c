@@ -200,7 +200,18 @@ bool AppStorage_Init(void)
     s_flash_error=0;
     s_log_head = s_log_count = 0U;
     s_service_at = HAL_GetTick();
-    s_ready = W25Q_Init();
+    /* Boot only, before motor control starts. A single failed JEDEC read
+     * must not permanently disable saving. Keep CS arbitration and bounded
+     * recovery: at most 3 reads, two 2ms waits, no erase/write during retry. */
+    s_ready=false;
+    for (unsigned attempt=0;attempt<3U && !s_ready;++attempt) {
+        if (attempt) { MT6701_2_Service(HAL_GetTick()); HAL_Delay(2U); }
+        s_ready=W25Q_Init();
+        if (!s_ready) {
+            s_flash_error=W25Q_LastFailure();
+            if (!s_flash_error) s_flash_error=12UL<<24; /* ID rejected with no HAL failure. */
+        }
+    }
     if (!s_ready) {
         s_save_error="Save NO FLASH";
         settings_set_defaults();

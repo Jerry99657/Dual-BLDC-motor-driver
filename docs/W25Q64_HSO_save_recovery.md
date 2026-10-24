@@ -1,5 +1,7 @@
 # UI-R48-SPI2：共享 SPI2 的切换与故障恢复
 
+2026-10-25: **UI-R69-6STEP** adds bounded startup detection retries; SPI2 mode/rates unchanged. See [R69 Flash initialization](Flash_init_retry_R69.md).
+
 当前 UI-R53-SAMPLE 保留本页全部 SPI2/保存修复；磁链学习、CAPTURE 资格修改与当前固件资源见 [独立无感启动](HSO_sensorless_startup.md)。本页以下保留 R48 及此前版本的修复与构建记录。
 
 ## R48：Save ERASE、4/0/00/00 与 ENC2 同时失联

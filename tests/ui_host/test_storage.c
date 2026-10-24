@@ -14,6 +14,8 @@ bool MT6701_2_StorageBlocked(void) { return storage_blocked; }
 bool MT6701_2_FlashBegin(void) { return true; }
 void MT6701_2_FlashEnd(void) {}
 uint32_t HAL_GetTick(void) { return tick; }
+void HAL_Delay(uint32_t ms) { assert(ms==2U); tick+=ms; }
+void MT6701_2_Service(uint32_t now) { (void)now; }
 bool W25Q_Init(void) { return true; }
 uint32_t W25Q_ReadID(void) { return 0xEF4017; }
 uint32_t W25Q_LastFailure(void) { return 0x06010402U; }
@@ -170,11 +172,11 @@ int main(void) {
     assert(migrated->axis2_speed_step_x10==5 && migrated->axis2_speed_x10==0);
     assert(AppSettings_GetIbusLimit(migrated->control_config)==APP_IBUS_DEFAULT_MA);
     assert(AppSettings_GetIbusLimit(63U<<APP_CONFIG_IBUS_SHIFT)==APP_IBUS_DEFAULT_MA);
-    AppStorage_Get()->control_config=18 | APP_CONFIG_FOCUS_M2 | (27UL<<APP_CONFIG_IBUS_SHIFT); AppStorage_Get()->gear_ratio_x100=-125;
+    AppStorage_Get()->control_config=18 | APP_CONFIG_FOCUS_M2 | APP_CONFIG_SIXSTEP | APP_CONFIG_ESC | (27UL<<APP_CONFIG_IBUS_SHIFT) | (100UL<<APP_CONFIG_THROTTLE_SHIFT); AppStorage_Get()->gear_ratio_x100=-125;
     AppStorage_Get()->axis2_speed_x10=432; AppStorage_Get()->axis2_position_step_x100=12;
     assert(AppStorage_RequestSave()); service(80); assert(result());
     assert(AppStorage_Init()); migrated=AppStorage_Get();
-    assert(migrated->control_config==(18 | APP_CONFIG_FOCUS_M2 | (27UL<<APP_CONFIG_IBUS_SHIFT)) && migrated->gear_ratio_x100==-125);
+    assert(migrated->control_config==(18 | APP_CONFIG_FOCUS_M2 | APP_CONFIG_SIXSTEP | APP_CONFIG_ESC | (27UL<<APP_CONFIG_IBUS_SHIFT) | (100UL<<APP_CONFIG_THROTTLE_SHIFT)) && migrated->gear_ratio_x100==-125);
     assert(AppSettings_GetIbusLimit(migrated->control_config)==2700);
     assert(migrated->axis2_speed_x10==432 && migrated->axis2_position_step_x100==12);
     /* An actual pre-extension v3 record uses only bits[13:8] for Pos Speed. */

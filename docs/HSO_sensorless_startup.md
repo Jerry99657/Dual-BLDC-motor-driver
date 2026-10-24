@@ -1,10 +1,16 @@
 # M1 独立无感启动
 
+UI-R71-ESC 在 Single M1 提供独立六步无感 Throttle／Speed 驱动及 ESC Auto 通用油门，与 HSO 互斥；ESC Auto 仅作用于六步，不替换本页 HSO 算法及其编码器独立启动规则。选择和验证见 [通用六步](Six_step_ESC_R70.md)。
+
+R67 的 OFF／ON ADC 采样中心切换仅用于六步 SYNC／RUN，HSO 与编码器 FOC 保留谷底采样；退出六步恢复原 CH4 配置。详见 [R67 采样说明](Six_step_R67_sampling.md)。
+
+R66 共用 STM32G431 的 CORDIC 计算正余弦，替代 CMSIS 查表；每次事务设置自身格式与单位模长，恢复原中断屏蔽状态。HSO 启动状态机、参数及主计算 O2 设置保留。原 HSO 主机回归通过，但该三角函数实现替换尚未实板复测。
+
 UI-R59-STOP 增加 KEY1 全局停止，取消 HSO 启动或 CONTROL，松开后不自动重启；重新启动仍检查静止和启动条件。详见 [KEY1 全局停止](KEY1_global_stop.md)。以下 R58 硬件保护与 R53 无感控制继续保留。
 
 UI-R58-IBUS 在既有无感控制上加入独立的 M1 母线硬件过流保护，见 [IBUS 门限与恢复](M1_IBUS_hardware_protection.md)。硬件过流后优先显示 M1 IBUS TRIP；确认清除不自动重启，下次仍需手动进行完整 HSO 启动。以下保留 R53 无感算法和 R57 界面说明。
 
-当前固件为 **UI-R59-STOP**，HSO 速度编辑边界、Status 分组和辅助单位见 [R57 UI 说明](UI_R57_status_units.md)。HSO 控制沿用 R53：在有效 PWM 高平台上对齐三相电压采样时间，减少错时采样把 PWM 共模变成假差分电压的问题。保留 R52 偏置估计使能修复、R51 固定相位窗口和 dq 电流交接、R49 周期平均磁链学习、R50 有限资格窗口，以及 R48 的 SPI2/保存修复，见 [W25Q64_HSO_save_recovery.md](W25Q64_HSO_save_recovery.md)。
+当前固件为 **UI-R71-ESC**，HSO 速度编辑边界、Status 分组和辅助单位见 [R57 UI 说明](UI_R57_status_units.md)。HSO 控制沿用 R53：在有效 PWM 高平台上对齐三相电压采样时间，减少错时采样把 PWM 共模变成假差分电压的问题。保留 R52 偏置估计使能修复、R51 固定相位窗口和 dq 电流交接、R49 周期平均磁链学习、R50 有限资格窗口，以及 R48 的 SPI2/保存修复，见 [W25Q64_HSO_save_recovery.md](W25Q64_HSO_save_recovery.md)。
 
 本版把 Single M1 的 HSO Feedback 改为独立无感速度控制。编码器不参与启动、磁链估算、角度资格、速度反馈或故障后回退；允许 MT6701 未连接。双电机模式及 Single M2 继续使用编码器，原有主从跟随算法和 E1/E2 诊断保留。
 

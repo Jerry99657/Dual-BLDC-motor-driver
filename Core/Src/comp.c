@@ -21,6 +21,8 @@
 #include "comp.h"
 
 /* USER CODE BEGIN 0 */
+/* Keep the real hardware hook visible with HAL LTO, including Release. */
+void HAL_COMP_MspInit(COMP_HandleTypeDef *compHandle) __attribute__((noinline,externally_visible));
 
 /* USER CODE END 0 */
 

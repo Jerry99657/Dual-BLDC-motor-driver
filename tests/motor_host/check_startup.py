@@ -48,7 +48,7 @@ for mode in ("Debug", "Release"):
     for symbol in ("DMA1_Channel1_IRQHandler", "DMA1_Channel2_IRQHandler",
                    "DMA2_Channel1_IRQHandler", "DMA2_Channel2_IRQHandler",
                    "SPI1_IRQHandler", "SPI2_IRQHandler", "ADC1_2_IRQHandler", "TIM2_IRQHandler",
-                   "TIM1_BRK_TIM15_IRQHandler", "HAL_COMP_MspInit", "HAL_DAC_MspInit", "EXTI15_10_IRQHandler"):
+                   "TIM1_BRK_TIM15_IRQHandler", "HAL_COMP_MspInit", "HAL_DAC_MspInit", "EXTI15_10_IRQHandler", "TIM7_IRQHandler"):
         assert re.search(r"^\w+ T " + symbol + r"$", symbols, re.M), (mode, symbol)
     for symbol in ("g_boot_stage", "g_error_return_address"):
         assert re.search(r"^\w+ [bB] " + symbol + r"$", symbols, re.M), (mode, symbol)
@@ -80,10 +80,18 @@ for mode in ("Debug", "Release"):
     assert any(c.startswith("MotorSampling_GlobalStopIRQ") for c in exti_calls), (mode,exti_calls)
 
     image = (root / "FOC_two.bin").read_bytes()
-    assert b"UI-R59-STOP" in image and b"UI-R58-IBUS" not in image, mode
+    assert b"UI-R71-ESC" in image and b"UI-R70-ESC" not in image, mode
+    assert b"ESC Auto" in image and b"Throttle only" in image,mode
+    assert "__udivmoddi4" in symbols,mode
+    assert b"PERIOD HIGH" in image and b"6S Sample" in image, mode
+    assert b"6STEP SINE" in image and b"6STEP CURRENT" in image, mode
+    assert "sinTable_f32" not in symbols and "arm_sin_f32" not in symbols, mode
+    assert "MotorMath_SinCos" in symbols, mode
+    assert b"6STEP NO ZC" in image and b"6STEP RUN" in image, mode
+    assert b"Throttle:" in image and b"6STEP FAST" in image, mode
     with tempfile.TemporaryDirectory(prefix="startup-", dir=repo / "build") as scratch:
         output = Path(scratch) / "verified.bin"
         tool("objcopy", "-O", "binary", elf, output)
         assert image == output.read_bytes(), mode
-    print(f"PASS: {mode}: HAL_Init precedes clocks/peripherals; strong MSP/COMP/DAC/BRK/EXTI, real KEY1 shutdown callback; R59; "
+    print(f"PASS: {mode}: HAL_Init precedes clocks/peripherals; strong MSP/COMP/DAC/BRK/EXTI/TIM7, real KEY1 shutdown callback; R71 shared six-step capture/compact division/CORDIC, no sine table; "
           f"ELF/BIN match ({len(image)} B), SHA256 {hashlib.sha256(image).hexdigest()}")

@@ -1,6 +1,12 @@
 # 2804 / 4015 电机参数切换（UI-R24-MOTOR）
 
-当前 **UI-R53-SAMPLE** 保留两套型号和双有感控制，Single M1 的 HSO 改为独立无感启动。逐路设置以 [Dual_motor_control.md](Dual_motor_control.md) 为准，无感步骤见 [HSO_sensorless_startup.md](HSO_sensorless_startup.md)。本页下文保留 R24 历史说明。
+**UI-R71-ESC** 将 2804／4015 预设的六步启动信号资格与 ESC Auto 统一，保留各预设的电流、额定电压和机械 Speed 控制；详见 [R71 启动资格](Six_step_capture_R71.md)。编码器 FOC／HSO 的参数未改。
+
+2026-10-25 **UI-R70-ESC**：Motor 菜单新增 `ESC Auto`，仅在 Single M1 六步模式下可用。它使用不依赖 Rs／Ls／极对数的电流辅助启动和油门 0～100%，显示电气 Hz；不适用于编码器 FOC、HSO 或双机。底层保存的 2804／4015 预设保留，明确选择任一预设即可退出 ESC Auto，恢复原机械 Speed 模式。通用选择可掉电保存，不自动启动，电流及采样范围有限；详细操作和验证见 [R70 通用六步](Six_step_ESC_R70.md)。下文 R24 参数及历史限制不用于 ESC Auto。
+
+2026-10-25 **UI-R68-6STEP**：Single M1 选择六步／独立 HSO 时，型号切换使用电气静止准入，不要求编码器健康；先停机并等待至少 200 ms 的连续有效静止采样，再在 Settings → Motor 确认。修复此前 UI 无条件 Stop 清零静止资格而始终提示 `Stop/check encoder` 的问题；已空闲时保留资格，无感模式等待提示为 `Wait for stop`，成功为 `Motor set`。选型会清空目标、保持所选反馈方式并保存，不自动启动或要求编码器对齐。编码器模式的健康和停止检查保留，详见 [R68 说明](Six_step_sensorless.md)。以下是 R24 历史操作与参数，当前多轴范围以双机文档及源码为准。
+
+此前 **UI-R53-SAMPLE** 保留两套型号和双有感控制，Single M1 的 HSO 改为独立无感启动。逐路设置以 [Dual_motor_control.md](Dual_motor_control.md) 为准，无感步骤见 [HSO_sensorless_startup.md](HSO_sensorless_startup.md)。本页下文保留 R24 历史说明。
 
 本次选择作用于 **M1 驱动通道**。M2 仍只有采样与可选编码器诊断，不会因选择 4015 而使能第二路功率输出。
 

@@ -124,6 +124,7 @@ bool W25Q_WaitBusy(uint32_t timeout_ms)
 
 bool W25Q_Init(void)
 {
+    s_failure=0U; /* This probe must not inherit an earlier transfer failure. */
     s_jedec_id = W25Q_ReadID();
     /* W25Q 系列厂商 ID = 0xEF；容量缺省按 W25Q64 使用 */
     s_present = ((s_jedec_id >> 16) == 0xEFU);

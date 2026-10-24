@@ -37,10 +37,13 @@ float MotorControl_SpeedReference(MotorAxis axis,float previous,float target);
 float MotorControl_VelocityControl(MotorAxis axis, PIDController *velocity,
                                   float reference, float measured);
 bool MotorControl_HsoAllowed(void);
+bool MotorControl_SixStepAllowed(void);
+bool MotorControl_SelectSixStep(bool enable);
 bool MotorControl_MotionAllowed(MotorAxis axis);
 bool MotorControl_SelectWork(MotorWorkMode mode);
 bool MotorControl_SelectFeedback(bool hso);
 bool MotorControl_SelectProfile(MotorAxis axis, MotorProfile profile);
+bool MotorControl_SelectGeneric(void);
 bool MotorControl_SetGear(int32_t ratio_x100, int32_t offset_x100);
 bool MotorControl_RequestAlign(MotorAxis axis);
 bool MotorControl_Command(MotorAxis axis, JerryFOC_ControlMode mode, float target,

@@ -8,8 +8,9 @@
 #include "motor_sampling.h"
 #include "st_hso.h"
 #include "protocol.h"
-#include "arm_math.h"
+#include "motor_math.h"
 #include "motor_control.h"
+#include "motor_sixstep.h"
 
 /* 定义放入 RAM 执行的宏（链接脚本已把 .RamFunc 放进 .data） */
 #ifndef __RAM_FUNC
@@ -111,6 +112,7 @@ const char *JerryFOC_getHSOFaultText(void)
 uint8_t JerryFOC_isHSOReturning(void) { return 0U; }
 const char *JerryFOC_getFeedbackText(void)
 {
+    if (MotorControl_SixStepAllowed()) return "6STEP";
     if (hso_feedback_fault) return "HSO STOPPED";
     if (MotorControl_HsoAllowed()) return hso_feedback ?
         (StHso_IsStarting() ? "HSO START" : "HSO") : "HSO READY";
@@ -190,7 +192,7 @@ PIDController iq_loop_M0 = {
 };
 
 /* ================= 工具函数 ================= */
-uint8_t JerryFOC_needsAlignment(void) { return !MotorControl_HsoAllowed() && motor_alignment_pending; }
+uint8_t JerryFOC_needsAlignment(void) { return !MotorControl_SixStepAllowed() && !MotorControl_HsoAllowed() && motor_alignment_pending; }
 void JerryFOC_requestAlignment(void)
 {
     JerryFOC_stop();
@@ -206,7 +208,7 @@ uint8_t JerryFOC_selectMotor(MotorProfile profile)
     __disable_irq();
     /* Read the source directly, before reinitializing its velocity to zero.
      * A disconnected encoder cannot certify that the rotor has stopped. */
-    if (!MotorControl_HsoAllowed() && angle_source && (!foc_fast_loop_enabled || !MT6701_IsHealthy() ||
+    if (!MotorControl_HsoAllowed() && !MotorControl_SixStepAllowed() && angle_source && (!foc_fast_loop_enabled || !MT6701_IsHealthy() ||
         !isfinite(angle_source->getVelocity()) || fabsf(angle_source->getVelocity()) > 1.0f)) {
         __set_PRIMASK(mask);
         return 0U;
@@ -326,7 +328,7 @@ __RAM_FUNC void JerryFOC_setAxisVoltage(MotorAxis axis, float Uq, float Ud, floa
     /* d/q 电压矢量限幅，保留 5% 裕量给死区和母线波动。 */
     /* Measured VBUS sets duty scaling. Retain the configured motor voltage
      * ceiling when a 12 V motor is operated from a higher supply. */
-    float voltage_limit = fminf(bus_voltage, motor->bus_voltage) *
+    float voltage_limit = (axis==MOTOR_AXIS_1 && SixStep_IsGeneric() ? bus_voltage : fminf(bus_voltage, motor->bus_voltage)) *
                           0.548482756f; /* 0.95/sqrt(3) */
     float voltage_sq = Uq * Uq + Ud * Ud;
     float voltage_limit_sq = voltage_limit * voltage_limit;
@@ -336,8 +338,8 @@ __RAM_FUNC void JerryFOC_setAxisVoltage(MotorAxis axis, float Uq, float Ud, floa
         Ud *= scale;
     }
 
-    float sin_angle = arm_sin_f32(angle_el);
-    float cos_angle = arm_cos_f32(angle_el);
+    float sin_angle,cos_angle;
+    MotorMath_SinCos(angle_el,&sin_angle,&cos_angle);
 
     /* 逆 Park 变换 */
     float Ualpha = -Uq * sin_angle + Ud * cos_angle;
@@ -398,7 +400,7 @@ __RAM_FUNC void JerryFOC_setPhaseVoltage(float Uq, float Ud, float angle_el)
 /* ================= 传感器标定 ================= */
 void JerryFOC_alignStart(void)
 {
-    if (MotorSampling_IsGlobalStopped() || MotorControl_HsoAllowed()) return;
+    if (MotorSampling_IsGlobalStopped() || MotorControl_HsoAllowed() || MotorControl_SixStepAllowed()) return;
     if (hso_feedback || hso_feedback_fault) (void)JerryFOC_useHSO(0U);
     if (!JerryFOC_isDriveReady()) return;
     if (!MotorSampling_SetOutputEnabled(true)) return;
@@ -488,6 +490,7 @@ uint8_t JerryFOC_startOutput(void)
 {
     uint32_t mask = __get_PRIMASK();
     __disable_irq();
+    if (MotorControl_SixStepAllowed()) { __set_PRIMASK(mask); return 0U; }
     if (!MotorSampling_ResumeGlobalStop()) { __set_PRIMASK(mask); return 0U; }
     /* Do not reconnect a neutral voltage vector to a fast coasting rotor.
      * This is a fresh-start gate, not a change to running Speed:0 ramps. */
@@ -688,8 +691,8 @@ __RAM_FUNC void JerryFOC_Clarke(float Ia, float Ib, float* Ialpha, float* Ibeta)
 
 __RAM_FUNC void JerryFOC_Park(float Ialpha, float Ibeta, float angle_el, float *Id, float *Iq)
 {
-    float ct = arm_cos_f32(angle_el);
-    float st = arm_sin_f32(angle_el);
+    float ct,st;
+    MotorMath_SinCos(angle_el,&st,&ct);
     *Id = Ialpha * ct + Ibeta * st;
     *Iq = Ibeta * ct - Ialpha * st;
 }
@@ -697,6 +700,7 @@ __RAM_FUNC void JerryFOC_Park(float Ialpha, float Ibeta, float angle_el, float *
 /* ================= 10 kHz 快速环 ================= */
 __RAM_FUNC void JerryFOC_run(void)
 {
+    if (MotorControl_SixStepAllowed()) return;
     const float Ts_curr = 0.0001f;
     service_hso_feedback();
     if (!MotorSampling_IsOutputRequested()) {
@@ -877,7 +881,7 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 
     MotorControl_PrepareOuter();
 
-    if (!MotorSampling_IsOutputRequested() ||
+    if (MotorControl_SixStepAllowed() || !MotorSampling_IsOutputRequested() ||
         (!g_openloop_debug && (!control_ready || hso_stop_inhibit))) {
         /* 编码器异常时清空外环状态，防止恢复后误差一次性施加到电机。 */
         JerryFOC_Target_Iq = 0.0f;

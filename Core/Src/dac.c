@@ -21,6 +21,8 @@
 #include "dac.h"
 
 /* USER CODE BEGIN 0 */
+/* Keep the real hardware hook visible with HAL LTO, including Release. */
+void HAL_DAC_MspInit(DAC_HandleTypeDef *dacHandle) __attribute__((noinline,externally_visible));
 
 /* USER CODE END 0 */
 

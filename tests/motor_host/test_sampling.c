@@ -12,6 +12,13 @@
 ADC_TypeDef adc1, adc2;
 ADC_HandleTypeDef hadc1 = {.Instance=ADC1}, hadc2 = {.Instance=ADC2};
 TIM_TypeDef tim1, tim8, tim6;
+TIM_TypeDef tim7;
+HostDwt host_dwt;
+static unsigned six_timer_irqs;
+void SixStep_OnTimer(void) { ++six_timer_irqs; }
+static bool generic;
+bool SixStep_IsGeneric(void) { return generic; }
+void TIM7_IRQHandler(void);
 TIM_HandleTypeDef htim1 = {&tim1}, htim8 = {&tim8}, htim6 = {&tim6};
 uint32_t host_primask;
 GPIO_TypeDef gpio_key={.pins=KEY1_Pin};
@@ -164,7 +171,9 @@ static bool capture_with_bus(void) {
     bool ok=MotorSampling_Capture();
     if (tim6.EGR & TIM_EVENTSOURCE_UPDATE) {
         assert(!(tim6.CR1 & TIM_CR1_CEN));
-        assert(!(tim1.CR1 & TIM_CR1_DIR) && tim1.CNT<=tim1.ARR/2);
+        bool peak=tim1.CCR4>tim1.ARR/2;
+        assert(peak==((tim1.CR1 & TIM_CR1_DIR)!=0));
+        assert(peak ? tim1.CNT>=tim1.ARR/2 : tim1.CNT<=tim1.ARR/2);
         tim6.EGR=0; /* Hardware self-clears UG and emits TRGO. */
         ++bus_triggers;
         if(model_bus_trigger && publish_enabled) {
@@ -230,7 +239,9 @@ static void clocked_ms(unsigned ms) {
     for(unsigned m=0;m<ms;++m) {
         ++tick;
         for(unsigned n=0;n<10;++n) {
-            tim1.CNT=680; /* ~4 us after the PWM1 CH4 rising trigger. */
+            bool peak=tim1.CCR4>tim1.ARR/2U;
+            if(peak) tim1.CR1|=TIM_CR1_DIR; else tim1.CR1&=~TIM_CR1_DIR;
+            tim1.CNT=peak ? tim1.ARR-680U : 680U;
             frame(0); assert(MotorSampling_Capture());
         }
         MotorSampling_Service();
@@ -517,7 +528,97 @@ static int check_global_stop(bool wrap) {
     puts("PASS: KEY1 real sampling latch: pre-init/held boot, both bridges immediate coast, release bounce/30ms/wrap, pending cleanup and EXTI, GPIO fallback, preload/MOE race, live ADC, stop/start retention, independent IBUS latch");
     return 0;
 }
+static int check_six_outputs(void) {
+    reset(); assert(MotorSampling_Start()); sample_ms(301,1354);
+    assert(!MotorSampling_SelectSixStep(true)); /* Running cannot reconfigure. */
+    assert(MotorSampling_SetOutputEnabled(false) && MotorSampling_SelectSixStep(true));
+      assert(MotorSampling_SixStepPattern(6,0.5f));
+      assert((tim1.CCMR1 & TIM_CCMR1_OC1M)==TIM_OCMODE_PWM1);
+      assert(((tim1.CCMR1 & TIM_CCMR1_OC2M)>>8)==TIM_OCMODE_PWM1);
+      assert((tim1.CCMR2 & TIM_CCMR2_OC3M)==TIM_OCMODE_PWM1);
+      assert(!MotorSampling_SixStepPattern(7,0.5f));
+      assert(!MotorSampling_SixStepPattern(6,NAN));
+      assert(MotorSampling_SetOutputEnabled(true)); sample_ms(1,1354);
+      assert((tim1.CCER & 0x555U)==0x555U);
+      assert(MotorSampling_SetOutputEnabled(false));
+      tim1.CCMR1|=TIM_CCMR1_OC1PE|TIM_CCMR1_OC2PE; tim1.CCMR2|=TIM_CCMR2_OC3PE;
+      tim1.CCR1=5000; tim1.CCR2=6000; tim1.CCR3=7000;
+    assert(MotorSampling_SixStepPattern(0,0.25f));
+      assert(tim1.CCR1==2124 && tim1.CCR2==2124 && tim1.CCR3==2124);
+      assert((tim1.CCMR1 & (TIM_CCMR1_OC1PE|TIM_CCMR1_OC2PE))==(TIM_CCMR1_OC1PE|TIM_CCMR1_OC2PE));
+      assert(tim1.CCMR2 & TIM_CCMR2_OC3PE);
+    assert(!(tim1.CCER & 0x555U) && MotorSampling_SetOutputEnabled(true));
+    sample_ms(1,1354); assert(MotorSampling_IsOutputEnabled());
+    const unsigned hs[]={0,0,1,1,2,2},ls[]={1,2,2,0,0,1};
+    for(unsigned sector=0;sector<6;++sector) {
+        host_dwt.CYCCNT+=17000; assert(MotorSampling_SixStepPattern((uint8_t)sector,0.25f));
+        unsigned modes[]={tim1.CCMR1 & TIM_CCMR1_OC1M,(tim1.CCMR1 & TIM_CCMR1_OC2M)>>8,tim1.CCMR2 & TIM_CCMR2_OC3M};
+        for(unsigned p=0;p<3;++p) {
+            assert(tim1.CCER & (TIM_CCER_CC1E<<(4*p)));
+            assert(modes[p]==(p==hs[sector] ? TIM_OCMODE_PWM1 : TIM_OCMODE_FORCED_INACTIVE));
+            assert(!!(tim1.CCER & (TIM_CCER_CC1NE<<(4*p)))==(p==ls[sector] || p==hs[sector]));
+        }
+        assert((tim1.CCER & TIM_CCER_CC4E) && MotorSampling_IsOutputEnabled());
+        tim1.CNT=680; host_dwt.CYCCNT+=17000; frame(0); assert(MotorSampling_Capture());
+        assert(MotorSampling_GetFrame()->m1_sixstep_valid);
+        assert(MotorSampling_GetFrame()->m1_sixstep_stamp==host_dwt.CYCCNT-680U+530U);
+    }
+      assert(MotorSampling_SixStepPattern(2,0.17f) && tim1.CCR4==8498U);
+      host_dwt.CYCCNT+=17000; tim1.CR1|=TIM_CR1_DIR; tim1.CNT=8499-680;
+      frame(0); assert(MotorSampling_Capture());
+      assert(MotorSampling_GetFrame()->m1_sixstep_off && MotorSampling_GetFrame()->m1_sixstep_valid);
+      assert(MotorSampling_GetFrame()->m1_sixstep_stamp==host_dwt.CYCCNT-680U+530U);
+      tim1.CR1&=~TIM_CR1_DIR; tim1.CNT=680;
+      frame(0); assert(MotorSampling_Capture() && !MotorSampling_GetFrame()->m1_sixstep_valid);
+      assert(MotorSampling_SixStepPattern(2,0.27f) && tim1.CCR4==8498U);
+      /* Actual regular trigger stays continuous and safe after the peak.
+       * Preserve TIM1/TIM8 clocks and the 2kHz VBUS/VREF schedule. */
+      model_bus_trigger=true; model_bus_raw=1354;
+      unsigned bus_before=bus_triggers;
+      clocked_ms(250);
+      assert(bus_triggers==bus_before+500 && diagnostics().reference_fresh && diagnostics().bus_fresh);
+      assert(MotorSampling_IsReady() && (tim8.CR1 & TIM_CR1_CEN));
+      bus_before=bus_triggers;
+      for(unsigned i=0;i<5;++i) {
+          tim1.CR1|=TIM_CR1_DIR; tim1.CNT=680; /* Late in OFF half-cycle. */
+          frame(0); assert(MotorSampling_Capture());
+      }
+      assert(bus_triggers==bus_before);
+      assert(MotorSampling_SetOutputEnabled(false));
+      clocked_ms(20);
+      assert(bus_triggers==bus_before+40 && diagnostics().bus_fresh && diagnostics().reference_fresh);
+      assert(MotorSampling_SetOutputEnabled(true)); clocked_ms(1);
+      assert(MotorSampling_SixStepPattern(2,0.30f) && tim1.CCR4==1U);
+      clocked_ms(1);
+      assert(MotorSampling_GetFrame()->m1_sixstep_valid && !MotorSampling_GetFrame()->m1_sixstep_off);
+      model_bus_trigger=false;
+    assert(MotorSampling_SixStepTimer(500));
+    assert(tim7.PSC==169 && tim7.ARR==499 && (tim7.CR1 & TIM_CR1_CEN));
+    assert(MotorSampling_SixStepTimer(111111));
+    assert(tim7.PSC==679 && tim7.ARR==27777);
+    assert(MotorSampling_SixStepTimer(500) && tim7.PSC==169 && tim7.ARR==499);
+    tim7.SR=TIM_SR_UIF; TIM7_IRQHandler(); assert(six_timer_irqs==1 && !tim7.DIER);
+    assert(MotorSampling_SixStepTimer(500));
+    gpio_key.pins&=~KEY1_Pin; key_irq();
+    assert(!tim7.DIER && !(tim7.CR1 & TIM_CR1_CEN) && !(tim1.CCER & 0x555U));
+    assert(!MotorSampling_SixStepPattern(1,0.25f));
+    key_acknowledge();
+    assert(MotorSampling_SixStepPattern(1,0.25f));
+    assert(MotorSampling_SetOutputEnabled(true)); sample_ms(1,1354);
+    assert(MotorSampling_SixStepTimer(500));
+    pulse_ibus(); HAL_TIMEx_BreakCallback(&htim1);
+    assert(!tim7.DIER && !(tim7.CR1 & TIM_CR1_CEN) && !(tim1.CCER & 0x555U));
+    assert(MotorSampling_SelectSixStep(false));
+      assert(tim1.CCR4==1U);
+    assert((tim1.CCMR1 & TIM_CCMR1_OC1M)==TIM_OCMODE_PWM1);
+    assert(((tim1.CCMR1 & TIM_CCMR1_OC2M)>>8)==TIM_OCMODE_PWM1);
+    assert((tim1.CCMR2 & TIM_CCMR2_OC3M)==TIM_OCMODE_PWM1);
+    assert(MotorSampling_IsIbusTripped());
+    puts("PASS: actual TIM1 six-step gate masks/modes, driven-low floating pair, two-frame arm, OFF/ON rank timestamp/window and 2kHz bus/reference including stopped output/late ISR, spare TIM7 dispatch, KEY1/IBUS immediate shutdown and full PWM1 restoration");
+    return 0;
+}
 int main(int argc,char **argv) {
+    if(argc>1 && !strcmp(argv[1],"six-outputs")) return check_six_outputs();
     if(argc>1 && !strncmp(argv[1],"global",6)) return check_global_stop(!strcmp(argv[1],"global-wrap"));
     if(argc>1) return check_ibus(argv[1]);
     check_reference_estimation();
@@ -733,6 +834,12 @@ int main(int argc,char **argv) {
     /* The selected profile, rather than the old global 2804 constants,
      * controls every phase and both overload/instantaneous protections. */
     MotorParams_Select(MOTOR_PROFILE_4015);
+    /* Generic ESC protection is independent of the selected motor table. */
+    reset(); generic=true; assert(MotorSampling_Start()); sample_ms(300,1354);
+    frame(0); adc1.JDR1=2000+(uint32_t)(2.0f/gain)+1;
+    assert(MotorSampling_Capture()); off();
+    assert(diagnostics().fault==MOTOR_SAMPLE_FAULT_OVERCURRENT);
+    generic=false;
     for(unsigned phase=0;phase<3;++phase) for(int sign=-1;sign<=1;sign+=2) {
         reset(); assert(MotorSampling_Start()); sample_ms(300,1354);
         const int offsets[3]={2000,2050,2100};

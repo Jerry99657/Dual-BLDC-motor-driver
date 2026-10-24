@@ -14,6 +14,9 @@ typedef struct {
     float m2_current[2];
     float m1_voltage[3];
     uint32_t sequence;
+    uint32_t m1_sixstep_stamp;
+    bool m1_sixstep_valid;
+    bool m1_sixstep_off; /* OFF-center sampling: all driven phases LOW. */
     bool m1_voltage_high_plateau; /* All M1 high sides stayed on across voltage ranks; sampled before arming. */
 } MotorSampleFrame;
 
@@ -109,5 +112,12 @@ void MotorSampling_GlobalStopIRQ(void);
 bool MotorSampling_IsGlobalStopped(void);
 bool MotorSampling_TakeGlobalStop(void);
 bool MotorSampling_ResumeGlobalStop(void);
+/* M1 six-step owns only its output mode and spare TIM7. Mode changes require
+ * stopped outputs; the shared ADC/PWM clocks and M2 stay unchanged. */
+bool MotorSampling_SelectSixStep(bool enable);
+/* 0..5: two-phase conduction, third floating. 6: all three complementary
+ * PWM1 pairs for encoder-free sine startup; caller sets individual CCRs. */
+bool MotorSampling_SixStepPattern(uint8_t sector,float duty);
+bool MotorSampling_SixStepTimer(uint32_t microseconds);
 
 #endif

@@ -193,6 +193,7 @@ static bool apply_configuration(char *s)
     } else if (!strncmp(s,"Feedback:",9)) {
         if (!strcmp(s+9,"Encoder")) return MotorControl_SelectFeedback(false);
         if (!strcmp(s+9,"HSO")) return MotorControl_SelectFeedback(true);
+        if (!strcmp(s+9,"SixStep")) return MotorControl_SelectSixStep(true);
     } else if (!strncmp(s,"Gear:",5)) {
         float v[2];
         if (parse_hso_values(s+5,v,2) && fabsf(v[0])>=0.01f && fabsf(v[0])<=10.0f && fabsf(v[1])<=62.83f)
@@ -258,9 +259,12 @@ void Protocol_HandleLine(char *line)
     bool speed_cmd = strncmp(line, "Speed:", 6) == 0;
     bool angle_cmd = strncmp(line, "Angle:", 6) == 0;
     bool torque_cmd = strncmp(line, "Torque:", 7) == 0;
+    bool throttle_cmd = strncmp(line, "Throttle:", 9) == 0;
     bool open_cmd = strncmp(line, "OpenLoop:", 9) == 0;
-    if ((speed_cmd || angle_cmd || torque_cmd) &&
-        !parse_hso_values(line + (torque_cmd ? 7 : 6), command_values, 1U)) { control_result=-2; return; }
+    if ((speed_cmd || angle_cmd || torque_cmd || throttle_cmd) &&
+        !parse_hso_values(line + (throttle_cmd ? 9 : torque_cmd ? 7 : 6), command_values, 1U)) { control_result=-2; return; }
+    if ((throttle_cmd && (axis!=MOTOR_AXIS_1 || !MotorControl_SixStepAllowed())) ||
+        (torque_cmd && MotorControl_SixStepAllowed())) { control_result=-1; return; }
     if (open_cmd && !parse_hso_values(line + 9, command_values,
                                      strchr(line + 9, ',') ? 2U : 1U)) { control_result=-2; return; }
     uint32_t primask = __get_PRIMASK();
@@ -268,7 +272,7 @@ void Protocol_HandleLine(char *line)
 
     if (!strcmp(line,"Follow")) {
         control_result=MotorControl_StartFollow() ? 1 : -1;
-    } else if (speed_cmd || angle_cmd || torque_cmd) {
+    } else if (speed_cmd || angle_cmd || torque_cmd || throttle_cmd) {
         JerryFOC_ControlMode mode=speed_cmd ? JERRYFOC_MODE_VELOCITY :
                                   angle_cmd ? JERRYFOC_MODE_POSITION : JERRYFOC_MODE_TORQUE;
         uint32_t flags=axis==MOTOR_AXIS_1 ? AppStorage_Get()->flags : AppStorage_Get()->axis2_flags;
@@ -279,7 +283,7 @@ void Protocol_HandleLine(char *line)
         }
         control_result=MotorControl_Command(axis,mode,value,0,(flags & APP_FLAG_CURRENT_LOOP)!=0U) ? 1 : -1;
     } else if (strncmp(line, "OpenLoop:", 9) == 0) {
-        if (MotorControl_GetWork()!=MOTOR_WORK_SINGLE_M1 || MotorControl_HsoAllowed() || axis!=MOTOR_AXIS_1 ||
+        if (MotorControl_GetWork()!=MOTOR_WORK_SINGLE_M1 || MotorControl_HsoAllowed() || MotorControl_SixStepAllowed() || axis!=MOTOR_AXIS_1 ||
             !JerryFOC_isDriveReady() || !MotorSampling_ResumeGlobalStop()) {
             control_result=-1; __set_PRIMASK(primask); return;
         }

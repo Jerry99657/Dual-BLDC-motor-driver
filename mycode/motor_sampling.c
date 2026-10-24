@@ -7,6 +7,7 @@
 #include "dac.h"
 #include "app_storage.h"
 #include "motor_params.h"
+#include "motor_sixstep.h"
 #include <math.h>
 
 #define OFFSET_SAMPLES 2000U
@@ -70,12 +71,111 @@ static uint32_t s_ibus_reference_updates,s_ibus_low_at,s_ibus_changed_at;
 static bool s_ibus_low_tracking;
 static volatile bool s_global_stopped,s_global_stop_pending,s_key_releasing;
 static uint32_t s_key_released_at;
+static bool s_sixstep,s_six_timer,s_six_off;
+static uint8_t s_six_sector=255U;
+static uint32_t s_m1_channels=PHASE_CHANNELS,s_six_commuted;
+
+bool MotorSampling_SixStepTimer(uint32_t us)
+{
+    if (!s_six_timer) {
+        if (!us) return true;
+        if (!s_sixstep) return false;
+        __HAL_RCC_TIM7_CLK_ENABLE();
+        TIM7->CR1=TIM_CR1_OPM|TIM_CR1_URS;
+        TIM7->PSC=169U; /* APB1 timer clock stays 170MHz; 1us ticks. */
+        HAL_NVIC_SetPriority(TIM7_IRQn,0U,0U);
+        HAL_NVIC_ClearPendingIRQ(TIM7_IRQn);
+        HAL_NVIC_EnableIRQ(TIM7_IRQn);
+        s_six_timer=true;
+    }
+    TIM7->CR1&=~TIM_CR1_CEN;
+    TIM7->DIER=0U; TIM7->SR=0U;
+    if (!us) return true;
+    if (us>260000U || !s_sixstep || !s_requested[0] || MotorSampling_IsGlobalStopped()) return false;
+    /* Slow rev-up needs >65ms steps; retain 1us resolution once faster. */
+    uint32_t scale=us>65000U ? 4U : 1U;
+    TIM7->PSC=170U*scale-1U;
+    TIM7->ARR=(us+scale-1U)/scale-1U; TIM7->CNT=0U; TIM7->EGR=TIM_EGR_UG;
+    TIM7->SR=0U; TIM7->DIER=TIM_DIER_UIE; TIM7->CR1|=TIM_CR1_CEN;
+    return true;
+}
+void TIM7_IRQHandler(void)
+{
+    if (!(TIM7->SR & TIM_SR_UIF)) return;
+    TIM7->SR=0U; TIM7->DIER=0U;
+    SixStep_OnTimer();
+}
+bool MotorSampling_SelectSixStep(bool enable)
+{
+    uint32_t mask=__get_PRIMASK(); __disable_irq();
+    bool ok=!s_requested[0] && !(htim1.Instance->CCER & PHASE_CHANNELS);
+    if (ok) {
+        (void)MotorSampling_SixStepTimer(0U);
+        s_sixstep=enable; s_six_sector=255U;
+        s_six_off=false; htim1.Instance->CCR4=1U;
+        s_m1_channels=PHASE_CHANNELS;
+        MODIFY_REG(htim1.Instance->CCMR1,TIM_CCMR1_OC1M|TIM_CCMR1_OC2M,
+                   TIM_OCMODE_PWM1|(TIM_OCMODE_PWM1<<8U));
+        MODIFY_REG(htim1.Instance->CCMR2,TIM_CCMR2_OC3M,TIM_OCMODE_PWM1);
+    }
+    __set_PRIMASK(mask); return ok;
+}
+bool MotorSampling_SixStepPattern(uint8_t sector,float duty)
+{
+    if (!s_sixstep || sector>6U || !isfinite(duty) || duty<0.0f || duty>0.85f) return false;
+    static const uint8_t hs[]={0,0,1,1,2,2},ls[]={1,2,2,0,0,1};
+    uint32_t mask=__get_PRIMASK(); __disable_irq();
+    if (MotorSampling_IsGlobalStopped() || !MotorSampling_IsReady()) { __set_PRIMASK(mask); return false; }
+    bool armed=s_requested[0] && !s_arm_frames[0] && (htim1.Instance->CCER & PHASE_CHANNELS);
+    /* At low duty the OFF plateau is wider and farther from its PWM edge.
+     * CH4 remains PWM1: CCR4=ARR-1 gives its rising edge just after the peak;
+     * CCR4=1 gives it near the valley. Hysteresis prevents mode chatter.
+     * Sine/FOC/HSO retain their original valley trigger. */
+    s_six_off=sector<6U && (duty<0.25f || (s_six_off && duty<0.30f));
+    htim1.Instance->CCR4=s_six_off ? htim1.Instance->ARR-1U : 1U;
+    uint32_t compare=(uint32_t)(duty*(float)htim1.Instance->ARR);
+    htim1.Instance->CCR1=htim1.Instance->CCR2=htim1.Instance->CCR3=compare;
+    if (sector!=s_six_sector) {
+        /* Disconnect before changing modes; no CCPC shadow can delay trips.
+         * OSSR=1 keeps disabled N output inactive while its main E is set:
+         * float = forced inactive + E only => both HIN/LIN driven LOW. */
+        CLEAR_BIT(htim1.Instance->CCER,PHASE_CHANNELS);
+        if(s_six_sector==6U) {
+            /* Sine CCRs were unequal and near 50%. Do not energize a newly
+             * selected high side with that old width until the next UEV.
+             * Load equal six-step compares immediately while disconnected;
+             * restore preload without UG/resetting the shared ADC timebase. */
+            uint32_t pe1=htim1.Instance->CCMR1 & (TIM_CCMR1_OC1PE|TIM_CCMR1_OC2PE);
+            uint32_t pe2=htim1.Instance->CCMR2 & TIM_CCMR2_OC3PE;
+            CLEAR_BIT(htim1.Instance->CCMR1,TIM_CCMR1_OC1PE|TIM_CCMR1_OC2PE);
+            CLEAR_BIT(htim1.Instance->CCMR2,TIM_CCMR2_OC3PE);
+            htim1.Instance->CCR1=htim1.Instance->CCR2=htim1.Instance->CCR3=compare;
+            SET_BIT(htim1.Instance->CCMR1,pe1); SET_BIT(htim1.Instance->CCMR2,pe2);
+        }
+        unsigned h=sector<6U ? hs[sector] : 3U;
+        MODIFY_REG(htim1.Instance->CCMR1,TIM_CCMR1_OC1M|TIM_CCMR1_OC2M,
+            (h==0U || h==3U ? TIM_OCMODE_PWM1 : TIM_OCMODE_FORCED_INACTIVE) |
+            ((h==1U || h==3U ? TIM_OCMODE_PWM1 : TIM_OCMODE_FORCED_INACTIVE)<<8U));
+        MODIFY_REG(htim1.Instance->CCMR2,TIM_CCMR2_OC3M,
+            h==2U || h==3U ? TIM_OCMODE_PWM1 : TIM_OCMODE_FORCED_INACTIVE);
+        /* PWM-phase low side conducts during OFF time, with TIM1 deadtime.
+         * This gives deterministic bootstrap refresh/freewheel instead of
+         * relying on its body diode. The FLOAT phase still has both gates off. */
+        s_m1_channels=h==3U ? PHASE_CHANNELS : TIM_CCER_CC1E|TIM_CCER_CC2E|TIM_CCER_CC3E|
+                       (TIM_CCER_CC1NE<<(4U*ls[sector]))|(TIM_CCER_CC1NE<<(4U*h));
+        s_six_sector=sector; s_six_commuted=DWT->CYCCNT;
+        if (armed && !MotorSampling_IsGlobalStopped() && MotorSampling_IsReady() && s_requested[0])
+            SET_BIT(htim1.Instance->CCER,s_m1_channels);
+    }
+    __set_PRIMASK(mask); return true;
+}
 
 void MotorSampling_GlobalStopIRQ(void)
 {
     uint32_t mask=__get_PRIMASK(); __disable_irq();
     s_global_stopped=s_global_stop_pending=true;
     s_key_releasing=false;
+    (void)MotorSampling_SixStepTimer(0U);
     /* EXTI is enabled before MX_TIMx_Init: handles can still be NULL. Keep
      * counters/CH4 alive once initialized, so ADC/diagnostics keep running. */
     TIM_HandleTypeDef *timers[]={&htim1,&htim8};
@@ -146,6 +246,7 @@ static void ibus_latch(void)
     s_requested[0]=false; s_arm_frames[0]=0;
     if (!s_ibus_latched) { ++s_ibus_trips; s_ibus_low_tracking=false; }
     s_ibus_latched=true;
+    (void)MotorSampling_SixStepTimer(0U);
     if (s_axis_fault[0]==MOTOR_SAMPLE_FAULT_NONE) s_axis_fault[0]=MOTOR_SAMPLE_FAULT_IBUS;
     __set_PRIMASK(mask);
 }
@@ -233,14 +334,18 @@ static void trigger_bus_after_injected(void)
     /* ES0431 2.5.10: a regular conversion interrupted by an injected trigger
      * can make the first injected result (M1 IU) zero on affected silicon.
      * TIM6 never free-runs. Issue its UPDATE/TRGO only after both injected
-     * sequences finish, every fifth frame. With the current PWM1 CH4=1
-     * rising edge near CNT=0, the first half of up-counting leaves >75 us
-     * before the next injected trigger (VBUS + VREFINT take ~16.78 us).
+     * sequences finish, every fifth frame. Accept only the first 25us after
+     * the selected PWM center: valley/up for ON, peak/down for six-step OFF.
+     * Steady operation leaves >75us; a center change can shorten the next
+     * injected interval to 50us, still leaving >25us for the ~16.78us regular
+     * sequence. A requested/active-center mismatch skips this regular scan.
      * Skip a late ISR rather than start a conversion near the next trigger.
      * This also runs during calibration, at 0 V and after a latched trip. */
     uint32_t direction = htim1.Instance->CR1 & TIM_CR1_DIR;
     uint32_t counter = htim1.Instance->CNT;
-    if (direction == 0U && counter <= htim1.Instance->ARR / 2U)
+    bool off=s_sixstep && s_six_off;
+    if ((off && direction && counter>=htim1.Instance->ARR/2U) ||
+        (!off && !direction && counter<=htim1.Instance->ARR/2U))
         htim6.Instance->EGR = TIM_EVENTSOURCE_UPDATE;
 }
 
@@ -377,7 +482,7 @@ static void arm_axis(MotorAxis axis)
     __HAL_TIM_MOE_ENABLE(axis_timer(axis));
     if (axis==MOTOR_AXIS_1) ibus_poll();
     if (!MotorSampling_IsGlobalStopped() && s_requested[axis] && s_axis_fault[axis]==MOTOR_SAMPLE_FAULT_NONE)
-        SET_BIT(axis_timer(axis)->Instance->CCER,PHASE_CHANNELS);
+        SET_BIT(axis_timer(axis)->Instance->CCER,axis==MOTOR_AXIS_1 ? s_m1_channels : PHASE_CHANNELS);
 }
 
 bool MotorSampling_IsAxisReady(MotorAxis axis)
@@ -399,7 +504,7 @@ bool MotorSampling_IsOutputRequested(void) { return s_requested[0]; }
 bool MotorSampling_IsAxisOutputEnabled(MotorAxis axis)
 {
     return MotorSampling_IsAxisReady(axis) &&
-           (axis_timer(axis)->Instance->CCER & PHASE_CHANNELS) == PHASE_CHANNELS &&
+           (axis_timer(axis)->Instance->CCER & PHASE_CHANNELS) == (axis==MOTOR_AXIS_1 ? s_m1_channels : PHASE_CHANNELS) &&
            (axis_timer(axis)->Instance->BDTR & TIM_BDTR_MOE) != 0U;
 }
 bool MotorSampling_IsOutputEnabled(void) { return MotorSampling_IsAxisOutputEnabled(MOTOR_AXIS_1); }
@@ -411,6 +516,7 @@ bool MotorSampling_SetAxisOutputEnabled(MotorAxis axis, bool enable)
     __disable_irq();
     bool ok = true;
     if (!enable) {
+        if (axis==MOTOR_AXIS_1) (void)MotorSampling_SixStepTimer(0U);
         s_requested[axis] = false;
         s_arm_frames[axis] = 0U;
         CLEAR_BIT(axis_timer(axis)->Instance->CCER, PHASE_CHANNELS);
@@ -604,6 +710,7 @@ void HAL_ADC_ErrorCallback(ADC_HandleTypeDef *hadc)
 
 void MotorSampling_Stop(void)
 {
+    (void)MotorSampling_SixStepTimer(0U);
     s_running = false;
     s_power_enabled = false;
     __HAL_TIM_MOE_DISABLE_UNCONDITIONALLY(&htim1);
@@ -762,12 +869,24 @@ bool MotorSampling_Capture(void)
     (void)MotorSampling_IsGlobalStopped();
     ibus_poll();
     if (!s_running) return false;
+    uint32_t now_cycles=DWT->CYCCNT,counter=htim1.Instance->CNT;
+    bool off=s_sixstep && s_six_off;
+    bool down=(htim1.Instance->CR1 & TIM_CR1_DIR)!=0U;
+    uint32_t center_age=off ? htim1.Instance->ARR-counter : counter;
+    uint32_t width=off ? htim1.Instance->ARR-htim1.Instance->CCR1 : htim1.Instance->CCR1;
+    s_frame.m1_sixstep_off=off;
+    s_frame.m1_sixstep_valid=s_sixstep && s_requested[0] &&
+        (htim1.Instance->CCER & PHASE_CHANNELS)==s_m1_channels &&
+        (htim1.Instance->BDTR & TIM_BDTR_MOE) && down==off &&
+        center_age<htim1.Instance->ARR/2U && width>800U &&
+        now_cycles-s_six_commuted>center_age+850U;
+    s_frame.m1_sixstep_stamp=now_cycles-center_age+530U; /* Rank3 end, ~3.118us after sampled center. */
     /* Snapshot BEFORE this callback can arm outputs or FOC can update CCRs.
      * CH4=1 triggers near CNT=0; all three PWM1 high pulses must extend past
      * the last voltage acquisition (~3.12 us + trigger/deadtime margin).
      * 800 ticks at 170 MHz = 4.71 us. Never extrapolate across an edge/coast. */
     s_frame.m1_voltage_high_plateau =
-        (htim1.Instance->CCER & PHASE_CHANNELS)==PHASE_CHANNELS &&
+        !off && (htim1.Instance->CCER & PHASE_CHANNELS)==PHASE_CHANNELS &&
         (htim1.Instance->BDTR & TIM_BDTR_MOE)!=0U &&
         htim1.Instance->CCR1>800U && htim1.Instance->CCR2>800U && htim1.Instance->CCR3>800U;
     if (!frame_fresh()) trip(MOTOR_SAMPLE_FAULT_FRAME_TIMEOUT);
@@ -832,6 +951,7 @@ bool MotorSampling_Capture(void)
         for (unsigned a=0; a<MOTOR_AXIS_COUNT; ++a) {
             if (!s_monitored[a] || s_axis_fault[a] != MOTOR_SAMPLE_FAULT_NONE) continue;
             const MotorParams *motor = MotorParams_GetAxis((MotorAxis)a);
+            bool esc=a==0 && SixStep_IsGeneric();
             float iu = a == 0 ? s_frame.m1_current[0] : s_frame.m2_current[0];
             float iv = a == 0 ? s_frame.m1_current[1] : s_frame.m2_current[1];
             float iw = a == 0 ? s_frame.m1_current[2] : -(iu+iv);
@@ -840,13 +960,13 @@ bool MotorSampling_Capture(void)
                 uint16_t code = a == 0 ? raw[i] : (i<2 ? raw[i+3] : 2048U);
                 if (code<=10U || code>=4085U)
                     trip_axis((MotorAxis)a, MOTOR_SAMPLE_FAULT_CURRENT_RANGE, i+1U, false);
-                else if (fabsf(currents[i]) >= motor->max_current)
+                else if (fabsf(currents[i]) >= (esc ? 2.0f : motor->max_current))
                     trip_axis((MotorAxis)a, MOTOR_SAMPLE_FAULT_OVERCURRENT, i+1U, false);
             }
             float squared = (2.0f/3.0f)*(iu*iu+iv*iv+iw*iw);
-            float reference = motor->overload_current * motor->overload_current;
+            float reference = esc ? 0.64f : motor->overload_current * motor->overload_current;
             s_energy[a] = fmaxf(0.0f, s_energy[a]+squared-reference);
-            if (s_energy[a] >= reference * CURRENT_SAMPLE_HZ * motor->overload_budget_s)
+            if (s_energy[a] >= reference * CURRENT_SAMPLE_HZ * (esc ? 3.0f : motor->overload_budget_s))
                 trip_axis((MotorAxis)a, MOTOR_SAMPLE_FAULT_OVERLOAD, 0U, false);
         }
     }

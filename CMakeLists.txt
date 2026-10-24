@@ -46,10 +46,16 @@ target_compile_options(USB_Device_Library PRIVATE $<$<CONFIG:Debug>:-Os>)
 # calls too; retain motor/HSO functions within the real 128KiB Flash limit.
 target_compile_options(USB_Device_Library PRIVATE -flto)
 # Share peripheral helpers with the existing LTO encoder/Flash/serial code.
+# PCD/LL USB now share the USB core/glue too; retain all endpoint behavior.
 # Keep HAL startup and the HSO fast path at their existing settings.
 # Cold FDCAN/I2C/clock/power setup and DMA cleanup also share link-time code;
 # this retains encoder recovery and diagnostics within the real 128KiB Flash.
+# COMP/DAC init likewise shares its fixed-instance HAL paths. The linked
+# startup check verifies their real, explicitly retained MSP hooks.
 set_property(SOURCE Drivers/STM32G4xx_HAL_Driver/Src/stm32g4xx_hal_spi.c
+    Drivers/STM32G4xx_HAL_Driver/Src/stm32g4xx_hal_pcd.c
+    Drivers/STM32G4xx_HAL_Driver/Src/stm32g4xx_hal_pcd_ex.c
+    Drivers/STM32G4xx_HAL_Driver/Src/stm32g4xx_ll_usb.c
     Drivers/STM32G4xx_HAL_Driver/Src/stm32g4xx_hal_gpio.c
     Drivers/STM32G4xx_HAL_Driver/Src/stm32g4xx_hal_uart.c
     Drivers/STM32G4xx_HAL_Driver/Src/stm32g4xx_hal_uart_ex.c
@@ -60,6 +66,10 @@ set_property(SOURCE Drivers/STM32G4xx_HAL_Driver/Src/stm32g4xx_hal_spi.c
     Drivers/STM32G4xx_HAL_Driver/Src/stm32g4xx_hal_rcc.c
     Drivers/STM32G4xx_HAL_Driver/Src/stm32g4xx_hal_rcc_ex.c
     Drivers/STM32G4xx_HAL_Driver/Src/stm32g4xx_hal_pwr_ex.c
+    Drivers/STM32G4xx_HAL_Driver/Src/stm32g4xx_hal_comp.c
+    Drivers/STM32G4xx_HAL_Driver/Src/stm32g4xx_hal_dac.c
+    Drivers/STM32G4xx_HAL_Driver/Src/stm32g4xx_hal_dac_ex.c
+    Drivers/STM32G4xx_HAL_Driver/Src/stm32g4xx_hal_cortex.c
     TARGET_DIRECTORY STM32_Drivers APPEND PROPERTY COMPILE_OPTIONS -flto)
 # Share generated ADC/timer setup with its HAL helpers as well. Keep -Os, debug
 # symbols and every protection check; the storage recovery/diagnostics must
@@ -83,6 +93,9 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     mycode/motor_params.c
     mycode/motor_sampling.c
     mycode/motor_control.c
+    mycode/motor_sixstep.c
+    mycode/motor_math.c
+    mycode/compact_div64.c
     mycode/st_hso.c
     ThirdParty/ST_HSO/fixpmath.c
     mycode/ws2812.c
@@ -136,9 +149,17 @@ set(FOC_UI_SOURCES
 )
 set_source_files_properties(${FOC_UI_SOURCES}
     PROPERTIES COMPILE_OPTIONS "-Os;-flto")
+# Cold UI application code uses Oz to retain six-step diagnostics in 128KiB.
+# Existing control/HSO optimization levels and all UI content stay intact.
+set_source_files_properties(mycode/ui_app.c PROPERTIES COMPILE_OPTIONS "-Oz;-flto")
 # Share the two-axis/UI code at link time while retaining Debug symbols.
-target_link_options(${CMAKE_PROJECT_NAME} PRIVATE -flto=1 -flto-partition=one)
+# Size-optimize LTO's generated glue. The observer's hot entry explicitly
+# retains O2 so this does not silently switch its arithmetic to size mode.
+target_link_options(${CMAKE_PROJECT_NAME} PRIVATE -Os -flto=1 -flto-partition=one)
 set_source_files_properties(mycode/motor_params.c PROPERTIES COMPILE_OPTIONS "-Os;-flto")
+set_source_files_properties(mycode/motor_sixstep.c PROPERTIES COMPILE_OPTIONS "-Os;-flto")
+set_source_files_properties(mycode/motor_math.c PROPERTIES COMPILE_OPTIONS "-O2;-flto")
+set_source_files_properties(mycode/compact_div64.c PROPERTIES COMPILE_OPTIONS "-Os")
 set_source_files_properties(mycode/motor_control.c mycode/motor_sampling.c
     mycode/MT6701.c mycode/JerryFOC.c mycode/angle_src_encoder.c PROPERTIES COMPILE_OPTIONS "-Os;-flto")
 
@@ -146,6 +167,7 @@ set_source_files_properties(mycode/motor_control.c mycode/motor_sampling.c
 # Debug symbols remain available; optimized local variables may not be visible.
 set_source_files_properties(Core/Src/main.c PROPERTIES COMPILE_OPTIONS "-Os;-flto")
 set_source_files_properties(Core/Src/adc.c Core/Src/tim.c Core/Src/spi.c
+    Core/Src/comp.c Core/Src/dac.c
     Core/Src/gpio.c Core/Src/dma.c Core/Src/fdcan.c Core/Src/i2c.c
     Core/Src/usart.c Core/Src/stm32g4xx_hal_msp.c
     PROPERTIES COMPILE_OPTIONS "-Os;-flto")

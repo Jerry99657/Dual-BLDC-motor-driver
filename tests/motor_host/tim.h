@@ -1,10 +1,30 @@
 #ifndef MOTOR_HOST_TIM_H
 #define MOTOR_HOST_TIM_H
+#define TIM_CCMR1_OC1PE (1U<<3)
+#define TIM_CCMR1_OC2PE (1U<<11)
+#define TIM_CCMR2_OC3PE (1U<<3)
 #include "main.h"
-typedef struct { uint32_t CR1, CNT, CCR1, CCR2, CCR3, ARR, CCER, BDTR, EGR, SR, DIER; } TIM_TypeDef;
+typedef struct { uint32_t CR1, CNT, CCR1, CCR2, CCR3, ARR, CCER, BDTR, EGR, SR, DIER,PSC,CCMR1,CCMR2,CCR4; } TIM_TypeDef;
 typedef struct { TIM_TypeDef *Instance; } TIM_HandleTypeDef;
 extern TIM_TypeDef tim1, tim8, tim6;
 extern TIM_HandleTypeDef htim1, htim8, htim6;
+extern TIM_TypeDef tim7;
+#define TIM7 (&tim7)
+#define TIM7_IRQn 55
+#define __HAL_RCC_TIM7_CLK_ENABLE() ((void)0)
+static inline void HAL_NVIC_SetPriority(int n,unsigned p,unsigned s) { (void)n;(void)p;(void)s; }
+static inline void HAL_NVIC_ClearPendingIRQ(int n) { (void)n; }
+static inline void HAL_NVIC_EnableIRQ(int n) { (void)n; }
+#define TIM_CR1_OPM (1U<<3)
+#define TIM_CR1_URS (1U<<2)
+#define TIM_EGR_UG 1U
+#define TIM_DIER_UIE 1U
+#define TIM_SR_UIF 1U
+#define TIM_OCMODE_PWM1 0x60U
+#define TIM_OCMODE_FORCED_INACTIVE 0x40U
+#define TIM_CCMR1_OC1M 0x10070U
+#define TIM_CCMR1_OC2M 0x1007000U
+#define TIM_CCMR2_OC3M TIM_CCMR1_OC1M
 #define TIM2 ((TIM_TypeDef *)2)
 #define TIM_CHANNEL_1 0U
 #define TIM_CHANNEL_2 4U

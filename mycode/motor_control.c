@@ -4,6 +4,7 @@
 #include "angle_src_encoder.h"
 #include "app_storage.h"
 #include "st_hso.h"
+#include "motor_sixstep.h"
 #include <string.h>
 
 /* M1 retains its proven encoder/HSO controller. M2 owns all estimator, PI,
@@ -24,6 +25,7 @@ static Motor2Controller m2;
 static volatile MotorWorkMode work;
 static MotorAxis focus;
 static bool hso_selected;
+static bool sixstep_selected;
 static volatile bool group_active, timing_fault;
 static JerryFOC_ControlMode group_mode;
 static float group_target, group_reference, group_speed, origins[2], group_error;
@@ -83,7 +85,8 @@ bool MotorControl_AxisEnabled(MotorAxis axis)
 bool MotorControl_IsCoupled(void) { return work>=MOTOR_WORK_SYNC_SPEED; }
 bool MotorControl_IsHandFollow(void) { return work>=MOTOR_WORK_MASTER_M1; }
 bool MotorControl_IsPassive(MotorAxis axis) { return work==MOTOR_WORK_MASTER_M1+(unsigned)axis; }
-bool MotorControl_HsoAllowed(void) { return work==MOTOR_WORK_SINGLE_M1 && hso_selected; }
+__attribute__((noinline)) bool MotorControl_HsoAllowed(void) { return work==MOTOR_WORK_SINGLE_M1 && hso_selected; }
+__attribute__((noinline)) bool MotorControl_SixStepAllowed(void) { return work==MOTOR_WORK_SINGLE_M1 && sixstep_selected; }
 bool MotorControl_MotionAllowed(MotorAxis axis) { return MotorControl_AxisEnabled(axis) && !MotorControl_IsPassive(axis) && !timing_fault; }
 MotorWorkMode MotorControl_GetWork(void) { return work; }
 MotorAxis MotorControl_GetFocus(void) { return focus; }
@@ -119,6 +122,8 @@ const char *MotorControl_WorkText(void)
 bool MotorControl_ModeAllowed(JerryFOC_ControlMode mode)
 {
     if ((unsigned)mode>JERRYFOC_MODE_POSITION) return false;
+    if (MotorControl_SixStepAllowed()) return mode==JERRYFOC_MODE_TORQUE ||
+        (!SixStep_IsGeneric() && mode==JERRYFOC_MODE_VELOCITY);
     if (MotorControl_HsoAllowed()) return mode==JERRYFOC_MODE_VELOCITY;
     if (work==MOTOR_WORK_SYNC_SPEED) return mode==JERRYFOC_MODE_VELOCITY;
     if (work==MOTOR_WORK_SYNC_POSITION || MotorControl_IsHandFollow()) return mode==JERRYFOC_MODE_POSITION;
@@ -138,7 +143,7 @@ static void reset_m2(void)
 static void reset_pi(PIDController *p) { p->error_prev=p->integral_prev=p->output_prev=0.0f; }
 static void stop_axis(MotorAxis axis)
 {
-    if (axis==MOTOR_AXIS_1) { JerryFOC_stop(); return; }
+    if (axis==MOTOR_AXIS_1) { SixStep_Stop(); JerryFOC_stop(); return; }
     (void)MotorSampling_SetAxisOutputEnabled(MOTOR_AXIS_2,false);
     (void)MT6701_2_Reserve(false);
     m2.aligning=false; m2.pending_align=false;
@@ -165,6 +170,8 @@ void MotorControl_Stop(MotorAxis axis)
 }
 static bool stationary(void)
 {
+    if (MotorControl_SixStepAllowed()) return SixStep_AtRest() && !m2.aligning &&
+        !MotorSampling_IsOutputRequested() && !MotorSampling_IsAxisOutputRequested(MOTOR_AXIS_2);
     if (MotorControl_HsoAllowed() && !StHso_AtRest()) return false;
     if (JerryFOC_isAligning() || m2.aligning || MotorSampling_IsOutputRequested() ||
         MotorSampling_IsAxisOutputRequested(MOTOR_AXIS_2)) return false;
@@ -173,7 +180,8 @@ static bool stationary(void)
 static void save_config(void)
 {
     AppSettings *s=AppStorage_Get();
-    s->control_config=(s->control_config & (APP_CONFIG_FOCUS_M2 | APP_CONFIG_IBUS_MASK)) | (uint32_t)work | (hso_selected ? 8U : 0U) |
+    s->control_config=(s->control_config & (APP_CONFIG_ESC | APP_CONFIG_FOCUS_M2 | APP_CONFIG_IBUS_MASK | APP_CONFIG_THROTTLE_MASK)) | (uint32_t)work | (hso_selected ? 8U : 0U) |
+        (sixstep_selected ? APP_CONFIG_SIXSTEP : 0U) |
         (MotorParams_GetAxisProfile(MOTOR_AXIS_2)==MOTOR_PROFILE_4015 ? 16U : 0U);
 }
 bool MotorControl_SelectWork(MotorWorkMode mode)
@@ -183,6 +191,8 @@ bool MotorControl_SelectWork(MotorWorkMode mode)
     if (!stationary()) { __set_PRIMASK(mask); return false; }
     MotorControl_StopAll();
     work=mode;
+    (void)MotorSampling_SelectSixStep(MotorControl_SixStepAllowed());
+    SixStep_SetGeneric(MotorControl_SixStepAllowed() && (AppStorage_Get()->control_config & APP_CONFIG_ESC));
     group_stop_reason=NULL;
     focus=work_focus();
     if (!MotorControl_HsoAllowed()) { (void)JerryFOC_useHSO(0); StHso_Enable(false); }
@@ -198,9 +208,25 @@ bool MotorControl_SelectFeedback(bool hso)
     uint32_t mask=__get_PRIMASK(); __disable_irq();
     if (work!=MOTOR_WORK_SINGLE_M1 || !stationary()) { __set_PRIMASK(mask); return false; }
     hso_selected=hso;
+    sixstep_selected=false;
+    SixStep_SetGeneric(false);
+    SixStep_Stop(); (void)MotorSampling_SelectSixStep(false);
     (void)JerryFOC_useHSO(0); StHso_Enable(hso);
     m1_stop_reason=group_stop_reason=NULL;
     if (!hso) JerryFOC_requestAlignment();
+    save_config(); __set_PRIMASK(mask); return true;
+}
+bool MotorControl_SelectSixStep(bool enable)
+{
+    uint32_t mask=__get_PRIMASK(); __disable_irq();
+    if (work!=MOTOR_WORK_SINGLE_M1 || !stationary()) { __set_PRIMASK(mask); return false; }
+    MotorControl_StopAll();
+    if (!MotorSampling_SelectSixStep(enable)) { __set_PRIMASK(mask); return false; }
+    sixstep_selected=enable; hso_selected=false;
+    SixStep_SetGeneric(enable && (AppStorage_Get()->control_config & APP_CONFIG_ESC));
+    (void)JerryFOC_useHSO(0U); StHso_Enable(false);
+    if (!enable) JerryFOC_requestAlignment();
+    m1_stop_reason=group_stop_reason=NULL;
     save_config(); __set_PRIMASK(mask); return true;
 }
 static void clear_saved_axis(MotorAxis axis)
@@ -209,6 +235,7 @@ static void clear_saved_axis(MotorAxis axis)
     uint32_t defaults=(30UL<<APP_POSITION_SPEED_SHIFT)|((uint32_t)APP_SPEED_LIMIT_DEFAULT<<APP_SPEED_LIMIT_SHIFT);
     if (axis==MOTOR_AXIS_1) {
         s->speed_x10=s->voltage_x100=s->position_x100=0;
+        s->control_config&=~APP_CONFIG_THROTTLE_MASK;
         s->flags=(s->flags & (APP_FLAG_LED_ENABLE|APP_FLAG_MOTOR_4015)) | defaults;
     } else {
         s->axis2_speed_x10=s->axis2_voltage_x100=s->axis2_position_x100=0;
@@ -221,10 +248,13 @@ bool MotorControl_SelectProfile(MotorAxis axis,MotorProfile profile)
     uint32_t mask=__get_PRIMASK(); __disable_irq();
     if (!stationary()) { __set_PRIMASK(mask); return false; }
     bool ok=true;
-    if (profile!=MotorParams_GetAxisProfile(axis)) {
+    if (profile!=MotorParams_GetAxisProfile(axis) ||
+        (axis==MOTOR_AXIS_1 && (AppStorage_Get()->control_config & APP_CONFIG_ESC))) {
         if (axis==MOTOR_AXIS_1) {
             ok=JerryFOC_selectMotor(profile)!=0U;
             if (ok) {
+                AppStorage_Get()->control_config&=~APP_CONFIG_ESC;
+                SixStep_SetGeneric(false);
                 AppStorage_Get()->flags=(AppStorage_Get()->flags & ~APP_FLAG_MOTOR_4015) |
                     (profile==MOTOR_PROFILE_4015 ? APP_FLAG_MOTOR_4015 : 0U);
                 StHso_Enable(MotorControl_HsoAllowed());
@@ -234,6 +264,16 @@ bool MotorControl_SelectProfile(MotorAxis axis,MotorProfile profile)
             reset_m2(); save_config();
         }
         if (ok) clear_saved_axis(axis);
+    }
+    __set_PRIMASK(mask); return ok;
+}
+bool MotorControl_SelectGeneric(void)
+{
+    uint32_t mask=__get_PRIMASK(); __disable_irq();
+    bool ok=MotorControl_SixStepAllowed() && stationary();
+    if(ok) {
+        AppStorage_Get()->control_config|=APP_CONFIG_ESC;
+        SixStep_SetGeneric(true); clear_saved_axis(MOTOR_AXIS_1);
     }
     __set_PRIMASK(mask); return ok;
 }
@@ -248,7 +288,8 @@ bool MotorControl_SetGear(int32_t r,int32_t o)
 bool MotorControl_RequestAlign(MotorAxis axis)
 {
     uint32_t mask=__get_PRIMASK(); __disable_irq();
-    if (!MotorControl_AxisEnabled(axis) || !resume_global_stop() || !stationary() ||
+    if ((axis==MOTOR_AXIS_1 && MotorControl_SixStepAllowed()) ||
+        !MotorControl_AxisEnabled(axis) || !resume_global_stop() || !stationary() ||
         ((axis==MOTOR_AXIS_1 || MotorControl_IsCoupled()) && MotorSampling_IsIbusTripped())) {
         __set_PRIMASK(mask); return false;
     }
@@ -266,10 +307,14 @@ void MotorControl_Init(void)
     work=(MotorWorkMode)(s->control_config & 7U);
     if (work>=MOTOR_WORK_COUNT) work=MOTOR_WORK_SINGLE_M1;
     hso_selected=(s->control_config & 8U)!=0U;
+    sixstep_selected=(s->control_config & APP_CONFIG_SIXSTEP)!=0U;
+    if (sixstep_selected) hso_selected=false;
     focus=work_focus();
     (void)JerryFOC_selectMotor((s->flags & APP_FLAG_MOTOR_4015) ? MOTOR_PROFILE_4015 : MOTOR_PROFILE_2804);
     (void)MotorParams_SelectAxis(MOTOR_AXIS_2,(s->control_config & 16U) ? MOTOR_PROFILE_4015 : MOTOR_PROFILE_2804);
     reset_m2();
+    (void)MotorSampling_SelectSixStep(MotorControl_SixStepAllowed());
+    SixStep_SetGeneric(MotorControl_SixStepAllowed() && (s->control_config & APP_CONFIG_ESC));
     if (!s->gear_ratio_x100 || s->gear_ratio_x100< -1000 || s->gear_ratio_x100>1000) s->gear_ratio_x100=100;
     if (s->gear_offset_x100< -6283 || s->gear_offset_x100>6283) s->gear_offset_x100=0;
     group_active=timing_fault=false;
@@ -316,6 +361,18 @@ void MotorControl_GetAxis(MotorAxis axis,MotorAxisSnapshot *out)
     if (group_stop_reason && MotorControl_IsCoupled() && !out->active &&
         (out->ready || MotorControl_IsPassive(axis))) out->status=group_stop_reason;
     if (timing_fault) { out->ready=false; out->status="CONTROL OVERRUN"; }
+    if (axis==MOTOR_AXIS_1 && MotorControl_SixStepAllowed()) {
+        SixStepSnapshot ss; SixStep_GetSnapshot(&ss);
+        out->mode=ss.speed_control ? JERRYFOC_MODE_VELOCITY : JERRYFOC_MODE_TORQUE; out->velocity=ss.velocity;
+        out->target_velocity=ss.speed_control ? ss.target : 0;
+        out->target_iq=ss.speed_control ? 0 : ss.target; out->position=out->electrical_angle=0;
+        const MotorSampleFrame *frame=MotorSampling_GetFrame();
+        out->ia=frame->m1_current[0]; out->ib=frame->m1_current[1]; out->iq=out->id=0;
+        out->healthy=out->aligned=true; out->current_loop=false;
+        out->aligning=false;
+        out->ready=MotorSampling_IsReady() && !timing_fault;
+        if (out->ready) out->status=ss.status;
+    }
     if (!MotorControl_AxisEnabled(axis)) { out->ready=false; out->status="AXIS DISABLED"; }
     if (MotorSampling_IsGlobalStopped()) out->status="GLOBAL STOP";
     __set_PRIMASK(mask);
@@ -490,6 +547,13 @@ bool MotorControl_Command(MotorAxis axis,JerryFOC_ControlMode mode,float value,f
     if (axis==MOTOR_AXIS_1 && MotorControl_HsoAllowed() && value==0.0f) {
         MotorControl_Stop(axis); command_text="READY"; __set_PRIMASK(mask); return true;
     }
+    if (axis==MOTOR_AXIS_1 && MotorControl_SixStepAllowed()) {
+        if (mode==JERRYFOC_MODE_VELOCITY && fabsf(value)>speed_limit(axis)) value=copysignf(speed_limit(axis),value);
+        bool ok=(value==0 || (!timing_fault && resume_global_stop())) &&
+            (mode==JERRYFOC_MODE_VELOCITY ? SixStep_Start(value) : SixStep_Throttle(value));
+        command_text=ok ? "READY" : "6STEP RANGE/STOP";
+        __set_PRIMASK(mask); return ok;
+    }
     if (!resume_global_stop()) { __set_PRIMASK(mask); return false; }
     if (axis==MOTOR_AXIS_1 && MotorControl_HsoAllowed()) {
         value=clamp(value,-speed_limit(axis),speed_limit(axis));
@@ -583,6 +647,7 @@ static float current_pi(PIDController *p,float error)
 }
 void MotorControl_Fast(void)
 {
+    if (MotorControl_SixStepAllowed()) { SixStep_Process(MotorSampling_GetFrame()); return; }
     if (MotorSampling_IsGlobalStopped()) return; /* Main owns controller/SPI cleanup. */
     if (MotorControl_IsCoupled() &&
         (group_active || m2.aligning || MotorSampling_IsAxisOutputRequested(MOTOR_AXIS_2)) &&
@@ -828,6 +893,19 @@ void MotorControl_RecordCycles(uint32_t cycles)
 }
 void MotorControl_Telemetry(float d[25])
 {
+    if (MotorControl_SixStepAllowed()) {
+        SixStepSnapshot ss; SixStep_GetSnapshot(&ss);
+        d[0]=ss.target; d[1]=ss.velocity; d[7]=ss.reference;
+        d[16]=ss.duty; d[17]=ss.bemf; d[18]=(float)ss.sector;
+        d[19]=(float)ss.quality; d[20]=(float)ss.crossings; d[21]=(float)ss.state;
+        d[23]=ss.speed_control ? 1.0f : 0.0f;
+        /* Encoder fields have no control role in this encoder-free mode.
+         * Publish frozen six-step timing in the same 25-float frame. */
+        for(unsigned i=0;i<6;++i) d[8+i]=(float)ss.period_10us[i]*0.01f; /* ms */
+        d[14]=(float)ss.period_pct+0.1f*ss.period_fraction;
+        d[15]=(float)ss.phase_pct; d[24]=(float)ss.reject;
+        return;
+    }
     if (!MotorControl_AxisEnabled(MOTOR_AXIS_2)) return;
     d[16]=(float)work; d[17]=m2.velocity; d[18]=m2.target_speed;
     d[19]=m2.position; d[20]=m2.iq; d[21]=m2.id;

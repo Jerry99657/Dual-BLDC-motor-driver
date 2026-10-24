@@ -2,7 +2,7 @@
 #include "main.h"
 #include "hso.h"
 #include "impedcorr.h"
-#include "arm_math.h"
+#include "motor_math.h"
 #include <math.h>
 #include <string.h>
 
@@ -39,7 +39,7 @@ static int pole_pairs=1;
 static StHsoState phase;
 static StHsoSnapshot live;
 
-static float wrap(float a)
+__attribute__((optimize("O2"))) static float wrap(float a)
 {
     if (!isfinite(a)) return NAN;
     while (a>3.14159265359f) a-=TWO_PI;
@@ -178,7 +178,8 @@ __attribute__((optimize("Os"))) static void learn_flux(Voltages_Uab_t emf,float 
      * phase tests. Direction/phase/strength and variance still gate admission. */
     if (!learn_cycle_length) learn_cycle_length=(uint32_t)(10000.0f/fabsf(hz)+0.5f);
     float a=from_q30(emf.A)*VOLTAGE_SCALE,b=from_q30(emf.B)*VOLTAGE_SCALE;
-    float sn=arm_sin_f32(forced_angle),cs=arm_cos_f32(forced_angle);
+    float sn,cs;
+    MotorMath_SinCos(forced_angle,&sn,&cs);
     learn_d_sum+=a*cs+b*sn; learn_q_sum+=b*cs-a*sn;
     if (++learn_cycle_count<learn_cycle_length) return;
     float d=learn_d_sum/(float)learn_cycle_count,q=learn_q_sum/(float)learn_cycle_count;
@@ -294,7 +295,7 @@ __attribute__((noinline,optimize("Os"))) static void check_observer(Voltages_Uab
         if (blend<1000U) ++blend;
     }
 }
-void StHso_Process(const MotorSampleFrame *f,bool ready,float encoder_angle,
+__attribute__((optimize("O2"))) void StHso_Process(const MotorSampleFrame *f,bool ready,float encoder_angle,
                    float encoder_velocity,bool encoder_ready)
 {
     (void)encoder_angle; (void)encoder_velocity; (void)encoder_ready;
@@ -442,8 +443,10 @@ __attribute__((optimize("Os"))) void StHso_BlendCurrent(float *d,float *q)
          * rotates. Crossfade it to speed-PI torque over 100 ms; changing only
          * angle/Id would discard the startup torque at a load angle. */
         float turn=angle_offset*fminf((float)blend/500,1);
-        *d=amplitude*arm_cos_f32(turn);
-        *q=*q*((float)blend/1000)-amplitude*arm_sin_f32(turn);
+        float sn,cs;
+        MotorMath_SinCos(turn,&sn,&cs);
+        *d=amplitude*cs;
+        *q=*q*((float)blend/1000)-amplitude*sn;
     } else { *d=amplitude; if (phase!=ST_HSO_CONTROL) *q=0; }
 }
 void StHso_RecordControlCycles(uint32_t cycles)
