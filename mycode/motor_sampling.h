@@ -29,7 +29,9 @@ typedef enum {
     MOTOR_SAMPLE_FAULT_OVERCURRENT,
     MOTOR_SAMPLE_FAULT_CURRENT_RANGE,
     MOTOR_SAMPLE_FAULT_OVERLOAD,
-    MOTOR_SAMPLE_FAULT_REFERENCE
+    MOTOR_SAMPLE_FAULT_REFERENCE,
+    MOTOR_SAMPLE_FAULT_IBUS,
+    MOTOR_SAMPLE_FAULT_IBUS_INIT
 } MotorSamplingFault;
 
 typedef struct {
@@ -57,6 +59,10 @@ typedef struct {
     uint32_t reference_errors;
     uint32_t reference_age_ms;
     bool reference_fresh;
+    uint16_t ibus_limit_ma, ibus_dac_code;
+    float ibus_threshold_v;
+    uint32_t ibus_trips;
+    bool ibus_ready, ibus_latched, ibus_high;
 } MotorSamplingDiagnostics;
 
 /* Starts continuous measurement even at 0 V. Both bridges wait for current
@@ -87,5 +93,21 @@ bool MotorSampling_Capture(void);
 /* 指针仅供同一控制 ISR 使用；主循环应使用 CopyFrame。 */
 const MotorSampleFrame *MotorSampling_GetFrame(void);
 void MotorSampling_CopyFrame(MotorSampleFrame *out);
+
+/* Physical M1 IBUS only: 5mOhm / INA240A2 / half-reference zero / COMP4.
+ * Threshold changes require M1 power OFF. Clear never requests PWM or clears
+ * unrelated ADC/current faults; caller must stop its controller first. */
+bool MotorSampling_SetIbusLimit(uint16_t milliamps);
+uint16_t MotorSampling_GetIbusLimit(void);
+bool MotorSampling_IsIbusTripped(void);
+bool MotorSampling_ClearIbusTrip(void);
+
+/* KEY1 global coast latch. IRQ only disconnects power and records the event;
+ * main-loop control consumes it before a fresh explicit start may rearm.
+ * Release alone never resumes; require a stable 30 ms release. */
+void MotorSampling_GlobalStopIRQ(void);
+bool MotorSampling_IsGlobalStopped(void);
+bool MotorSampling_TakeGlobalStop(void);
+bool MotorSampling_ResumeGlobalStop(void);
 
 #endif

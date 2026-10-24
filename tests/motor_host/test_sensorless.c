@@ -56,9 +56,10 @@ int main(void) {
     binary_jump=0;sensor_step(3000);assert(!output_requested);
     assert(MotorControl_Command(MOTOR_AXIS_1,JERRYFOC_MODE_VELOCITY,10,0,false));
     sensor_control();
-    ready=false;sensor_step(1);
+    ready=false;ibus_trip=true;sensor_step(1);
+    assert(!strcmp(state(MOTOR_AXIS_1).status,"M1 IBUS TRIP")); /* Do not hide hardware trip under HSO STOPPED. */
     assert(!output_requested && JerryFOC_hasHSOFault()); /* ADC/bus fault wins over sensorless operation. */
-    ready=true;sensor_step(2500);
+    ready=true;ibus_trip=false;sensor_step(2500);
     assert(MotorControl_Command(MOTOR_AXIS_1,JERRYFOC_MODE_VELOCITY,10,0,false));
     sensor_control();
     command("Speed:0");assert(!output_requested && !JerryFOC_isHSOActive());
@@ -67,6 +68,27 @@ int main(void) {
     sensor_control(); assert(StHso_ControlVelocity()<0);
     command("HSO:Off");assert(!output_requested && !JerryFOC_isHSOActive());
     sensor_step(2500);assert(StHso_AtRest()); /* Disabled HSO still monitors coast admission. */
+    command("HSO:On"); sensor_step(2500);
+    for(unsigned control=0;control<2;++control) {
+        assert(MotorControl_Command(MOTOR_AXIS_1,JERRYFOC_MODE_VELOCITY,10,0,false));
+        if(control) sensor_control();
+        else assert(StHso_IsStarting());
+        global_stopped=global_pending=true; global_released=false; output_requested=false;
+        if(control) {
+            binary_jump=1; sensor_step(1500); binary_jump=0;
+            assert(!JerryFOC_hasHSOFault()); /* Intentional coast is not a new observer fault. */
+        }
+        MotorControl_Service(now);
+        assert(!JerryFOC_isHSOActive() && !StHso_IsStarting() && !StHso_IsRunning());
+        assert(!output_requested && JerryFOC_Target_Velocity==0);
+        assert(!MotorControl_Command(MOTOR_AXIS_1,JERRYFOC_MODE_VELOCITY,10,0,false));
+        sensor_step(2500); global_released=true; MotorControl_Service(now);
+        assert(global_stopped && !output_requested);
+        assert(MotorControl_Command(MOTOR_AXIS_1,JERRYFOC_MODE_VELOCITY,10,0,false));
+        assert(!global_stopped && output_requested);
+        MotorControl_StopAll(); sensor_step(2500);
+    }
+    puts("PASS: KEY1 cancels real independent HSO startup and CONTROL without an encoder; no release restart, held command refusal and explicit restart after quiet admission");
     assert(MotorControl_SelectFeedback(false));
     assert(!MotorControl_Command(MOTOR_AXIS_1,JERRYFOC_MODE_VELOCITY,10,0,false));
     puts("PASS: real encoder-disconnected FOC/coordinator startup + I/F learning + HSO, enforced current loop, speed limits/reversal rejection without target mutation, coast Stop/Speed0, fault no-auto-restart + explicit restart, encoder mode still requires encoder");

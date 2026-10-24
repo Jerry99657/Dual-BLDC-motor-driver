@@ -43,6 +43,12 @@ static uint16_t follow_count_interval;
 static bool follow_quiet,follow_hold;
 static float follow_command_position,follow_command_velocity,follow_master_velocity;
 
+static bool resume_global_stop(void)
+{
+    if (MotorSampling_ResumeGlobalStop()) return true;
+    command_text="GLOBAL STOP"; return false;
+}
+
 static float clamp(float x,float lo,float hi) { return fminf(hi,fmaxf(lo,x)); }
 static float norm(float a) { a=fmodf(a,2.0f*PI); return a<0 ? a+2.0f*PI : a; }
 static float slew(float actual,float target,float accel,float decel)
@@ -127,7 +133,7 @@ static void reset_m2(void)
     m2.d=m2.q=(PIDController){.P=m->cur_P,.I=m->cur_I,.limit=m->cur_limit};
     m2.speed_filter.Tf=m->vel_filter_Tf;
     m2.position_speed=m->pos_limit;
-    m2.pending_align=true;
+    m2.pending_align=!MotorSampling_IsGlobalStopped();
 }
 static void reset_pi(PIDController *p) { p->error_prev=p->integral_prev=p->output_prev=0.0f; }
 static void stop_axis(MotorAxis axis)
@@ -167,7 +173,7 @@ static bool stationary(void)
 static void save_config(void)
 {
     AppSettings *s=AppStorage_Get();
-    s->control_config=(s->control_config & APP_CONFIG_FOCUS_M2) | (uint32_t)work | (hso_selected ? 8U : 0U) |
+    s->control_config=(s->control_config & (APP_CONFIG_FOCUS_M2 | APP_CONFIG_IBUS_MASK)) | (uint32_t)work | (hso_selected ? 8U : 0U) |
         (MotorParams_GetAxisProfile(MOTOR_AXIS_2)==MOTOR_PROFILE_4015 ? 16U : 0U);
 }
 bool MotorControl_SelectWork(MotorWorkMode mode)
@@ -182,7 +188,7 @@ bool MotorControl_SelectWork(MotorWorkMode mode)
     if (!MotorControl_HsoAllowed()) { (void)JerryFOC_useHSO(0); StHso_Enable(false); }
     else StHso_Enable(true);
     MT6701_2_SetRealtime(MotorControl_AxisEnabled(MOTOR_AXIS_2));
-    m2.pending_align=MotorControl_AxisEnabled(MOTOR_AXIS_2) && !m2.aligned;
+    m2.pending_align=MotorControl_AxisEnabled(MOTOR_AXIS_2) && !m2.aligned && !MotorSampling_IsGlobalStopped();
     save_config();
     __set_PRIMASK(mask);
     return true;
@@ -242,7 +248,10 @@ bool MotorControl_SetGear(int32_t r,int32_t o)
 bool MotorControl_RequestAlign(MotorAxis axis)
 {
     uint32_t mask=__get_PRIMASK(); __disable_irq();
-    if (!MotorControl_AxisEnabled(axis) || !stationary()) { __set_PRIMASK(mask); return false; }
+    if (!MotorControl_AxisEnabled(axis) || !resume_global_stop() || !stationary() ||
+        ((axis==MOTOR_AXIS_1 || MotorControl_IsCoupled()) && MotorSampling_IsIbusTripped())) {
+        __set_PRIMASK(mask); return false;
+    }
     if (MotorControl_IsPassive(axis)) {
         if (axis==MOTOR_AXIS_2) MT6701_2_Retry();
         __set_PRIMASK(mask); return true; /* Encoder retry only; never align the hand shaft. */
@@ -283,7 +292,7 @@ void MotorControl_GetAxis(MotorAxis axis,MotorAxisSnapshot *out)
             .target_iq=JerryFOC_Target_Iq,.healthy=MT6701_IsHealthy()!=0,.aligned=AngleSrc_Encoder_IsAligned()!=0,
             .active=MotorSampling_IsOutputRequested(),.aligning=JerryFOC_isAligning()!=0,
             .current_loop=flag_use_current_loop!=0,.ready=JerryFOC_isDriveReady()!=0,.status=sampling};
-        if (JerryFOC_hasHSOFault()) out->status="HSO STOPPED";
+        if (JerryFOC_hasHSOFault() && MotorSampling_IsAxisReady(axis)) out->status="HSO STOPPED";
         else if (m1_stop_reason && out->ready) out->status=m1_stop_reason;
         if (MotorControl_HsoAllowed()) {
             out->healthy=!JerryFOC_hasHSOFault();
@@ -308,10 +317,14 @@ void MotorControl_GetAxis(MotorAxis axis,MotorAxisSnapshot *out)
         (out->ready || MotorControl_IsPassive(axis))) out->status=group_stop_reason;
     if (timing_fault) { out->ready=false; out->status="CONTROL OVERRUN"; }
     if (!MotorControl_AxisEnabled(axis)) { out->ready=false; out->status="AXIS DISABLED"; }
+    if (MotorSampling_IsGlobalStopped()) out->status="GLOBAL STOP";
     __set_PRIMASK(mask);
 }
 static bool can_start(MotorAxis axis)
 {
+    if (MotorControl_IsCoupled() && MotorSampling_IsIbusTripped()) {
+        command_text="M1 IBUS TRIP"; return false;
+    }
     MotorAxisSnapshot s; MotorControl_GetAxis(axis,&s);
     if (axis==MOTOR_AXIS_1 && MotorControl_HsoAllowed()) {
         if (!MotorSampling_IsReady() || !MotorSampling_IsCalibrated()) {
@@ -376,6 +389,7 @@ bool MotorControl_StartFollow(void)
 {
     if (!MotorControl_IsHandFollow()) { command_text="SELECT MASTER"; return false; }
     uint32_t mask=__get_PRIMASK(); __disable_irq();
+    if (!resume_global_stop()) { __set_PRIMASK(mask); return false; }
     if (group_active) { __set_PRIMASK(mask); return true; } /* Do not re-zero an active session. */
     MotorAxis master=work==MOTOR_WORK_MASTER_M2 ? MOTOR_AXIS_2 : MOTOR_AXIS_1;
     MotorAxis slave=(MotorAxis)(1U-master);
@@ -476,6 +490,7 @@ bool MotorControl_Command(MotorAxis axis,JerryFOC_ControlMode mode,float value,f
     if (axis==MOTOR_AXIS_1 && MotorControl_HsoAllowed() && value==0.0f) {
         MotorControl_Stop(axis); command_text="READY"; __set_PRIMASK(mask); return true;
     }
+    if (!resume_global_stop()) { __set_PRIMASK(mask); return false; }
     if (axis==MOTOR_AXIS_1 && MotorControl_HsoAllowed()) {
         value=clamp(value,-speed_limit(axis),speed_limit(axis));
         if (!StHso_ValidTarget(value)) {
@@ -532,12 +547,18 @@ bool MotorControl_Command(MotorAxis axis,JerryFOC_ControlMode mode,float value,f
 }
 void MotorControl_Service(uint32_t now)
 {
+    if (MotorSampling_TakeGlobalStop()) {
+        MotorControl_StopAll();
+        command_text=m1_stop_reason=m2.stop_reason=group_stop_reason="GLOBAL STOP";
+    }
+    if (MotorSampling_IsGlobalStopped()) return;
     if (!MotorControl_MotionAllowed(MOTOR_AXIS_2)) return;
     MT6701_2_Snapshot enc; MT6701_2_GetSnapshot(&enc);
     uint32_t mask=__get_PRIMASK(); __disable_irq();
     bool m1_align_done=!MotorControl_MotionAllowed(MOTOR_AXIS_1) ||
                        (!JerryFOC_isAligning() && !JerryFOC_needsAlignment());
-    if (m1_align_done && m2.pending_align && !m2.aligning && MotorSampling_IsAxisReady(MOTOR_AXIS_2) &&
+    if (m1_align_done && m2.pending_align && !m2.aligning &&
+        (!MotorControl_IsCoupled() || !MotorSampling_IsIbusTripped()) && MotorSampling_IsAxisReady(MOTOR_AXIS_2) &&
         enc.healthy && fabsf(m2.velocity)<=1.0f && MT6701_2_Reserve(true)) {
         m2.pending_align=false; m2.aligning=true; m2.aligned=false; m2.align_at=now;
         if (!MotorSampling_SetAxisOutputEnabled(MOTOR_AXIS_2,true)) stop_axis(MOTOR_AXIS_2);
@@ -562,6 +583,13 @@ static float current_pi(PIDController *p,float error)
 }
 void MotorControl_Fast(void)
 {
+    if (MotorSampling_IsGlobalStopped()) return; /* Main owns controller/SPI cleanup. */
+    if (MotorControl_IsCoupled() &&
+        (group_active || m2.aligning || MotorSampling_IsAxisOutputRequested(MOTOR_AXIS_2)) &&
+        MotorSampling_IsIbusTripped()) {
+        command_text=group_stop_reason="M1 IBUS TRIP";
+        MotorControl_StopAll(); return;
+    }
     if (MotorControl_AxisEnabled(MOTOR_AXIS_1) && MotorSampling_IsOutputRequested() &&
         !g_openloop_debug && !MotorControl_HsoAllowed() &&
         (!MT6701_IsHealthy() || !MotorSampling_IsAxisReady(MOTOR_AXIS_1))) {

@@ -4,6 +4,7 @@
 #include "JerryFOC.h"
 #include "st_hso.h"
 #include "motor_control.h"
+#include "motor_sampling.h"
 #include "app_storage.h"
 #include "usbd_cdc_if.h"
 #include <string.h>
@@ -278,7 +279,8 @@ void Protocol_HandleLine(char *line)
         }
         control_result=MotorControl_Command(axis,mode,value,0,(flags & APP_FLAG_CURRENT_LOOP)!=0U) ? 1 : -1;
     } else if (strncmp(line, "OpenLoop:", 9) == 0) {
-        if (MotorControl_GetWork()!=MOTOR_WORK_SINGLE_M1 || MotorControl_HsoAllowed() || axis!=MOTOR_AXIS_1 || !JerryFOC_isDriveReady()) {
+        if (MotorControl_GetWork()!=MOTOR_WORK_SINGLE_M1 || MotorControl_HsoAllowed() || axis!=MOTOR_AXIS_1 ||
+            !JerryFOC_isDriveReady() || !MotorSampling_ResumeGlobalStop()) {
             control_result=-1; __set_PRIMASK(primask); return;
         }
         if (JerryFOC_isHSOActive() || JerryFOC_hasHSOFault()) (void)JerryFOC_useHSO(0U);

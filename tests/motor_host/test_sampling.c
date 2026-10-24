@@ -6,12 +6,20 @@
 #include "tim.h"
 #include "motor_sampling.h"
 #include "motor_params.h"
+#include "comp.h"
+#include "dac.h"
 
 ADC_TypeDef adc1, adc2;
 ADC_HandleTypeDef hadc1 = {.Instance=ADC1}, hadc2 = {.Instance=ADC2};
 TIM_TypeDef tim1, tim8, tim6;
 TIM_HandleTypeDef htim1 = {&tim1}, htim8 = {&tim8}, htim6 = {&tim6};
 uint32_t host_primask;
+GPIO_TypeDef gpio_key={.pins=KEY1_Pin};
+uint32_t host_exti_pending;
+GPIO_PinState HAL_GPIO_ReadPin(GPIO_TypeDef *port,uint16_t pin) {
+    return port->pins & pin ? GPIO_PIN_SET : GPIO_PIN_RESET;
+}
+void HAL_GPIO_EXTI_Callback(uint16_t pin);
 uint16_t host_vrefint_cal=1650;
 static uint32_t tick, calls, fail_at;
 static bool dma, bus_timer, slave_armed, master_armed, publish_enabled, fault_after_arming;
@@ -21,6 +29,52 @@ static uint16_t model_bus_raw;
 static uint16_t reference_raw=1500; /* 1650 * 3.0 / 1500 = 3.3 V. */
 static volatile uint16_t *buffer;
 static bool irq_on_tick;
+COMP_HandleTypeDef hcomp4;
+DAC_HandleTypeDef hdac3;
+static bool comparator_high,fail_dac_set,fail_dac_start,fail_comp_start;
+static bool startup_pulse;
+static bool key_on_moe;
+static unsigned inject_on_moe,inject_on_flag,flag_reads,moe_writes;
+void HostMoeWrite(TIM_TypeDef *timer) {
+    if(timer!=&tim1) return;
+    ++moe_writes;
+    if(key_on_moe) {
+        key_on_moe=false;
+        gpio_key.pins&=~KEY1_Pin; host_exti_pending|=KEY1_Pin;
+    }
+    if(inject_on_moe) {
+        inject_on_moe=0;
+        assert(!(timer->CCER & 0x555U));
+        timer->SR|=TIM_FLAG_BREAK; timer->BDTR&=~TIM_BDTR_MOE;
+    }
+}
+uint32_t HostTimFlagRead(TIM_TypeDef *timer,uint32_t flag) {
+    uint32_t prior=timer->SR & flag;
+    if(timer==&tim1 && ++flag_reads==inject_on_flag) {
+        inject_on_flag=0; timer->SR|=TIM_FLAG_BREAK; timer->BDTR&=~TIM_BDTR_MOE;
+    }
+    return prior;
+}
+void HAL_TIMEx_BreakCallback(TIM_HandleTypeDef *);
+HAL_StatusTypeDef HAL_DAC_SetValue(DAC_HandleTypeDef *h,uint32_t ch,uint32_t align,uint32_t value) {
+    assert(h==&hdac3 && ch==DAC_CHANNEL_2 && align==DAC_ALIGN_12B_R && value<4096);
+    if(fail_dac_set) return HAL_ERROR;
+    h->code=value; return HAL_OK;
+}
+HAL_StatusTypeDef HAL_DAC_Start(DAC_HandleTypeDef *h,uint32_t ch) {
+    assert(h==&hdac3 && ch==DAC_CHANNEL_2 && h->code>2048);
+    if(fail_dac_start) return HAL_ERROR;
+    h->started=1; return HAL_OK;
+}
+HAL_StatusTypeDef HAL_COMP_Start(COMP_HandleTypeDef *h) {
+    assert(h==&hcomp4 && hdac3.started && hdac3.code>2048);
+    assert(!(tim1.CCER & 0x555U) && !(tim1.BDTR & TIM_BDTR_MOE));
+    assert(!(tim1.DIER & TIM_IT_BREAK));
+    if(fail_comp_start) return HAL_ERROR;
+    if(startup_pulse) tim1.SR|=TIM_FLAG_BREAK; /* Comparator's not-yet-qualified startup output. */
+    h->started=1; return HAL_OK;
+}
+uint32_t HAL_COMP_GetOutputLevel(const COMP_HandleTypeDef *h) { assert(h==&hcomp4); return comparator_high; }
 static void inject_irq(void);
 
 uint32_t HAL_GetTick(void) {
@@ -284,7 +338,188 @@ static void check_voltage_plateau(void) {
     assert(!MotorSampling_GetFrame()->m1_voltage_high_plateau);
     puts("PASS: voltage plateau metadata snapshots real MOE/CCER and all three PWM widths, edge guard, coast and both pre-arm frames");
 }
-int main(void) {
+static void pulse_ibus(void) {
+    tim1.SR|=TIM_FLAG_BREAK; tim1.BDTR&=~TIM_BDTR_MOE;
+}
+static void clear_ibus(void) {
+    comparator_high=false; sample_ms(102,1354);
+    assert(MotorSampling_ClearIbusTrip());
+    assert(MotorSampling_IsReady() && !MotorSampling_IsOutputRequested());
+    assert(!(tim1.CCER & 0x555U) && !(tim1.BDTR & TIM_BDTR_MOE));
+}
+static int check_ibus(const char *scenario) {
+    if(!strcmp(scenario,"ibus-dac-set")) fail_dac_set=true;
+    if(!strcmp(scenario,"ibus-dac-start")) fail_dac_start=true;
+    if(!strcmp(scenario,"ibus-comp-start")) fail_comp_start=true;
+    if(!strcmp(scenario,"ibus-high-start")) comparator_high=true;
+    if(!strcmp(scenario,"ibus-startup-pulse")) startup_pulse=true;
+    reset(); if(!strcmp(scenario,"ibus-wrap")) tick=UINT32_MAX-650;
+    assert(MotorSampling_SetOutputEnabled(false));
+    assert(MotorSampling_SetIbusLimit(3000)); assert(MotorSampling_Start());
+    sample_ms(301,1354);
+    if(!strcmp(scenario,"ibus-high-start")) {
+        assert(diagnostics().ibus_latched && !MotorSampling_IsReady() && !(tim1.CCER & 0x555U));
+        clear_ibus(); puts("PASS: sustained IBUS overcurrent at comparator startup locks M1 out until explicit qualified clear"); return 0;
+    }
+    if(startup_pulse) {
+        assert(MotorSampling_IsReady() && !diagnostics().ibus_latched && (tim1.DIER & TIM_IT_BREAK));
+        puts("PASS: comparator startup transient discarded only while all power outputs are disconnected"); return 0;
+    }
+    if(fail_dac_set || fail_dac_start || fail_comp_start) {
+        assert(!MotorSampling_IsReady() && MotorSampling_IsAxisReady(MOTOR_AXIS_2));
+        assert(!strcmp(MotorSampling_GetStatusText(),"M1 IBUS INIT"));
+        assert(!MotorSampling_SetOutputEnabled(true) && !MotorSampling_ClearIbusTrip());
+        assert(!(tim1.CCER & 0x555U));
+        puts("PASS: IBUS DAC/COMP initialization failure inhibits M1, keeps acquisition/M2 and cannot be cleared as an overcurrent"); return 0;
+    }
+    assert(MotorSampling_IsReady() && hcomp4.started && hdac3.started);
+    if(!strcmp(scenario,"ibus-wrap")) {
+        sample_ms(300,1354); assert(MotorSampling_SetOutputEnabled(true)); sample_ms(1,1354);
+        comparator_high=true; pulse_ibus(); sample_ms(10,1354);
+        clear_ibus(); assert(tick<200U);
+        puts("PASS: IBUS quiet-time qualification and manual clear across millisecond wrap"); return 0;
+    }
+    if(!strcmp(scenario,"ibus-shared")) {
+        HAL_ADC_ErrorCallback(&hadc1); pulse_ibus(); sample_ms(102,1354);
+        assert(diagnostics().ibus_latched && diagnostics().fault==MOTOR_SAMPLE_FAULT_ADC);
+        assert(!MotorSampling_ClearIbusTrip() && !MotorSampling_IsAxisReady(MOTOR_AXIS_2));
+        puts("PASS: clearing IBUS cannot erase an unrelated shared ADC fault"); return 0;
+    }
+    assert(tim1.DIER & TIM_IT_BREAK);
+    MotorSamplingDiagnostics d=diagnostics();
+    unsigned expected=(unsigned)(4096.0f*(0.5f+0.75f/d.reference_voltage)+0.5f);
+    assert(d.ibus_ready && d.ibus_limit_ma==3000 && d.ibus_dac_code==expected);
+    assert(!MotorSampling_SetIbusLimit(400) && !MotorSampling_SetIbusLimit(4100) && !MotorSampling_SetIbusLimit(555));
+    assert(MotorSampling_SetIbusLimit(2500)); sample_ms(3,1354);
+    assert(MotorSampling_GetIbusLimit()==2500);
+    reference_raw=1650; sample_ms(800,1354);
+    d=diagnostics(); expected=(unsigned)(4096.0f*(0.5f+0.625f/d.reference_voltage)+0.5f);
+    assert(d.ibus_dac_code==expected && d.ibus_ready);
+    assert(MotorSampling_SetOutputEnabled(true)); sample_ms(1,1354); assert(MotorSampling_IsOutputEnabled());
+    assert(!MotorSampling_SetIbusLimit(3000) && MotorSampling_GetIbusLimit()==2500);
+    if(!strcmp(scenario,"ibus-runtime")) {
+        fail_dac_set=true; sample_ms(33,1354);
+        assert(!MotorSampling_IsOutputRequested() && !MotorSampling_IsReady());
+        assert(!strcmp(MotorSampling_GetStatusText(),"M1 IBUS INIT"));
+        assert(!MotorSampling_ClearIbusTrip()); puts("PASS: runtime DAC update failure disconnects M1 and refuses restart"); return 0;
+    }
+    comparator_high=true; pulse_ibus(); frame(0); assert(MotorSampling_Capture()); /* ADC before BRK IRQ. */
+    assert(!MotorSampling_IsReady() && !MotorSampling_IsOutputRequested() && !(tim1.CCER & 0x555U));
+    assert(!(tim1.BDTR & TIM_BDTR_MOE) && !(tim1.DIER & TIM_IT_BREAK));
+    assert(!strcmp(MotorSampling_GetStatusText(),"M1 IBUS TRIP") && diagnostics().ibus_trips==1);
+    unsigned writes=moe_writes;
+    assert(MotorSampling_SetAxisOutputEnabled(MOTOR_AXIS_2,true)); sample_ms(150,1354);
+    assert(MotorSampling_IsAxisOutputEnabled(MOTOR_AXIS_2) && diagnostics().bus_fresh);
+    assert(!MotorSampling_ClearIbusTrip() && !MotorSampling_SetOutputEnabled(true) && moe_writes==writes);
+    comparator_high=false; sample_ms(50,1354); assert(!MotorSampling_ClearIbusTrip());
+    pulse_ibus(); sample_ms(70,1354); assert(!MotorSampling_ClearIbusTrip()); /* New short pulse resets quiet time. */
+    sample_ms(33,1354); pulse_ibus(); assert(!MotorSampling_ClearIbusTrip()); /* Pulse after Service, just before confirmation. */
+    clear_ibus(); assert(MotorSampling_IsAxisOutputEnabled(MOTOR_AXIS_2));
+    pulse_ibus(); tim1.SR&=~TIM_FLAG_BREAK; HAL_TIMEx_BreakCallback(&htim1); /* HAL clears before callback. */
+    assert(diagnostics().ibus_trips==2); clear_ibus();
+    assert(MotorSampling_SetOutputEnabled(true)); frame(0); assert(MotorSampling_Capture());
+    inject_on_moe=1; frame(0); assert(MotorSampling_Capture());
+    assert(!(tim1.BDTR & TIM_BDTR_MOE) && !(tim1.CCER & 0x555U) && diagnostics().ibus_latched);
+    clear_ibus();
+    assert(MotorSampling_SetOutputEnabled(true)); frame(0); assert(MotorSampling_Capture());
+    flag_reads=0; inject_on_flag=3; frame(0); assert(MotorSampling_Capture());
+    assert(!(tim1.BDTR & TIM_BDTR_MOE)); /* Pulse just after the final BIF read still shuts hardware off. */
+    assert(!MotorSampling_IsReady() && !(tim1.CCER & 0x555U));
+    MotorSampling_Stop(); assert(MotorSampling_Start()); sample_ms(301,1354);
+    assert(!MotorSampling_IsReady() && !MotorSampling_SetOutputEnabled(true)); /* Restart cannot reset latch. */
+    clear_ibus();
+    assert(MotorSampling_SetOutputEnabled(true)); sample_ms(1,1354); assert(MotorSampling_IsOutputEnabled());
+    puts("PASS: IBUS startup/filtered-VREF DAC tracking, range/stopped-only changes, transient/level trip, ADC-before-IRQ, anti-storm, M2 isolation, quiet/manual clear, no auto restart, both arming races and Stop/Start latch retention");
+    return 0;
+}
+static void key_irq(void) {
+    host_exti_pending&=~KEY1_Pin; /* Real HAL clears PR before its callback. */
+    HAL_GPIO_EXTI_Callback(KEY1_Pin);
+}
+static void key_acknowledge(void) {
+    gpio_key.pins|=KEY1_Pin;
+    assert(MotorSampling_TakeGlobalStop()); /* Controller cleanup in production. */
+    sample_ms(31,1354);
+    assert(MotorSampling_ResumeGlobalStop());
+    assert(!MotorSampling_IsOutputRequested() && !MotorSampling_IsAxisOutputRequested(MOTOR_AXIS_2));
+}
+static int check_global_stop(bool wrap) {
+    /* The real interrupt can run before either timer handle is initialized. */
+    htim1.Instance=htim8.Instance=NULL;
+    HAL_GPIO_EXTI_Callback(1U); assert(!MotorSampling_IsGlobalStopped());
+    gpio_key.pins&=~KEY1_Pin; key_irq();
+    assert(MotorSampling_IsGlobalStopped() && !MotorSampling_ResumeGlobalStop());
+    htim1.Instance=&tim1; htim8.Instance=&tim8;
+    reset(); if(wrap) tick=UINT32_MAX-330U;
+    assert(MotorSampling_Start()); sample_ms(301,1354);
+    assert(MotorSampling_IsReady() && MotorSampling_IsAxisReady(MOTOR_AXIS_2));
+    assert(!(tim1.BDTR & TIM_BDTR_MOE) && !(tim8.BDTR & TIM_BDTR_MOE));
+    assert(!(tim1.CCER & 0x555U) && !(tim8.CCER & 0x555U));
+    assert(tim1.CCER & TIM_CCER_CC4E);
+    assert(MotorSampling_TakeGlobalStop() && !MotorSampling_TakeGlobalStop());
+    assert(!MotorSampling_SetOutputEnabled(true));
+    assert(!MotorSampling_SetAxisOutputEnabled(MOTOR_AXIS_2,true));
+    assert(!MotorSampling_ResumeGlobalStop());
+    gpio_key.pins|=KEY1_Pin; sample_ms(1,1354);
+    sample_ms(29,1354); assert(!MotorSampling_ResumeGlobalStop());
+    /* Release bounce restarts the full release timer, never the stop delay. */
+    gpio_key.pins&=~KEY1_Pin; key_irq();
+    gpio_key.pins|=KEY1_Pin; sample_ms(31,1354);
+    assert(!MotorSampling_ResumeGlobalStop()); /* Must consume cleanup first. */
+    assert(MotorSampling_TakeGlobalStop() && MotorSampling_ResumeGlobalStop());
+    assert(!MotorSampling_IsGlobalStopped());
+    assert(!MotorSampling_IsOutputRequested()); /* Release/ack do not arm. */
+    assert(MotorSampling_SetOutputEnabled(true));
+    assert(MotorSampling_SetAxisOutputEnabled(MOTOR_AXIS_2,true));
+    frame(0); assert(MotorSampling_Capture());
+    assert(!(tim1.CCER & 0x555U) && !(tim8.CCER & 0x555U));
+    /* Stop during the two-frame preload, before the next ADC frame. */
+    unsigned before=calls;
+    gpio_key.pins&=~KEY1_Pin; key_irq();
+    assert(calls==before && !MotorSampling_IsOutputRequested());
+    sample_ms(20,1354);
+    assert(!(tim1.CCER & 0x555U) && !(tim8.CCER & 0x555U));
+    assert(diagnostics().fault==MOTOR_SAMPLE_FAULT_NONE && diagnostics().bus_fresh);
+    key_acknowledge();
+    assert(MotorSampling_SetOutputEnabled(true));
+    assert(MotorSampling_SetAxisOutputEnabled(MOTOR_AXIS_2,true));
+    sample_ms(1,1354);
+    assert(MotorSampling_IsOutputEnabled() && MotorSampling_IsAxisOutputEnabled(MOTOR_AXIS_2));
+    uint32_t seq=MotorSampling_GetFrame()->sequence;
+    /* A very short press ended already, while EXTI was pending/masked. */
+    host_exti_pending|=KEY1_Pin;
+    assert(!MotorSampling_SetOutputEnabled(true));
+    assert(!(tim1.BDTR & TIM_BDTR_MOE) && !(tim8.BDTR & TIM_BDTR_MOE));
+    assert(!(tim1.CCER & 0x555U) && !(tim8.CCER & 0x555U));
+    key_irq(); key_acknowledge();
+    assert(MotorSampling_GetFrame()->sequence>seq && diagnostics().bus_fresh);
+    /* GPIO polling also handles a missed edge without any IRQ callback. */
+    gpio_key.pins&=~KEY1_Pin;
+    assert(MotorSampling_IsGlobalStopped()); key_acknowledge();
+    /* A press during the MOE transaction must not reconnect phase CCER. */
+    assert(MotorSampling_SetOutputEnabled(true));
+    frame(0); assert(MotorSampling_Capture());
+    key_on_moe=true;
+    frame(0); assert(MotorSampling_Capture());
+    assert(!key_on_moe && MotorSampling_IsGlobalStopped());
+    assert(!(tim1.CCER & 0x555U) && !(tim1.BDTR & TIM_BDTR_MOE));
+    key_irq(); key_acknowledge();
+    /* Acquisition restart cannot acknowledge the button or revive requests. */
+    gpio_key.pins&=~KEY1_Pin; key_irq();
+    MotorSampling_Stop(); assert(MotorSampling_Start()); sample_ms(301,1354);
+    assert(MotorSampling_IsGlobalStopped() && !MotorSampling_IsOutputRequested());
+    key_acknowledge();
+    /* Manual release never clears unrelated hardware protection. */
+    pulse_ibus(); HAL_TIMEx_BreakCallback(&htim1);
+    gpio_key.pins&=~KEY1_Pin; key_irq(); key_acknowledge();
+    assert(MotorSampling_IsIbusTripped() && !MotorSampling_SetOutputEnabled(true));
+    assert(diagnostics().fault==MOTOR_SAMPLE_FAULT_IBUS);
+    puts("PASS: KEY1 real sampling latch: pre-init/held boot, both bridges immediate coast, release bounce/30ms/wrap, pending cleanup and EXTI, GPIO fallback, preload/MOE race, live ADC, stop/start retention, independent IBUS latch");
+    return 0;
+}
+int main(int argc,char **argv) {
+    if(argc>1 && !strncmp(argv[1],"global",6)) return check_global_stop(!strcmp(argv[1],"global-wrap"));
+    if(argc>1) return check_ibus(argv[1]);
     check_reference_estimation();
     check_voltage_plateau();
     /* Drive the real scheduling through JEOS -> stopped TIM6 UPDATE -> DMA.

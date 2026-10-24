@@ -194,7 +194,7 @@ uint8_t JerryFOC_needsAlignment(void) { return !MotorControl_HsoAllowed() && mot
 void JerryFOC_requestAlignment(void)
 {
     JerryFOC_stop();
-    motor_alignment_pending=1U;
+    motor_alignment_pending=!MotorSampling_IsGlobalStopped();
 }
 uint8_t JerryFOC_isAligning(void) { return !foc_fast_loop_enabled; }
 
@@ -234,7 +234,8 @@ uint8_t JerryFOC_selectMotor(MotorProfile profile)
     id_filter_prev = debug_id_filter_prev = 0.0f;
     angle_source = AngleSrc_Encoder_Init(m->pole_pairs);
     StHso_Init(m);
-    motor_alignment_pending = motor_profile_initialized = 1U;
+    motor_profile_initialized = 1U;
+    motor_alignment_pending = !MotorSampling_IsGlobalStopped();
     __set_PRIMASK(mask);
     return 1U;
 }
@@ -397,7 +398,7 @@ __RAM_FUNC void JerryFOC_setPhaseVoltage(float Uq, float Ud, float angle_el)
 /* ================= 传感器标定 ================= */
 void JerryFOC_alignStart(void)
 {
-    if (MotorControl_HsoAllowed()) return;
+    if (MotorSampling_IsGlobalStopped() || MotorControl_HsoAllowed()) return;
     if (hso_feedback || hso_feedback_fault) (void)JerryFOC_useHSO(0U);
     if (!JerryFOC_isDriveReady()) return;
     if (!MotorSampling_SetOutputEnabled(true)) return;
@@ -464,9 +465,9 @@ void JerryFOC_stop(void)
     /* Equal 50% PWM is a zero vector / dynamic brake, not a coast state.
      * Disconnect the bridge FIRST; keep CH4 and ADC protection alive. */
     (void)MotorSampling_SetOutputEnabled(false);
+    motor_alignment_pending = 0U; /* Explicit Stop cancels queued as well as active alignment. */
     if (!foc_fast_loop_enabled) {
         foc_fast_loop_enabled = 1U;
-        motor_alignment_pending = 0U; /* Explicit Stop cancels an alignment. */
     }
     hso_feedback = 0U;
     StHso_Stop();
@@ -487,6 +488,7 @@ uint8_t JerryFOC_startOutput(void)
 {
     uint32_t mask = __get_PRIMASK();
     __disable_irq();
+    if (!MotorSampling_ResumeGlobalStop()) { __set_PRIMASK(mask); return 0U; }
     /* Do not reconnect a neutral voltage vector to a fast coasting rotor.
      * This is a fresh-start gate, not a change to running Speed:0 ramps. */
     if (MotorControl_HsoAllowed()) {
@@ -529,7 +531,9 @@ static void seed_sensored_velocity_pi(void)
 
 static void service_hso_feedback(void)
 {
-    if (!hso_feedback || StHso_IsRunning()) return;
+    /* An intentional coast can make the observer lose phase before main has
+     * cleaned up its startup/control state. Do not turn KEY1 into HSO LOST. */
+    if (!hso_feedback || MotorSampling_IsGlobalStopped() || StHso_IsRunning()) return;
     StHsoSnapshot snapshot; StHso_GetSnapshot(&snapshot);
     JerryFOC_stop();
     hso_feedback_fault=hso_stop_inhibit=hso_loss_recorded=1U;

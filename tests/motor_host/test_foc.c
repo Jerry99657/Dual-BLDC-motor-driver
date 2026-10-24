@@ -43,6 +43,13 @@ static MotorSampleFrame frame;
 static float bus=12.0f;
 static bool ready=true, calibrated=true, complete=true;
 static bool output_requested=true;
+static bool global_stopped,global_pending,global_released=true;
+bool MotorSampling_IsGlobalStopped(void) { return global_stopped; }
+bool MotorSampling_TakeGlobalStop(void) { bool p=global_pending; global_pending=false; return p; }
+bool MotorSampling_ResumeGlobalStop(void) {
+    if(global_stopped && (!global_released || global_pending)) return false;
+    global_stopped=false; return true;
+}
 static unsigned captures, encoder_services, aligns;
 static uint8_t healthy=1, aligned=1;
 static unsigned hso_processes;
@@ -87,7 +94,7 @@ bool MotorSampling_IsReady(void) { return ready; }
 bool MotorSampling_IsCalibrated(void) { return calibrated; }
 bool MotorSampling_IsOutputRequested(void) { return output_requested; }
 bool MotorSampling_SetOutputEnabled(bool enable) {
-    if(enable && (!ready || !calibrated)) return false;
+    if(enable && (global_stopped || !ready || !calibrated)) return false;
     output_requested=enable; return true;
 }
 float MotorSampling_GetBusVoltage(void) { return bus; }
@@ -219,6 +226,8 @@ int main(void) {
     unsigned before_align_stop=aligns;
     command("Stop"); assert(!output_requested && !JerryFOC_isAligning());
     JerryFOC_alignFinish(); assert(aligns==before_align_stop); /* Cancelled align cannot certify zero. */
+    JerryFOC_requestAlignment(); assert(JerryFOC_needsAlignment());
+    JerryFOC_stop(); assert(!JerryFOC_needsAlignment() && !output_requested);
     puts("PASS: protocol/FOC, encoder control, voltage/current clamps, atomic 2804/4015 controller reload, stop/align gates and fault retention");
     return 0;
 }

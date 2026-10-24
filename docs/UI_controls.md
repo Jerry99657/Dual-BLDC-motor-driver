@@ -1,6 +1,10 @@
 # 电机驱动板 UI 操作与验证
 
-当前固件 **UI-R57-INFO** 完成 B6／B7／B9：HSO 速度编辑跳过不可启动区、跨方向先确认停机；Status 拆为 Drive／Motion／Encoder／ADC／HSO／System；增加 rpm／deg 辅助显示，控制单位仍为 rad/s／rad。入口与详细规则见 [R57 说明](UI_R57_status_units.md)。长按左／右切轴与 KEY1 保留规则见 [R56 按键说明](UI_R56_axis_keys.md)。保留 Run 整体居中与首页原 12px 字形行高，见 [R55 对齐修复](UI_R55_alignment.md)，以及 [R54 第一批界面调整](UI_R54_first_batch.md)。控制算法保留 R53。
+当前固件 **UI-R59-STOP** 接入 KEY1 全局停止：任意页面下中断关闭 M1/M2 输出，取消对齐、HSO 和主从；松开稳定 30 ms 后仍需手动重新启动。KEY1 不再由 UI 初始化或扫描。操作及验证见 [KEY1 全局停止](KEY1_global_stop.md)。
+
+此前 **UI-R58-IBUS** 已接入 M1 母线硬件过流保护。Settings → M1 Protection 调门限（默认 3000 mA，500～4000 mA、步长 100 mA）及确认清除故障；Status → ADC 可查 DAC 门限、比较器状态和锁存计数。清除后保持输出关闭，上电对齐若被中断需手动重试。工作模式／型号切换保留门限，操作与验证见 [M1 IBUS 硬件保护](M1_IBUS_hardware_protection.md)。
+
+此前 **UI-R57-INFO** 完成 B6／B7／B9：HSO 速度编辑跳过不可启动区、跨方向先确认停机；Status 拆为 Drive／Motion／Encoder／ADC／HSO／System；增加 rpm／deg 辅助显示，控制单位仍为 rad/s／rad。入口与详细规则见 [R57 说明](UI_R57_status_units.md)。长按左／右切轴与 KEY1 保留规则见 [R56 按键说明](UI_R56_axis_keys.md)。保留 Run 整体居中与首页原 12px 字形行高，见 [R55 对齐修复](UI_R55_alignment.md)，以及 [R54 第一批界面调整](UI_R54_first_batch.md)。控制算法保留 R53。
 
 R53 在有效 PWM 高平台上对齐三相电压的采样时间，针对 12 V 可接管、20 V 失败时随母线放大的共模错位误差；保留 R52 偏置估计、R51 固定相位窗口及 dq 交接。Status 的 H Off mV（最大绝对补偿分量）、H Lim mV（单轴上限），和 H Reject、H Reset、H R Deg、H R Hz、H R EMF%、H R Drift 均可停机后读取，见 [独立无感启动](HSO_sensorless_startup.md)。保留 SPI2 Fault / SPI2 Reset 和共享总线恢复，以及 Save WAIT 与 BUSY/WEL 检查，见 [保存恢复说明](W25Q64_HSO_save_recovery.md)。
 
@@ -38,7 +42,7 @@ R24 增加 `Settings → Motor → 2804 / 4015` 切换 M1 的控制与保护参�
 
 ## 按键
 
-工程 `.ioc` 中 PD8/9/10/11/12/14 均为上拉输入，默认低有效。上、下、左、右、OK 和 KEY2 各占独立键位；KEY1（PD13）保留给后续全局暂停，本版不触发切轴。
+工程 `.ioc` 中 PD8/9/10/11/12/14 均为上拉输入，默认低有效。上、下、左、右、OK 和 KEY2 各占独立键位；KEY1（PD13）上拉、下降沿 EXTI，任意页面全局停止两轴。长按左右切轴保持原规则。
 
 | 场景 | 上/下 | 左/右 | OK | KEY2 |
 | --- | --- | --- | --- | --- |
@@ -111,7 +115,7 @@ UI-R23-LCD 按用户提供的 BOE 屏幕示例将可见区偏移从 26/1 修正�
 
 当前版本增加了 VREFINT 平均与低通滤波，使用测得的 VREF+ 统一换算电流、母线和相电压。Status 新增 VREF（有效估算的电压）、RefState、Ref R/C、RefCnt、RefErr；显示精度不代表测量精度。首个有效平均值完成前不使能电机，参考估计超时锁存 ADC REF。CubeMX 工程和 ADC 初始化均已同步修改，配置、滤波参数与上板核对见 [VREFINT_reference_tracking.md](VREFINT_reference_tracking.md)。
 
-本轮固件在 `About` 首行 `FW` 显示 **UI-R57-INFO**。ENC2 停止/重连见 [Encoder_reconnect_clock_restore.md](Encoder_reconnect_clock_restore.md)，USB 修复见 [USB_CDC_tx_recovery.md](USB_CDC_tx_recovery.md)。HSO 的启动、最低速度、停止和失锁恢复采用 [R44 独立无感规则](HSO_sensorless_startup.md)，不再按编码器实测 45rpm 自动回退。H Gate 为当前校验原因，H Qual 为学习/接管进度和保持异常计数，H Lost 保留上次异常，H Actual 为观测磁链。手动加载过载预算见 [2804_current_limits.md](2804_current_limits.md)。Status → ADC 的 I Trip、IU/IV/IW R/Z 和 ChipRev 见 [current_adc_diagnostics.md](current_adc_diagnostics.md)。
+本轮固件在 `About` 首行 `FW` 显示 **UI-R59-STOP**。ENC2 停止/重连见 [Encoder_reconnect_clock_restore.md](Encoder_reconnect_clock_restore.md)，USB 修复见 [USB_CDC_tx_recovery.md](USB_CDC_tx_recovery.md)。HSO 的启动、最低速度、停止和失锁恢复采用 [R44 独立无感规则](HSO_sensorless_startup.md)，不再按编码器实测 45rpm 自动回退。H Gate 为当前校验原因，H Qual 为学习/接管进度和保持异常计数，H Lost 保留上次异常，H Actual 为观测磁链。手动加载过载预算见 [2804_current_limits.md](2804_current_limits.md)。Status → ADC 的 I Trip、IU/IV/IW R/Z 和 ChipRev 见 [current_adc_diagnostics.md](current_adc_diagnostics.md)。
 
 `Status → Bus` 为 ADC 实测母线电压。`Drive` 显示采样/电流零点的具体状态或锁存故障，编码器在线与对齐另看 Encoder / Aligned。BusRaw 是最新母线原始值，BusCnt / FrameCnt 是规则组样本数 / 完整注入帧数，正常约每秒增加 2000 / 10000；ADC1Err / ADC2Err 显示 HAL 错误码。Enc2 显示第二路 MT6701 的健康状态和原始角度，Enc2Err 为其错误累计值。第二路目前只有诊断采样，没有启用功率输出。
 
@@ -150,4 +154,4 @@ Run 在采样未就绪时显示具体原因并拒绝确认启动；运行中采�
 
 尚未烧录或连接电机验证。实屏帧率、物理按键电平、实际负载下三模式运行和电流环参数需要上板确认；主机模拟不代表这些项目已经验收。
 
-最终构建占用（2026-10-23，UI-R57-INFO）：Debug Flash 121524 B / RAM 22592 B；Release Flash 120784 B / RAM 22496 B。Debug 保留 `-g3`，HSO 算术 -O2 加 LTO，启动、交接辅助与判定/诊断 -Os，定点数学 -O2。紧凑数值解析释放 Flash 后，Debug 余量为 9548 B，详见 [R57 说明](UI_R57_status_units.md)。固件分别为 `build/Debug/FOC_two.elf`、`build/Release/FOC_two.elf` 和各自同目录的 `FOC_two.bin`、`FOC_two.map`。独立 HSO 的启动、磁链估算与接管操作见 [HSO_sensorless_startup.md](HSO_sensorless_startup.md)，两套控制及保护参数见 [Motor_profiles.md](Motor_profiles.md)。
+最终构建占用（2026-10-24，UI-R59-STOP）：Debug Flash 127144 B / RAM 22832 B；Release Flash 126384 B / RAM 22728 B。Debug 保留调试符号，Flash 余量 3928 B。固件仍为 `build/Debug/FOC_two.elf`、`build/Release/FOC_two.elf` 和同目录的 BIN、MAP。KEY1 规则及验证见 [全局停止](KEY1_global_stop.md)；硬件保护见 [M1 IBUS 硬件保护](M1_IBUS_hardware_protection.md)，独立 HSO 见 [HSO_sensorless_startup.md](HSO_sensorless_startup.md)，两套电机参数见 [Motor_profiles.md](Motor_profiles.md)。

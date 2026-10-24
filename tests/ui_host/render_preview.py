@@ -34,6 +34,7 @@ for output_name,names in (
     ("r56-preview", ("run-dual-m2", "run-dual-m2-apply", "run-dual-stopped", "run-speed")),
     ("r57-preview", ("r57-status-menu", "r57-drive", "r57-motion", "r57-hso-limits",
                      "r57-hso-min", "r57-run-rpm", "r57-run-deg", "run-hso-control")),
+    ("r58-preview", ("r58-protection", "r58-ibus-editor", "r58-ibus-tripped", "r58-clear-confirm")),
 ):
     sheet = Image.new("RGB", (1280, 344*((len(names)+1)//2)), (20,20,20))
     painter = ImageDraw.Draw(sheet)
@@ -42,4 +43,4 @@ for output_name,names in (
         sheet.paste(Image.open(root/(name+".png")), (x,y+24))
         painter.text((x+8,y+5), name, fill="white")
     sheet.save(root/(output_name+".png"))
-print("Rendered home animations and R54/R55/R56/R57 settings/Run framebuffer previews.")
+print("Rendered home animations and R54-R58 settings/Run framebuffer previews.")

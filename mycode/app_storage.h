@@ -32,6 +32,17 @@ static inline uint32_t AppSettings_EncodePositionSpeed(uint32_t speed)
 #define APP_FLAG_MOTOR_4015 (1UL << 24)
 /* Spare v3 control_config bit; old records select M1 without migration. */
 #define APP_CONFIG_FOCUS_M2 (1UL << 5)
+/* v3 spare bits: 100mA units, zero/invalid legacy values use 3.0A. */
+#define APP_CONFIG_IBUS_SHIFT 8U
+#define APP_CONFIG_IBUS_MASK (63UL << APP_CONFIG_IBUS_SHIFT)
+#define APP_IBUS_MIN_MA 500U
+#define APP_IBUS_MAX_MA 4000U
+#define APP_IBUS_DEFAULT_MA 3000U
+static inline uint16_t AppSettings_GetIbusLimit(uint32_t config)
+{
+    unsigned ma=((config & APP_CONFIG_IBUS_MASK)>>APP_CONFIG_IBUS_SHIFT)*100U;
+    return ma>=APP_IBUS_MIN_MA && ma<=APP_IBUS_MAX_MA ? (uint16_t)ma : APP_IBUS_DEFAULT_MA;
+}
 
 typedef struct {
     uint32_t magic;
@@ -46,7 +57,7 @@ typedef struct {
     int32_t speed_step_x10;       /* 1..100: 0.1..10.0 rad/s */
     int32_t torque_step_x100;     /* 1..100: 0.01..1.00 V or A */
     int32_t position_step_x100;   /* 1..100: 0.01..1.00 rad */
-    uint32_t control_config;     /* work[2:0], HSO[3], M2 4015[4], independent focus M2[5] */
+    uint32_t control_config;     /* work[2:0], HSO[3], M2 model[4], focus[5], IBUS 100mA[13:8] */
     int32_t gear_ratio_x100;     /* Signed mechanical follower ratio; default 100. */
     int32_t gear_offset_x100;    /* Relative position offset, 0.01 rad. */
     uint32_t axis2_flags;        /* Current loop and per-axis speed limits. */

@@ -31,13 +31,14 @@ enum {
     EVT_MOTOR_2804_CONFIRMED,
     EVT_MOTOR_4015_CONFIRMED,
     EVT_FOCUS_M1, EVT_FOCUS_M2, EVT_FEEDBACK, EVT_GEAR, EVT_ALIGN, EVT_SAVE_STATUS,
+    EVT_IBUS_LIMIT, EVT_IBUS_CLEAR, EVT_IBUS_STATUS,
     EVT_WORK_BASE=32,
 };
 
 /* ---------- 设置菜单下标 ---------- */
-enum { INT_LED_BRIGHT, INT_POSITION_SPEED, INT_SPEED_LIMIT, INT_GEAR_RATIO, INT_GEAR_OFFSET };
+enum { INT_LED_BRIGHT, INT_POSITION_SPEED, INT_SPEED_LIMIT, INT_GEAR_RATIO, INT_GEAR_OFFSET, INT_IBUS_LIMIT };
 enum { BOOL_CURRENT_LOOP, BOOL_LED, BOOL_HSO };
-enum { CONFIRM_RESET, CONFIRM_MOTOR_2804, CONFIRM_MOTOR_4015 };
+enum { CONFIRM_RESET, CONFIRM_MOTOR_2804, CONFIRM_MOTOR_4015, CONFIRM_IBUS_CLEAR };
 
 /* ---------- 设置变量 ---------- */
 static int32_t s_led_brightness;
@@ -46,7 +47,11 @@ static bool s_led_enable;
 static bool s_hso_choice;
 static int32_t s_ratio_x100=100,s_offset_x100;
 static uint8_t system_states[2];
-static uint8_t settings_states[3]={[2]=KK_UI_ITEM_DISABLED};
+static uint8_t settings_states[3]={[2]=KK_UI_ITEM_DISABLED<<2U};
+static uint8_t protection_states[1]={[0]=KK_UI_ITEM_DISABLED<<4U};
+static int32_t s_ibus_limit_ma;
+static char s_txt_ibus_state[24],s_txt_ibus_limit[24],s_txt_ibus_voltage[24];
+static char s_txt_ibus_code[16],s_txt_ibus_trips[16],s_txt_ibus_pin[8];
 /* 下标与 JerryFOC_ControlMode 对应：Torque、Speed、Position。 */
 static int32_t s_step_drafts[3];
 static uint8_t s_step_selected;
@@ -58,6 +63,7 @@ static uint32_t s_last_live_at;
  * performs the short action first. The press itself is debounced by KK_UI. */
 static uint8_t s_run_lr_key;
 static bool s_run_lr_releasing;
+static bool s_global_stop_seen;
 static uint32_t s_run_lr_pressed_at,s_run_lr_released_at;
 
 /* ---------- 动态文本 ---------- */
@@ -466,6 +472,13 @@ static void refresh_texts(void)
 
     MotorSamplingDiagnostics adc;
     MotorSampling_GetAxisDiagnostics(s_view_axis,&adc);
+    s_ibus_limit_ma=MotorSampling_GetIbusLimit();
+    fmt_unit(s_txt_ibus_limit,s_ibus_limit_ma/100,10,"A");
+    fmt_unit(s_txt_ibus_voltage,to_x100(adc.ibus_threshold_v),100,"V");
+    fmt_counter(s_txt_ibus_code,adc.ibus_dac_code);
+    fmt_counter(s_txt_ibus_trips,adc.ibus_trips);
+    strcpy(s_txt_ibus_pin,adc.ibus_high ? "HIGH" : "LOW");
+    strcpy(s_txt_ibus_state,adc.ibus_latched ? "IBUS: TRIPPED" : adc.ibus_ready ? "IBUS: READY" : "IBUS: NOT READY");
     unsigned reference_mv = (unsigned)(adc.reference_voltage * 1000.0f + 0.5f);
     if (adc.reference_updates != 0U)
         snprintf(s_txt_reference, sizeof(s_txt_reference), "%u.%03u V",
@@ -522,6 +535,7 @@ static const KK_UI_MenuItem settings_items[] = {
     {"Pos Speed",  KK_UI_MENU_INT,    INT_POSITION_SPEED},
     {"Speed Limit", KK_UI_MENU_INT,   INT_SPEED_LIMIT},
     {"Run Steps",  KK_UI_MENU_PAGE, UI_PAGE_RUN_STEPS},
+    {"M1 Protection",KK_UI_MENU_PAGE,UI_PAGE_PROTECTION},
     {"Motor",      KK_UI_MENU_PAGE, UI_PAGE_MOTOR},
     {"Status LED", KK_UI_MENU_BOOL, BOOL_LED},
     {"LED Bright", KK_UI_MENU_INT, INT_LED_BRIGHT},
@@ -563,6 +577,11 @@ static const KK_UI_MenuItem status_items[] = {
     {s_txt_axes[0],KK_UI_MENU_ACTION,EVT_FOCUS_M1},
     {s_txt_axes[1],KK_UI_MENU_ACTION,EVT_FOCUS_M2},
 };
+static const KK_UI_MenuItem protection_items[] = {
+    {"IBUS Trip",KK_UI_MENU_INT,INT_IBUS_LIMIT},
+    {"Clear IBUS Trip",KK_UI_MENU_CONFIRM,CONFIRM_IBUS_CLEAR},
+    {s_txt_ibus_state,KK_UI_MENU_ACTION,EVT_IBUS_STATUS},
+};
 
 static const KK_UI_MenuPage menu_pages[] = {
     {s_txt_settings, settings_items, settings_states,
@@ -572,6 +591,7 @@ static const KK_UI_MenuPage menu_pages[] = {
     {"System", system_items, system_states, sizeof(system_items)/sizeof(system_items[0])},
     {"Work Mode", work_items, NULL, sizeof(work_items)/sizeof(work_items[0])},
     {s_txt_status,status_items,NULL,sizeof(status_items)/sizeof(status_items[0])},
+    {"M1 Protection",protection_items,protection_states,sizeof(protection_items)/sizeof(protection_items[0])},
 };
 
 static const KK_UI_InfoRow drive_rows[] = {
@@ -626,6 +646,9 @@ static const KK_UI_InfoRow encoder_rows[] = {
 };
 
 static const KK_UI_InfoRow adc_rows[] = {
+    {"M1 IBUS",s_txt_ibus_state},
+    {"IBUS Limit",s_txt_ibus_limit}, {"IBUS DAC",s_txt_ibus_code},
+    {"IBUS Thresh",s_txt_ibus_voltage}, {"IBUS Trips",s_txt_ibus_trips}, {"COMP4",s_txt_ibus_pin},
     {"I Trip",  s_txt_current_trip},
     {"IU R/Z",  s_txt_current_adc[0]},
     {"IV R/Z",  s_txt_current_adc[1]},
@@ -678,7 +701,7 @@ static const KK_UI_InfoRow diagnostics_rows[] = {
 };
 
 static const KK_UI_InfoRow about_rows[] = {
-    {"FW",      "UI-R57-INFO"},
+    {"FW",      "UI-R59-STOP"},
     {"MCU",     "STM32G431"},
     {"Motor",   s_txt_motor},
     {"Control", "10kHz FOC"},
@@ -716,9 +739,11 @@ static const KK_UI_PageRoute routes[] = {
     {KK_UI_PAGE_INFO,   4U},
     {KK_UI_PAGE_INFO,   5U},
     {KK_UI_PAGE_INFO,   6U},
+    {KK_UI_PAGE_MENU,   5U},
 };
 
 static KK_UI_IntBinding int_bindings[] = {
+    [INT_IBUS_LIMIT] = {"M1 IBUS Trip",&s_ibus_limit_ma,APP_IBUS_MIN_MA,APP_IBUS_MAX_MA,100U,"mA",EVT_IBUS_LIMIT},
     [INT_GEAR_RATIO] = {"Gear Ratio", &s_ratio_x100,-1000,1000,1U,"%",EVT_GEAR},
     [INT_GEAR_OFFSET] = {"Gear Offset", &s_offset_x100,-6283,6283,5U,"0.01rad",EVT_GEAR},
     [INT_LED_BRIGHT] = {"LED Brightness", &s_led_brightness, 0, 100, 5U, "%", EVT_LED_CHANGED},
@@ -733,6 +758,7 @@ static KK_UI_BoolBinding bool_bindings[] = {
 };
 
 static const KK_UI_ConfirmDesc confirm_descs[] = {
+    [CONFIRM_IBUS_CLEAR] = {"Clear M1 IBUS?\nOutput stays OFF",EVT_IBUS_CLEAR,0U},
     [CONFIRM_RESET] = {"Reset all\nsettings?", EVT_RESET_CONFIRMED, EVT_RESET_CANCELLED},
     [CONFIRM_MOTOR_2804] = {"Use 2804?\nStop and align", EVT_MOTOR_2804_CONFIRMED, 0U},
     [CONFIRM_MOTOR_4015] = {"Use 4015?\nStop and align", EVT_MOTOR_4015_CONFIRMED, 0U},
@@ -991,6 +1017,7 @@ const KK_UI_App *ui_app_get(void)
 
 void ui_app_reset(uint32_t now_ms)
 {
+    s_global_stop_seen=false;
     clear_run_stop();
     AppStorage_Load();
     for (unsigned a=0;a<2;++a) {
@@ -1038,6 +1065,19 @@ void ui_app_note_display_error(void)
 void ui_app_update(uint32_t now_ms)
 {
     static uint8_t s_last_healthy = 0xFFU;
+    bool global_stop=MotorSampling_IsGlobalStopped();
+    if (global_stop) {
+        bool notify=!s_global_stop_seen || s_run_active || views[0].run_active || views[1].run_active;
+        s_run_active=views[0].run_active=views[1].run_active=false;
+        if (notify) {
+            s_run_lr_key=0U;
+            strcpy(s_txt_run_stop,"GLOBAL STOP");
+            strcpy(s_txt_stop_age,"--"); strcpy(s_txt_stop_errors,"--");
+            s_pending_toast="GLOBAL STOP";
+            refresh_texts(); KK_UI_Invalidate();
+        }
+    }
+    s_global_stop_seen=global_stop;
     if (MotorControl_GetFocus()!=s_view_axis) focus_axis(MotorControl_GetFocus());
     service_run_lr(now_ms);
     if (MotorControl_IsHandFollow() && KK_UI_GetCurrentPage()==UI_PAGE_RUN && MotorControl_IsPassive(s_view_axis))
@@ -1063,6 +1103,13 @@ void ui_app_update(uint32_t now_ms)
     KK_UI_ItemState loop_state=s_view_axis==MOTOR_AXIS_1 && MotorControl_HsoAllowed() ? KK_UI_ITEM_DISABLED : KK_UI_ITEM_NORMAL;
     if (((settings_states[0]>>2U) & 3U)!=(unsigned)loop_state)
         (void)KK_UI_SetMenuItemState(UI_PAGE_SETTINGS,1U,loop_state);
+    MotorSamplingDiagnostics ibus;
+    MotorSampling_GetAxisDiagnostics(MOTOR_AXIS_1,&ibus);
+    KK_UI_ItemState ibus_states[]={MotorSampling_IsAxisOutputRequested(MOTOR_AXIS_1) ? KK_UI_ITEM_DISABLED : KK_UI_ITEM_NORMAL,
+        ibus.ibus_latched ? KK_UI_ITEM_NORMAL : KK_UI_ITEM_DISABLED};
+    for (unsigned i=0;i<2;++i)
+        if (((protection_states[0]>>(2U*i)) & 3U)!=(unsigned)ibus_states[i])
+            (void)KK_UI_SetMenuItemState(UI_PAGE_PROTECTION,(uint16_t)i,ibus_states[i]);
     bool save_ok;
     if (AppStorage_PollSaveResult(&save_ok))
         s_pending_toast = save_ok ? "Saved" : AppStorage_SaveErrorText();
@@ -1141,6 +1188,25 @@ void ui_app_process_events(void)
             continue;
         }
         switch (evt) {
+        case EVT_IBUS_LIMIT:
+            if (MotorSampling_SetIbusLimit((uint16_t)s_ibus_limit_ma)) {
+                AppSettings *st=AppStorage_Get();
+                st->control_config=(st->control_config & ~APP_CONFIG_IBUS_MASK) |
+                    ((uint32_t)(s_ibus_limit_ma/100)<<APP_CONFIG_IBUS_SHIFT);
+                mark_settings_dirty(HAL_GetTick()); s_pending_toast="IBUS limit applied";
+            } else s_pending_toast="Stop M1 / check IBUS";
+            refresh_texts(); KK_UI_Invalidate(); break;
+        case EVT_IBUS_CLEAR:
+            MotorControl_Stop(MOTOR_AXIS_1);
+            if (MotorControl_IsCoupled()) s_run_active=views[0].run_active=views[1].run_active=false;
+            else if (s_view_axis==MOTOR_AXIS_1) s_run_active=false;
+            else views[0].run_active=false;
+            if (MotorSampling_ClearIbusTrip()) {
+                if (MotorControl_HsoAllowed() && JerryFOC_hasHSOFault()) (void)JerryFOC_useHSO(0U);
+                if (s_view_axis==MOTOR_AXIS_1 || MotorControl_IsCoupled()) clear_run_stop();
+                s_pending_toast="IBUS cleared";
+            } else s_pending_toast="Wait / check IBUS";
+            refresh_texts(); KK_UI_Invalidate(); break;
         case EVT_FOCUS_M1: case EVT_FOCUS_M2:
             focus_axis(evt==EVT_FOCUS_M1 ? MOTOR_AXIS_1 : MOTOR_AXIS_2);
             s_pending_toast=s_view_axis==MOTOR_AXIS_1 ? "Axis M1" : "Axis M2";
@@ -1209,6 +1275,7 @@ void ui_app_process_events(void)
                 s_pending_toast="Stop/check encoder"; break;
             }
             clear_run_stop(); AppStorage_ResetDefaults();
+            (void)MotorSampling_SetIbusLimit(APP_IBUS_DEFAULT_MA);
             for (unsigned a=0;a<2;++a) {
                 s_view_axis=(MotorAxis)a; sync_from_storage();
                 s_run_speed_x10=s_speed_x10; s_run_voltage_x100=s_voltage_x100;

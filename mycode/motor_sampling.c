@@ -3,6 +3,9 @@
 #include <string.h>
 #include "adc.h"
 #include "tim.h"
+#include "comp.h"
+#include "dac.h"
+#include "app_storage.h"
 #include "motor_params.h"
 #include <math.h>
 
@@ -60,6 +63,168 @@ static uint8_t s_trip_phase[2];
 static bool s_zero_fault[2];
 #define s_fault_during_zero s_zero_fault[0]
 static uint8_t s_bus_divider;
+static uint16_t s_ibus_limit_ma=APP_IBUS_DEFAULT_MA,s_ibus_dac_code;
+static volatile bool s_ibus_started,s_ibus_latched,s_ibus_init_failed,s_ibus_ref_valid;
+static volatile uint32_t s_ibus_trips;
+static uint32_t s_ibus_reference_updates,s_ibus_low_at,s_ibus_changed_at;
+static bool s_ibus_low_tracking;
+static volatile bool s_global_stopped,s_global_stop_pending,s_key_releasing;
+static uint32_t s_key_released_at;
+
+void MotorSampling_GlobalStopIRQ(void)
+{
+    uint32_t mask=__get_PRIMASK(); __disable_irq();
+    s_global_stopped=s_global_stop_pending=true;
+    s_key_releasing=false;
+    /* EXTI is enabled before MX_TIMx_Init: handles can still be NULL. Keep
+     * counters/CH4 alive once initialized, so ADC/diagnostics keep running. */
+    TIM_HandleTypeDef *timers[]={&htim1,&htim8};
+    for (unsigned a=0;a<MOTOR_AXIS_COUNT;++a) {
+        if (timers[a]->Instance) {
+            __HAL_TIM_MOE_DISABLE_UNCONDITIONALLY(timers[a]);
+            CLEAR_BIT(timers[a]->Instance->CCER,PHASE_CHANNELS);
+        }
+        s_requested[a]=false; s_arm_frames[a]=0U;
+    }
+    __set_PRIMASK(mask);
+}
+
+void HAL_GPIO_EXTI_Callback(uint16_t pin)
+{
+    if (pin==KEY1_Pin) MotorSampling_GlobalStopIRQ();
+}
+
+bool MotorSampling_IsGlobalStopped(void)
+{
+    /* Read the pending edge too: a short press can finish while interrupts
+     * are masked. Never let a later MOE/CCER write overtake that event. */
+    if ((HAL_GPIO_ReadPin(KEY1_GPIO_Port,KEY1_Pin)==GPIO_PIN_RESET ||
+        __HAL_GPIO_EXTI_GET_IT(KEY1_Pin)) && (!s_global_stopped || s_key_releasing))
+        MotorSampling_GlobalStopIRQ();
+    return s_global_stopped;
+}
+
+bool MotorSampling_TakeGlobalStop(void)
+{
+    uint32_t mask=__get_PRIMASK(); __disable_irq();
+    (void)MotorSampling_IsGlobalStopped();
+    bool pending=s_global_stop_pending;
+    s_global_stop_pending=false;
+    __set_PRIMASK(mask);
+    return pending;
+}
+
+bool MotorSampling_ResumeGlobalStop(void)
+{
+    uint32_t mask=__get_PRIMASK(); __disable_irq();
+    bool ok=!MotorSampling_IsGlobalStopped();
+    if (!ok && !s_global_stop_pending && s_key_releasing &&
+        HAL_GetTick()-s_key_released_at>=30U) {
+        s_global_stopped=false; ok=true;
+    }
+    __set_PRIMASK(mask);
+    return ok;
+}
+
+static void global_stop_service(void)
+{
+    uint32_t mask=__get_PRIMASK(); __disable_irq();
+    if (MotorSampling_IsGlobalStopped() && !s_key_releasing &&
+        HAL_GPIO_ReadPin(KEY1_GPIO_Port,KEY1_Pin)==GPIO_PIN_SET &&
+        !__HAL_GPIO_EXTI_GET_IT(KEY1_Pin)) {
+        s_key_released_at=HAL_GetTick(); s_key_releasing=true;
+    }
+    __set_PRIMASK(mask);
+}
+
+static void ibus_latch(void)
+{
+    uint32_t mask=__get_PRIMASK(); __disable_irq();
+    __HAL_TIM_MOE_DISABLE_UNCONDITIONALLY(&htim1);
+    __HAL_TIM_DISABLE_IT(&htim1,TIM_IT_BREAK); /* Sustained high must not cause an IRQ storm. */
+    CLEAR_BIT(htim1.Instance->CCER,PHASE_CHANNELS);
+    s_requested[0]=false; s_arm_frames[0]=0;
+    if (!s_ibus_latched) { ++s_ibus_trips; s_ibus_low_tracking=false; }
+    s_ibus_latched=true;
+    if (s_axis_fault[0]==MOTOR_SAMPLE_FAULT_NONE) s_axis_fault[0]=MOTOR_SAMPLE_FAULT_IBUS;
+    __set_PRIMASK(mask);
+}
+
+/* BIF is a sticky hardware event, including a pulse that has already ended.
+ * Poll at every software output gate as well as in the Break callback: ADC
+ * and BRK share priority 0, so the ADC ISR may run before the BRK handler. */
+static void ibus_poll(void)
+{
+    if (s_ibus_started && __HAL_TIM_GET_FLAG(&htim1,TIM_FLAG_BREAK)) ibus_latch();
+}
+
+void HAL_TIMEx_BreakCallback(TIM_HandleTypeDef *htim)
+{
+    if (htim->Instance==htim1.Instance) ibus_latch(); /* HAL already cleared BIF. */
+}
+
+static bool ibus_write_threshold(float reference)
+{
+    float threshold=reference*0.5f+(float)s_ibus_limit_ma*0.00025f;
+    if (!isfinite(reference) || reference<REFERENCE_MIN_VOLTS || reference>REFERENCE_MAX_VOLTS ||
+        threshold>reference-0.25f) return false;
+    uint16_t code=(uint16_t)(4096.0f*threshold/reference+0.5f);
+    if (HAL_DAC_SetValue(&hdac3,DAC_CHANNEL_2,DAC_ALIGN_12B_R,code)!=HAL_OK) return false;
+    s_ibus_dac_code=code;
+    return true;
+}
+
+static void ibus_init(void)
+{
+    if (s_ibus_started || s_ibus_init_failed) return;
+    /* All six phase outputs are disconnected by Start before reaching here.
+     * Load a positive threshold before starting the comparator. */
+    if (!ibus_write_threshold(REFERENCE_START_VOLTS) ||
+        HAL_DAC_Start(&hdac3,DAC_CHANNEL_2)!=HAL_OK) goto failed;
+    HAL_Delay(1U); /* Startup only, before ADC/TIM acquisition. */
+    __HAL_TIM_DISABLE_IT(&htim1,TIM_IT_BREAK);
+    if (HAL_COMP_Start(&hcomp4)!=HAL_OK) goto failed;
+    /* HAL waits for the comparator's specified startup delay. Its output
+     * before that point is not a qualified current indication. All power
+     * CCER bits/MOE are still OFF, so discard only this startup flag. */
+    s_ibus_started=true;
+    if (HAL_COMP_GetOutputLevel(&hcomp4)==COMP_OUTPUT_LEVEL_HIGH) ibus_latch();
+    else {
+        __HAL_TIM_CLEAR_FLAG(&htim1,TIM_FLAG_BREAK);
+        __HAL_TIM_ENABLE_IT(&htim1,TIM_IT_BREAK);
+    }
+    ibus_poll();
+    return;
+failed:
+    s_ibus_init_failed=true;
+    __HAL_TIM_DISABLE_IT(&htim1,TIM_IT_BREAK);
+    __HAL_TIM_MOE_DISABLE_UNCONDITIONALLY(&htim1);
+    s_requested[0]=false; s_arm_frames[0]=0;
+    if (s_axis_fault[0]==MOTOR_SAMPLE_FAULT_NONE) s_axis_fault[0]=MOTOR_SAMPLE_FAULT_IBUS_INIT;
+}
+
+uint16_t MotorSampling_GetIbusLimit(void) { return s_ibus_limit_ma; }
+bool MotorSampling_IsIbusTripped(void) { ibus_poll(); return s_ibus_latched; }
+bool MotorSampling_SetIbusLimit(uint16_t ma)
+{
+    if (ma<APP_IBUS_MIN_MA || ma>APP_IBUS_MAX_MA || ma%100U) return false;
+    uint32_t mask=__get_PRIMASK(); __disable_irq();
+    bool ok=(!s_requested[0] || (!s_running && !s_ibus_started)) &&
+        !(htim1.Instance->CCER & PHASE_CHANNELS) && !s_ibus_init_failed;
+    if (ok) {
+        uint16_t previous=s_ibus_limit_ma;
+        s_ibus_limit_ma=ma;
+        s_ibus_low_tracking=false; s_ibus_ref_valid=false; s_ibus_changed_at=HAL_GetTick();
+        if (s_ibus_started && !ibus_write_threshold(s_adc_volts*ADC_FULL_SCALE)) {
+            s_ibus_limit_ma=previous; s_ibus_init_failed=true;
+            if (s_axis_fault[0]==MOTOR_SAMPLE_FAULT_NONE) s_axis_fault[0]=MOTOR_SAMPLE_FAULT_IBUS_INIT;
+            ok=false;
+        }
+        ibus_poll();
+    }
+    __set_PRIMASK(mask);
+    return ok;
+}
 
 static void trigger_bus_after_injected(void)
 {
@@ -138,9 +303,88 @@ static bool reference_fresh(void)
     return valid && HAL_GetTick() - at <= REFERENCE_TIMEOUT_MS;
 }
 
+static void ibus_service(void)
+{
+    ibus_poll();
+    if (!s_ibus_started || s_ibus_init_failed) return;
+    if (reference_fresh() && (!s_ibus_ref_valid || s_ibus_reference_updates!=s_reference_updates)) {
+        uint32_t mask=__get_PRIMASK(); __disable_irq();
+        if (ibus_write_threshold(s_adc_volts*ADC_FULL_SCALE)) {
+            s_ibus_reference_updates=s_reference_updates;
+            s_ibus_ref_valid=HAL_GetTick()-s_ibus_changed_at>=2U;
+        } else {
+            s_ibus_init_failed=true;
+            CLEAR_BIT(htim1.Instance->CCER,PHASE_CHANNELS);
+            s_requested[0]=false; s_arm_frames[0]=0;
+            if (s_axis_fault[0]==MOTOR_SAMPLE_FAULT_NONE) s_axis_fault[0]=MOTOR_SAMPLE_FAULT_IBUS_INIT;
+        }
+        ibus_poll();
+        __set_PRIMASK(mask);
+    }
+    bool pulse=__HAL_TIM_GET_FLAG(&htim1,TIM_FLAG_BREAK)!=0U;
+    if (s_ibus_latched && pulse) {
+        /* Acknowledge pulses only AFTER latching/disconnecting. This does
+         * not clear the software fault or re-enable MOE/Break interrupts. */
+        __HAL_TIM_CLEAR_FLAG(&htim1,TIM_FLAG_BREAK);
+        s_ibus_low_tracking=false;
+    }
+    if (HAL_COMP_GetOutputLevel(&hcomp4)==COMP_OUTPUT_LEVEL_HIGH) {
+        ibus_latch(); s_ibus_low_tracking=false;
+    } else if (!s_ibus_low_tracking) {
+        s_ibus_low_at=HAL_GetTick(); s_ibus_low_tracking=true;
+    }
+}
+
+bool MotorSampling_ClearIbusTrip(void)
+{
+    uint32_t mask=__get_PRIMASK(); __disable_irq();
+    bool ok=s_ibus_latched && s_ibus_started && !s_ibus_init_failed && s_ibus_ref_valid &&
+        !s_requested[0] && !(htim1.Instance->CCER & PHASE_CHANNELS) &&
+        s_fault==MOTOR_SAMPLE_FAULT_NONE && s_axis_fault[0]==MOTOR_SAMPLE_FAULT_IBUS &&
+        s_running && reference_fresh() && frame_fresh() && bus_fresh() && s_bus_valid &&
+        s_ibus_low_tracking && HAL_GetTick()-s_ibus_low_at>=100U &&
+        !__HAL_TIM_GET_FLAG(&htim1,TIM_FLAG_BREAK) &&
+        HAL_COMP_GetOutputLevel(&hcomp4)==COMP_OUTPUT_LEVEL_LOW;
+    if (ok) {
+        /* Service acknowledged older pulses while the output was OFF.
+         * Never clear BIF here: a NEW pulse arriving after the quiet check
+         * must remain pending and immediately re-latch the protection. */
+        s_ibus_latched=false; s_axis_fault[0]=MOTOR_SAMPLE_FAULT_NONE;
+        __HAL_TIM_ENABLE_IT(&htim1,TIM_IT_BREAK);
+        /* Leave MOE, CCER, requests and preload countdown OFF. Only a new
+         * explicit control command can arm M1 after this manual clear. */
+        ibus_poll();
+        ok=!s_ibus_latched;
+    }
+    __set_PRIMASK(mask);
+    return ok;
+}
+
+/* MOE is written while all power channels are disconnected, then BIF is
+ * checked AGAIN before enabling CCER. A pulse between the first check and
+ * the MOE write therefore cannot energize a phase. A later pulse clears MOE
+ * in hardware, with no subsequent MOE write in this transaction. */
+static void arm_axis(MotorAxis axis)
+{
+    if (MotorSampling_IsGlobalStopped()) return;
+    if (axis==MOTOR_AXIS_1) {
+        ibus_poll();
+        if (!s_ibus_started || !s_ibus_ref_valid || s_ibus_latched || s_ibus_init_failed) return;
+    }
+    if (!s_requested[axis] || s_fault!=MOTOR_SAMPLE_FAULT_NONE ||
+        s_axis_fault[axis]!=MOTOR_SAMPLE_FAULT_NONE) return;
+    CLEAR_BIT(axis_timer(axis)->Instance->CCER,PHASE_CHANNELS);
+    __HAL_TIM_MOE_ENABLE(axis_timer(axis));
+    if (axis==MOTOR_AXIS_1) ibus_poll();
+    if (!MotorSampling_IsGlobalStopped() && s_requested[axis] && s_axis_fault[axis]==MOTOR_SAMPLE_FAULT_NONE)
+        SET_BIT(axis_timer(axis)->Instance->CCER,PHASE_CHANNELS);
+}
+
 bool MotorSampling_IsAxisReady(MotorAxis axis)
 {
+    ibus_poll();
     return (unsigned)axis < MOTOR_AXIS_COUNT && s_running && s_power_enabled &&
+           (axis!=MOTOR_AXIS_1 || (s_ibus_started && s_ibus_ref_valid && !s_ibus_latched && !s_ibus_init_failed)) &&
            s_fault == MOTOR_SAMPLE_FAULT_NONE && s_axis_fault[axis] == MOTOR_SAMPLE_FAULT_NONE &&
            s_bus_valid && bus_fresh() && frame_fresh() && reference_fresh();
 }
@@ -171,7 +415,7 @@ bool MotorSampling_SetAxisOutputEnabled(MotorAxis axis, bool enable)
         s_arm_frames[axis] = 0U;
         CLEAR_BIT(axis_timer(axis)->Instance->CCER, PHASE_CHANNELS);
         if (axis==MOTOR_AXIS_2) __HAL_TIM_MOE_DISABLE_UNCONDITIONALLY(&htim8);
-    } else if (!MotorSampling_IsAxisReady(axis) || !MotorSampling_IsCalibrated()) {
+    } else if (MotorSampling_IsGlobalStopped() || !MotorSampling_IsAxisReady(axis) || !MotorSampling_IsCalibrated()) {
         ok = false;
     } else if (!s_requested[axis]) {
         s_requested[axis] = true;
@@ -219,6 +463,12 @@ void MotorSampling_GetAxisDiagnostics(MotorAxis axis, MotorSamplingDiagnostics *
     out->reference_cal = s_reference_cal;
     out->reference_updates = s_reference_updates;
     out->reference_errors = s_reference_errors;
+    out->ibus_limit_ma=s_ibus_limit_ma;
+    out->ibus_dac_code=s_ibus_dac_code;
+    out->ibus_trips=s_ibus_trips;
+    out->ibus_latched=s_ibus_latched;
+    out->ibus_ready=s_ibus_started && s_ibus_ref_valid && !s_ibus_init_failed;
+    out->ibus_high=s_ibus_started && HAL_COMP_GetOutputLevel(&hcomp4)==COMP_OUTPUT_LEVEL_HIGH;
     bool reference_valid = s_reference_valid;
     uint32_t reference_at = s_reference_at;
     bool seen = s_bus_seen;
@@ -230,6 +480,8 @@ void MotorSampling_GetAxisDiagnostics(MotorAxis axis, MotorSamplingDiagnostics *
     out->bus_fresh = seen && out->bus_age_ms <= SAMPLE_TIMEOUT_MS;
     out->reference_age_ms = reference_valid ? now - reference_at : UINT32_MAX;
     out->reference_fresh = reference_valid && out->reference_age_ms <= REFERENCE_TIMEOUT_MS;
+    out->ibus_threshold_v=(float)out->ibus_dac_code*out->reference_voltage/4096.0f;
+    out->ibus_ready=out->ibus_ready && out->reference_fresh;
 }
 
 void MotorSampling_GetDiagnostics(MotorSamplingDiagnostics *out)
@@ -266,12 +518,15 @@ const char *MotorSampling_GetAxisStatusText(MotorAxis axis)
     }
     case MOTOR_SAMPLE_FAULT_OVERLOAD:      return "M1 OVERLOAD";
     case MOTOR_SAMPLE_FAULT_REFERENCE:     return "ADC REF";
+    case MOTOR_SAMPLE_FAULT_IBUS:          return "M1 IBUS TRIP";
+    case MOTOR_SAMPLE_FAULT_IBUS_INIT:     return "M1 IBUS INIT";
     default: break;
     }
     if (!s_running) return "STOPPED";
     if (!bus_fresh()) return "WAIT ADC";
     if (!s_bus_valid) return s_bus_raw >= 4095U ? "BUS RANGE" : "WAIT BUS";
     if (!reference_fresh()) return "WAIT VREF";
+    if (axis==MOTOR_AXIS_1 && !s_ibus_ref_valid) return "WAIT IBUS";
     if (!MotorSampling_IsCalibrated()) return "ZERO CAL";
     if (!s_power_enabled) return "BUS SETTLE";
     return "READY";
@@ -373,6 +628,9 @@ bool MotorSampling_Start(void)
     s_running = false;
     s_fault = MOTOR_SAMPLE_FAULT_NONE;
     memset((void *)s_axis_fault, 0, sizeof(s_axis_fault));
+    if (s_ibus_latched) s_axis_fault[0]=MOTOR_SAMPLE_FAULT_IBUS;
+    else if (s_ibus_init_failed) s_axis_fault[0]=MOTOR_SAMPLE_FAULT_IBUS_INIT;
+    s_ibus_ref_valid=false; s_ibus_reference_updates=0;
     memset(s_energy, 0, sizeof(s_energy));
     memset(s_trip_raw, 0, sizeof(s_trip_raw));
     memset(s_trip_phase, 0, sizeof(s_trip_phase));
@@ -432,6 +690,8 @@ bool MotorSampling_Start(void)
     SET_BIT(htim1.Instance->CCER, TIM_CCER_CC4E);
     CLEAR_BIT(htim8.Instance->CCER, PHASE_CHANNELS);
 
+    ibus_init(); /* DAC -> settle -> COMP -> Break, before any PWM request. */
+
     if (s_reference_cal < 1000U || s_reference_cal > 2000U) {
         trip(MOTOR_SAMPLE_FAULT_REFERENCE);
         goto failed;
@@ -455,7 +715,10 @@ bool MotorSampling_Start(void)
     s_started_at = s_frame_at;
     s_running = true;
     HAL_StatusTypeDef status = HAL_TIM_Base_Start(&htim1);
-    if (status == HAL_OK) __HAL_TIM_MOE_ENABLE(&htim1);
+    ibus_poll();
+    if (status == HAL_OK && !MotorSampling_IsGlobalStopped() && !s_ibus_latched && !s_ibus_init_failed)
+        __HAL_TIM_MOE_ENABLE(&htim1);
+    ibus_poll();
     __set_PRIMASK(primask);
     if (status != HAL_OK) goto failed;
     /* TIM8 counts from the master's trigger. M2 power stays disabled until
@@ -470,6 +733,8 @@ failed:
 
 void MotorSampling_Service(void)
 {
+    global_stop_service();
+    ibus_service();
     if (!s_running) return;
     if (!frame_fresh()) trip(MOTOR_SAMPLE_FAULT_FRAME_TIMEOUT);
     if (!bus_fresh() && HAL_GetTick() - s_started_at > SAMPLE_TIMEOUT_MS)
@@ -486,16 +751,16 @@ void MotorSampling_Service(void)
         MotorSampling_IsCalibrated() && frame_fresh() && bus_fresh() &&
         s_bus_valid && s_bus_good_tracking && reference_fresh() &&
         HAL_GetTick() - good_at >= BUS_SETTLE_MS) {
-        if (s_output_requested && s_axis_fault[0] == MOTOR_SAMPLE_FAULT_NONE)
-            SET_BIT(htim1.Instance->CCER, PHASE_CHANNELS);
         s_power_enabled = true;
-        __HAL_TIM_MOE_ENABLE(&htim1);
+        arm_axis(MOTOR_AXIS_1);
     }
     __set_PRIMASK(primask);
 }
 
 bool MotorSampling_Capture(void)
 {
+    (void)MotorSampling_IsGlobalStopped();
+    ibus_poll();
     if (!s_running) return false;
     /* Snapshot BEFORE this callback can arm outputs or FOC can update CCRs.
      * CH4=1 triggers near CNT=0; all three PWM1 high pulses must extend past
@@ -589,8 +854,7 @@ bool MotorSampling_Capture(void)
         if (s_requested[a] && s_power_enabled && s_fault == MOTOR_SAMPLE_FAULT_NONE &&
             s_axis_fault[a] == MOTOR_SAMPLE_FAULT_NONE && s_arm_frames[a] != 0U &&
             --s_arm_frames[a] == 0U) {
-            __HAL_TIM_MOE_ENABLE(axis_timer((MotorAxis)a));
-            SET_BIT(axis_timer((MotorAxis)a)->Instance->CCER, PHASE_CHANNELS);
+            arm_axis((MotorAxis)a);
         }
     }
     for (unsigned i = 0U; i < 3U; ++i)

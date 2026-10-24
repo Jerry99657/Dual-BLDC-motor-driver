@@ -13,6 +13,8 @@ static uint32_t now;
 static AppSettings settings;
 static MT6701_2_Snapshot enc2;
 static bool ready2=true, output2, reserved, flash_owned;
+static bool ibus_trip;
+bool MotorSampling_IsIbusTripped(void) { return ibus_trip; }
 static float hand_position;
 static float hand_angle(void) { return hand_position; }
 uint32_t HAL_GetTick(void) { return now; }
@@ -27,7 +29,7 @@ bool MotorSampling_SetAxisOutputEnabled(MotorAxis axis,bool enabled)
     output2=enabled; return true;
 }
 const char *MotorSampling_GetAxisStatusText(MotorAxis axis)
-{ return (axis==MOTOR_AXIS_1 ? ready : ready2) ? "READY" : "ADC TRIP"; }
+{ return axis==MOTOR_AXIS_1 && ibus_trip ? "M1 IBUS TRIP" : (axis==MOTOR_AXIS_1 ? ready : ready2) ? "READY" : "ADC TRIP"; }
 void MT6701_2_GetSnapshot(MT6701_2_Snapshot *s) { *s=enc2; }
 void MT6701_2_FastService(void) {}
 void MT6701_2_SetRealtime(bool e) { (void)e; }
@@ -47,6 +49,8 @@ static void ms(unsigned n,float delta2)
 }
 static void boot(MotorWorkMode w)
 {
+    global_stopped=global_pending=false; global_released=true;
+    ibus_trip=false;
     MotorControl_StopAll();
     ready=ready2=calibrated=true; healthy=aligned=1;
     encoder_velocity=filtered_velocity_global=hand_position=0;
@@ -444,13 +448,72 @@ static void follow_current_models(bool verify)
 #ifdef MOTOR_HOST_REAL_HSO
 #define main unused_control_main
 #endif
+static void check_global_control_stop(void)
+{
+    for(unsigned w=0;w<MOTOR_WORK_COUNT;++w) {
+        boot((MotorWorkMode)w);
+        bool follow=MotorControl_IsHandFollow();
+        MotorAxis a=w==MOTOR_WORK_SINGLE_M2 ? MOTOR_AXIS_2 : MOTOR_AXIS_1;
+        JerryFOC_ControlMode mode=w==MOTOR_WORK_SYNC_POSITION ? JERRYFOC_MODE_POSITION : JERRYFOC_MODE_VELOCITY;
+        if(follow) assert(MotorControl_StartFollow());
+        else {
+            assert(MotorControl_Command(a,mode,10,30,true));
+            if(w==MOTOR_WORK_INDEPENDENT)
+                assert(MotorControl_Command(MOTOR_AXIS_2,mode,20,30,true));
+        }
+        /* Model the real sampling IRQ tested separately: no controller work. */
+        global_stopped=global_pending=true; global_released=false;
+        output_requested=output2=false;
+        assert(!strcmp(state(MOTOR_AXIS_1).status,"GLOBAL STOP"));
+        assert(!strcmp(state(MOTOR_AXIS_2).status,"GLOBAL STOP"));
+        assert(!MotorControl_RequestAlign(a));
+        MotorControl_Service(now);
+        assert(!output_requested && !output2 && !reserved && !MotorControl_IsGroupActive());
+        assert(!JerryFOC_needsAlignment() && !JerryFOC_isAligning() && !state(MOTOR_AXIS_2).aligning);
+        assert(JerryFOC_Target_Velocity==0 && JerryFOC_Target_Iq==0);
+        assert(state(MOTOR_AXIS_2).target_velocity==0 && state(MOTOR_AXIS_2).target_iq==0);
+        assert(!strcmp(MotorControl_CommandText(),"GLOBAL STOP"));
+        if(follow) assert(!MotorControl_StartFollow());
+        else assert(!MotorControl_Command(a,mode,10,30,true));
+        assert(!MotorControl_RequestAlign(MOTOR_AXIS_1) && !MotorControl_RequestAlign(MOTOR_AXIS_2));
+        command("OpenLoop:10,1"); assert(!output_requested);
+        MotorControl_Service(now);
+        global_released=true;
+        ms(50,0); MotorControl_Service(now);
+        assert(global_stopped && !output_requested && !output2);
+        if(follow) assert(MotorControl_StartFollow());
+        else assert(MotorControl_Command(a,mode,10,30,true));
+        assert(!global_stopped);
+        MotorControl_StopAll();
+    }
+    /* Cancels active and queued alignments, including reconfiguration during stop. */
+    boot(MOTOR_WORK_INDEPENDENT);
+    assert(MotorControl_RequestAlign(MOTOR_AXIS_2)); MotorControl_Service(now);
+    assert(state(MOTOR_AXIS_2).aligning);
+    global_stopped=global_pending=true; global_released=false; output_requested=output2=false;
+    MotorControl_Service(now);
+    assert(!state(MOTOR_AXIS_2).aligning && !JerryFOC_needsAlignment());
+    assert(MotorControl_SelectProfile(MOTOR_AXIS_2,MOTOR_PROFILE_4015));
+    assert(MotorControl_SelectFeedback(false)==false); /* Independent has no feedback selector. */
+    assert(MotorControl_SelectWork(MOTOR_WORK_SINGLE_M1));
+    assert(MotorControl_SelectFeedback(false) && !JerryFOC_needsAlignment());
+    assert(MotorControl_SelectProfile(MOTOR_AXIS_1,MOTOR_PROFILE_4015) && !JerryFOC_needsAlignment());
+    global_released=true; MotorControl_Service(now+4000);
+    assert(!output_requested && !output2 && global_stopped);
+    assert(MotorControl_RequestAlign(MOTOR_AXIS_1)); /* Explicit align is an allowed fresh action. */
+    assert(!global_stopped && JerryFOC_needsAlignment());
+    MotorControl_StopAll();
+    puts("PASS: KEY1 real controllers: every work mode, both-axis cleanup, linked follow cancel, held commands/align/open-loop rejected, release never restarts, explicit run/align, configuration cannot revive pending alignment");
+}
 int main(int argc,char **argv)
 {
     if (argc>1 && !strcmp(argv[1],"follow-model")) { follow_models(false); return 0; }
     if (argc>1 && !strcmp(argv[1],"follow-current")) { follow_current_models(false); return 0; }
+    check_global_control_stop();
     /* The independent view is a v3 spare bit, not a run request. Preserve it
      * across profile/feedback/mode writes and restore only in Independent. */
     boot(MOTOR_WORK_INDEPENDENT);
+    settings.control_config|=27UL<<APP_CONFIG_IBUS_SHIFT;
     assert(MotorControl_GetFocus()==MOTOR_AXIS_1);
     MotorControl_SetFocus(MOTOR_AXIS_2);
     assert(settings.control_config & APP_CONFIG_FOCUS_M2);
@@ -462,6 +525,7 @@ int main(int argc,char **argv)
     assert(MotorControl_SelectWork(MOTOR_WORK_INDEPENDENT));
     assert(MotorControl_GetFocus()==MOTOR_AXIS_2);
     MotorControl_Init();
+    assert(AppSettings_GetIbusLimit(settings.control_config)==2700);
     assert(MotorControl_GetFocus()==MOTOR_AXIS_2 && !output_requested && !output2);
     MotorControl_SetFocus(MOTOR_AXIS_1);
     assert(!(settings.control_config & APP_CONFIG_FOCUS_M2));
@@ -600,6 +664,28 @@ int main(int argc,char **argv)
     /* Fault provenance survives linked coast, a subsequent other-axis loss,
      * recovery, and looking at either axis, including the unpowered master. */
     const MotorWorkMode linked[]={MOTOR_WORK_SYNC_SPEED,MOTOR_WORK_MASTER_M1,MOTOR_WORK_MASTER_M2};
+    for(unsigned w=0;w<3;++w) {
+        boot(linked[w]);
+        assert(w ? MotorControl_StartFollow() : MotorControl_Command(MOTOR_AXIS_1,JERRYFOC_MODE_VELOCITY,1,0,false));
+        ibus_trip=true; ready=false; output_requested=false; /* Hardware M1 shutdown precedes the coordinator. */
+        MotorControl_Fast();
+        assert(!output_requested && !output2 && !MotorControl_IsGroupActive());
+        assert(!strcmp(state(MOTOR_AXIS_1).status,"M1 IBUS TRIP") && !strcmp(state(MOTOR_AXIS_2).status,"M1 IBUS TRIP"));
+        assert(!(w ? MotorControl_StartFollow() : MotorControl_Command(MOTOR_AXIS_1,JERRYFOC_MODE_VELOCITY,1,0,false)));
+        ibus_trip=false; ready=true; ms(2,0);
+        assert(!output_requested && !output2);
+        assert(w ? MotorControl_StartFollow() : MotorControl_Command(MOTOR_AXIS_1,JERRYFOC_MODE_VELOCITY,1,0,false));
+    }
+    puts("PASS: hardware M1 IBUS latch stops/rejects all linked modes including passive master M1, preserves the root fault on both axes and needs explicit restart");
+    boot(MOTOR_WORK_MASTER_M1);
+    assert(MotorControl_RequestAlign(MOTOR_AXIS_2));
+    ibus_trip=true; MotorControl_Service(now); assert(!output2);
+    assert(!MotorControl_RequestAlign(MOTOR_AXIS_2));
+    MotorControl_StopAll(); ibus_trip=false; MotorControl_Service(now); assert(!output2);
+    assert(MotorControl_RequestAlign(MOTOR_AXIS_2));
+    MotorControl_Service(now); assert(state(MOTOR_AXIS_2).aligning && output2);
+    ibus_trip=true; MotorControl_Fast(); assert(!output2 && !state(MOTOR_AXIS_2).aligning);
+    ibus_trip=false; MotorControl_Service(now+3001); assert(!output2); /* Interrupted align is not queued again. */
     for(unsigned w=0;w<3;++w) for(unsigned lost=0;lost<2;++lost) {
         boot(linked[w]);
         assert(w ? MotorControl_StartFollow() : MotorControl_Command(MOTOR_AXIS_1,JERRYFOC_MODE_VELOCITY,1,0,false));

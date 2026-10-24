@@ -6,6 +6,11 @@ typedef enum { HAL_OK, HAL_ERROR, HAL_BUSY, HAL_TIMEOUT } HAL_StatusTypeDef;
 typedef struct { uint32_t pins; } GPIO_TypeDef;
 typedef enum { GPIO_PIN_RESET, GPIO_PIN_SET } GPIO_PinState;
 extern GPIO_TypeDef gpio_a, gpio_b;
+extern GPIO_TypeDef gpio_key;
+extern uint32_t host_exti_pending;
+#define KEY1_GPIO_Port (&gpio_key)
+#define KEY1_Pin (1U << 13)
+#define __HAL_GPIO_EXTI_GET_IT(pin) (host_exti_pending & (pin))
 #define MT6701_CSN_GPIO_Port (&gpio_a)
 #define MT6701_CSN_Pin (1U << 4)
 #define MT6701_CSN2_GPIO_Port (&gpio_b)

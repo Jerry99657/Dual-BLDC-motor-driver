@@ -213,6 +213,8 @@ int main(void)
   MX_DAC3_Init();
   /* USER CODE BEGIN 2 */
   g_boot_stage = 4U;
+  /* Also latch a key held before power-up (there may be no falling edge). */
+  (void)MotorSampling_IsGlobalStopped();
   /* 0. SPI2/SPI3 使用软件 NSS，清除 CubeMX 默认生成的 NSSP 位 */
   CLEAR_BIT(SPI2->CR2, SPI_CR2_NSSP);
   CLEAR_BIT(SPI3->CR2, SPI_CR2_NSSP);
@@ -258,6 +260,7 @@ int main(void)
   /* Acquisition runs even with no motor supply. Service enables M1 only
    * after zero calibration and stable VBUS. M2 power remains disabled. */
   g_boot_stage = 5U;
+  (void)MotorSampling_SetIbusLimit(AppSettings_GetIbusLimit(AppStorage_Get()->control_config));
   if (!MotorSampling_Start()) {
       /* A hardware/HAL startup failure keeps power disabled; 0 V is NOT a
        * startup failure and continues to be measured until VBUS is connected. */
@@ -283,6 +286,13 @@ int main(void)
     /* USER CODE BEGIN 3 */
     uint32_t now = HAL_GetTick();
     MotorSampling_Service();
+    if (MotorSampling_IsGlobalStopped()) {
+        g_need_align=0U; g_aligning=0U;
+    }
+    if (MotorSampling_IsIbusTripped()) {
+        g_need_align=0U; /* A cleared hardware trip must not revive boot alignment. */
+        if (g_aligning) { MotorControl_Stop(MOTOR_AXIS_1); g_aligning=0U; }
+    }
     MT6701_MainService();
     Protocol_Service();
     OLED_DriverService();
@@ -306,7 +316,7 @@ int main(void)
         ui_app_process_events();
     }
 
-    if (MotorControl_MotionAllowed(MOTOR_AXIS_1) &&
+    if (!MotorSampling_IsGlobalStopped() && MotorControl_MotionAllowed(MOTOR_AXIS_1) &&
         !MotorControl_HsoAllowed() &&
         (g_need_align || JerryFOC_needsAlignment()) && !g_aligning &&
         MotorSampling_IsReady() && MotorSampling_IsCalibrated() && MT6701_IsHealthy()) {

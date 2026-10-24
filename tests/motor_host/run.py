@@ -23,8 +23,12 @@ for name, sources in {
         sources += ["tests/motor_host/control_stub.c"]
     command = [compiler, "-std=c11", "-Wall", "-Wextra", "-Werror", "-O1",
                "-Itests/motor_host", "-Imycode", "-IThirdParty/ST_HSO", *sources, "-lm", "-o", str(out / (name + ".exe"))]
+    if name=="sampling": command.insert(1,"-DMOTOR_SAMPLING_HOST_HOOKS")
     subprocess.run(command, cwd=repo, check=True)
     subprocess.run([str(out / (name + ".exe"))], cwd=repo, check=True)
+    if name=="sampling":
+        for scenario in ("ibus", "ibus-wrap", "ibus-shared", "ibus-dac-set", "ibus-dac-start", "ibus-comp-start", "ibus-runtime", "ibus-high-start", "ibus-startup-pulse", "global", "global-wrap"):
+            subprocess.run([str(out / "sampling.exe"),scenario],cwd=repo,check=True)
     if name == "encoder":
         for scenario in ("missing", "timeout", "missing-wrap", "m1-recovery", "m2-recovery", "required-retry", "required-retry-wrap", "zero-m1", "zero-m2", "zero-poll", "hso-save", "busy-admission"):
             subprocess.run([str(out / "encoder.exe"), scenario], cwd=repo, check=True)

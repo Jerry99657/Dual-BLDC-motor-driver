@@ -22,6 +22,7 @@ enum {
     UI_PAGE_ADC,
     UI_PAGE_HSO,
     UI_PAGE_DIAGNOSTICS,
+    UI_PAGE_PROTECTION,
 };
 
 const KK_UI_App *ui_app_get(void);

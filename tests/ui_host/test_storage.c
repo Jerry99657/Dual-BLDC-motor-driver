@@ -168,11 +168,14 @@ int main(void) {
     assert((migrated->flags & APP_FLAG_MOTOR_4015) && migrated->torque_step_x100==9);
     assert(migrated->gear_ratio_x100==100 && migrated->control_config==0);
     assert(migrated->axis2_speed_step_x10==5 && migrated->axis2_speed_x10==0);
-    AppStorage_Get()->control_config=18 | APP_CONFIG_FOCUS_M2; AppStorage_Get()->gear_ratio_x100=-125;
+    assert(AppSettings_GetIbusLimit(migrated->control_config)==APP_IBUS_DEFAULT_MA);
+    assert(AppSettings_GetIbusLimit(63U<<APP_CONFIG_IBUS_SHIFT)==APP_IBUS_DEFAULT_MA);
+    AppStorage_Get()->control_config=18 | APP_CONFIG_FOCUS_M2 | (27UL<<APP_CONFIG_IBUS_SHIFT); AppStorage_Get()->gear_ratio_x100=-125;
     AppStorage_Get()->axis2_speed_x10=432; AppStorage_Get()->axis2_position_step_x100=12;
     assert(AppStorage_RequestSave()); service(80); assert(result());
     assert(AppStorage_Init()); migrated=AppStorage_Get();
-    assert(migrated->control_config==(18 | APP_CONFIG_FOCUS_M2) && migrated->gear_ratio_x100==-125);
+    assert(migrated->control_config==(18 | APP_CONFIG_FOCUS_M2 | (27UL<<APP_CONFIG_IBUS_SHIFT)) && migrated->gear_ratio_x100==-125);
+    assert(AppSettings_GetIbusLimit(migrated->control_config)==2700);
     assert(migrated->axis2_speed_x10==432 && migrated->axis2_position_step_x100==12);
     /* An actual pre-extension v3 record uses only bits[13:8] for Pos Speed. */
     AppSettings legacy3=*migrated;

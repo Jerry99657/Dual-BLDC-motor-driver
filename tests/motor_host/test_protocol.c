@@ -21,6 +21,7 @@ volatile float JerryFOC_Target_Iq, JerryFOC_Target_Position;
 volatile uint8_t g_openloop_debug;
 volatile float g_openloop_angle;
 static bool ready=true, active, fault, usable;
+bool MotorSampling_ResumeGlobalStop(void) { return true; }
 static float velocity=10, target;
 static JerryFOC_ControlMode mode;
 static StHsoConfig config={2.3f,0.00086f,0,25000,0.019f};

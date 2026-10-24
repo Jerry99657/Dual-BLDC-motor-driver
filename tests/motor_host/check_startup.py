@@ -47,7 +47,8 @@ for mode in ("Debug", "Release"):
         assert re.search(r"^\w+ T " + symbol + r"$", symbols, re.M), (mode, symbol)
     for symbol in ("DMA1_Channel1_IRQHandler", "DMA1_Channel2_IRQHandler",
                    "DMA2_Channel1_IRQHandler", "DMA2_Channel2_IRQHandler",
-                   "SPI1_IRQHandler", "SPI2_IRQHandler", "ADC1_2_IRQHandler", "TIM2_IRQHandler"):
+                   "SPI1_IRQHandler", "SPI2_IRQHandler", "ADC1_2_IRQHandler", "TIM2_IRQHandler",
+                   "TIM1_BRK_TIM15_IRQHandler", "HAL_COMP_MspInit", "HAL_DAC_MspInit", "EXTI15_10_IRQHandler"):
         assert re.search(r"^\w+ T " + symbol + r"$", symbols, re.M), (mode, symbol)
     for symbol in ("g_boot_stage", "g_error_return_address"):
         assert re.search(r"^\w+ [bB] " + symbol + r"$", symbols, re.M), (mode, symbol)
@@ -68,12 +69,21 @@ for mode in ("Debug", "Release"):
     assert "service_hso_feedback" in adc_calls, (mode, adc_calls)
     assert "MotorControl_PositionVelocity" in tim_calls, (mode, tim_calls)
     assert "MotorControl_VelocityControl" in tim_calls, (mode, tim_calls)
+    assert any(c.startswith("ibus_latch") for c in tim_calls), (mode,tim_calls)
+    # GPIO HAL uses LTO: its real callback is often an unconditional tail
+    # branch rather than BL. Check both dispatch hops in the linked image.
+    def exti_transfers(symbol):
+        code=tool("objdump", "-d", "--disassemble="+symbol, elf)
+        return re.findall(r"\bb(?:lx?)?(?:\.[nw])?\s+[0-9a-f]+\s+<([^>]+)>",code)
+    assert "HAL_GPIO_EXTI_IRQHandler" in exti_transfers("EXTI15_10_IRQHandler"), mode
+    exti_calls=exti_transfers("HAL_GPIO_EXTI_IRQHandler")
+    assert any(c.startswith("MotorSampling_GlobalStopIRQ") for c in exti_calls), (mode,exti_calls)
 
     image = (root / "FOC_two.bin").read_bytes()
-    assert b"UI-R57-INFO" in image and b"UI-R56-KEYS" not in image, mode
+    assert b"UI-R59-STOP" in image and b"UI-R58-IBUS" not in image, mode
     with tempfile.TemporaryDirectory(prefix="startup-", dir=repo / "build") as scratch:
         output = Path(scratch) / "verified.bin"
         tool("objcopy", "-O", "binary", elf, output)
         assert image == output.read_bytes(), mode
-    print(f"PASS: {mode}: HAL_Init precedes clocks/peripherals; strong MSP; R57; "
+    print(f"PASS: {mode}: HAL_Init precedes clocks/peripherals; strong MSP/COMP/DAC/BRK/EXTI, real KEY1 shutdown callback; R59; "
           f"ELF/BIN match ({len(image)} B), SHA256 {hashlib.sha256(image).hexdigest()}")

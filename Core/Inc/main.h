@@ -84,6 +84,7 @@ void Error_Handler(void) __attribute__((noinline));
 #define KEY_OK_GPIO_Port GPIOD
 #define KEY1_Pin GPIO_PIN_13
 #define KEY1_GPIO_Port GPIOD
+#define KEY1_EXTI_IRQn EXTI15_10_IRQn
 #define KEY2_Pin GPIO_PIN_14
 #define KEY2_GPIO_Port GPIOD
 #define W25_NSS_Pin GPIO_PIN_15

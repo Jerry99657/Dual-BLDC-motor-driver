@@ -29,11 +29,7 @@ uint8_t ui_input_raw_keys(void) { return s_raw_keys; }
 
 void ui_input_init(void)
 {
-#ifdef KEY1_Pin
-    GPIO_InitTypeDef reserved_pin={0};
-    reserved_pin.Pin=KEY1_Pin; reserved_pin.Mode=GPIO_MODE_INPUT; reserved_pin.Pull=GPIO_PULLUP;
-    HAL_GPIO_Init(KEY1_GPIO_Port,&reserved_pin);
-#endif
+    /* KEY1 belongs to CubeMX EXTI / global motor stop, not the UI scanner. */
     s_raw_keys=0U;
     for (unsigned i = 0U; i < sizeof(s_pins) / sizeof(s_pins[0]); ++i) {
         GPIO_InitTypeDef init = {0};
