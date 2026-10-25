@@ -9,6 +9,10 @@ typedef enum {
     MOTOR_WORK_MASTER_M1, MOTOR_WORK_MASTER_M2, MOTOR_WORK_COUNT
 } MotorWorkMode;
 
+typedef enum { MOTOR_DRIVE_ENCODER, MOTOR_DRIVE_HSO, MOTOR_DRIVE_SIXSTEP } MotorDriveMode;
+typedef enum { MOTOR_INPUT_NONE, MOTOR_INPUT_LOCAL, MOTOR_INPUT_USB,
+               MOTOR_INPUT_UART, MOTOR_INPUT_FOLLOW } MotorInput;
+
 typedef struct {
     JerryFOC_ControlMode mode;
     float velocity, position, electrical_angle, iq, id, ia, ib;
@@ -38,6 +42,12 @@ float MotorControl_VelocityControl(MotorAxis axis, PIDController *velocity,
                                   float reference, float measured);
 bool MotorControl_HsoAllowed(void);
 bool MotorControl_SixStepAllowed(void);
+MotorDriveMode MotorControl_GetDrive(MotorAxis axis);
+/* Storage/UI drafts affect control only after this atomic publication.
+ * Current-loop changes require stopped outputs; encoder speed caps may change live. */
+bool MotorControl_SetOptions(MotorAxis axis,uint32_t flags);
+uint32_t MotorControl_GetOptions(MotorAxis axis);
+float MotorControl_LimitSpeed(MotorAxis axis,float value);
 bool MotorControl_SelectSixStep(bool enable);
 bool MotorControl_MotionAllowed(MotorAxis axis);
 bool MotorControl_SelectWork(MotorWorkMode mode);
@@ -46,8 +56,17 @@ bool MotorControl_SelectProfile(MotorAxis axis, MotorProfile profile);
 bool MotorControl_SelectGeneric(void);
 bool MotorControl_SetGear(int32_t ratio_x100, int32_t offset_x100);
 bool MotorControl_RequestAlign(MotorAxis axis);
-bool MotorControl_Command(MotorAxis axis, JerryFOC_ControlMode mode, float target,
-                          float position_speed, bool current_loop);
+bool MotorControl_CommandFrom(MotorAxis axis,JerryFOC_ControlMode mode,float target,
+                             float position_speed,bool current_loop,MotorInput input);
+static inline bool MotorControl_Command(MotorAxis axis,JerryFOC_ControlMode mode,float target,
+                                        float position_speed,bool current_loop)
+{
+    return MotorControl_CommandFrom(axis,mode,target,position_speed,current_loop,MOTOR_INPUT_LOCAL);
+}
+/* Legacy startup paths claim only inside their own bounded command critical section. */
+bool MotorControl_ClaimInput(MotorAxis axis,MotorInput input);
+MotorInput MotorControl_GetInput(MotorAxis axis);
+const char *MotorControl_InputText(MotorAxis axis);
 void MotorControl_Stop(MotorAxis axis);
 void MotorControl_StopAll(void);
 void MotorControl_GetAxis(MotorAxis axis, MotorAxisSnapshot *out);

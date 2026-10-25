@@ -7,6 +7,7 @@
 #include "angle_src_encoder.h"
 #include "motor_sixstep.h"
 #include "motor_detect.h"
+#include <string.h>
 #define WEAK __attribute__((weak))
 #ifndef CONTROL_STUB_UI
 bool MotorDetect_Active(void) { return false; }
@@ -74,6 +75,37 @@ int8_t Protocol_GetControlResult(void) { return 1; }
 bool MotorControl_HsoAllowed(void) { return work==MOTOR_WORK_SINGLE_M1 && hso; }
 static bool sixstep;
 bool MotorControl_SixStepAllowed(void) { return work==MOTOR_WORK_SINGLE_M1 && sixstep; }
+MotorDriveMode MotorControl_GetDrive(MotorAxis a) {
+    return a!=MOTOR_AXIS_1 ? MOTOR_DRIVE_ENCODER : MotorControl_HsoAllowed() ? MOTOR_DRIVE_HSO :
+        MotorControl_SixStepAllowed() ? MOTOR_DRIVE_SIXSTEP : MOTOR_DRIVE_ENCODER;
+}
+uint32_t MotorControl_GetOptions(MotorAxis a) {
+    return a==MOTOR_AXIS_1 ? AppStorage_Get()->flags : AppStorage_Get()->axis2_flags;
+}
+static bool options_allowed=true;
+void ControlStub_SetOptionsAllowed(bool value) { options_allowed=value; }
+bool MotorControl_SetOptions(MotorAxis a,uint32_t flags) { (void)a; (void)flags; return options_allowed; }
+float MotorControl_LimitSpeed(MotorAxis a,float value) {
+    unsigned limit=(MotorControl_GetOptions(a)&APP_SPEED_LIMIT_MASK)>>APP_SPEED_LIMIT_SHIFT;
+    if(!limit || limit>APP_SPEED_LIMIT_MAX) limit=APP_SPEED_LIMIT_DEFAULT;
+    return value>(float)limit ? (float)limit : value< -(float)limit ? -(float)limit : value;
+}
+static MotorInput inputs[2];
+static bool input_rejected;
+void ControlStub_ResetInput(void) { memset(inputs,0,sizeof(inputs)); input_rejected=false; }
+MotorInput MotorControl_GetInput(MotorAxis a) {
+    return (unsigned)a<MOTOR_AXIS_COUNT && MotorSampling_IsAxisOutputRequested(a) ? inputs[a] : MOTOR_INPUT_NONE;
+}
+const char *MotorControl_InputText(MotorAxis a) {
+    static const char *const names[]={"--","LOCAL","USB","UART","FOLLOW"};
+    return names[MotorControl_GetInput(a)];
+}
+bool MotorControl_ClaimInput(MotorAxis a,MotorInput input) {
+    MotorInput owner=MotorControl_GetInput(a);
+    input_rejected=owner!=MOTOR_INPUT_NONE && owner!=input;
+    if(input_rejected) return false;
+    inputs[a]=input; return true;
+}
 bool MotorControl_SelectSixStep(bool e) {
     if(work!=MOTOR_WORK_SINGLE_M1) return false;
     sixstep=e; if(e) hso=false;
@@ -90,7 +122,7 @@ bool MotorControl_StartFollow(void) {
     if (!MotorControl_IsHandFollow()) return false;
     if (following) return true;
     MotorAxis a=work==MOTOR_WORK_MASTER_M1 ? MOTOR_AXIS_2 : MOTOR_AXIS_1;
-    following=MotorControl_Command(a,JERRYFOC_MODE_POSITION,0,30,false); return following;
+    following=MotorControl_CommandFrom(a,JERRYFOC_MODE_POSITION,0,30,false,MOTOR_INPUT_FOLLOW); return following;
 }
 bool MotorControl_MotionAllowed(MotorAxis a) { (void)a; return true; }
 void MotorControl_Fast(void) {}
@@ -110,7 +142,9 @@ const char *MotorControl_WorkText(void) {
     static const char *const names[]={"Single M1","Single M2","Independent","Sync speed","Sync position","Master M1","Master M2"};
     return names[work];
 }
-const char *MotorControl_CommandText(void) { return "READY"; }
+const char *MotorControl_CommandText(void) {
+    return !options_allowed ? "Stop / check axis" : input_rejected ? "CONTROL BUSY" : "READY";
+}
 const char *MotorControl_EncoderLostText(MotorAxis a) { return a==MOTOR_AXIS_1 ? "ENCODER1 LOST" : "ENCODER2 LOST"; }
 bool MotorControl_IsCoupled(void) { return work>=MOTOR_WORK_SYNC_SPEED; }
 bool MotorControl_IsGroupActive(void) { return following; }
@@ -156,10 +190,13 @@ bool MotorControl_ModeAllowed(JerryFOC_ControlMode m) {
 }
 void MotorControl_Stop(MotorAxis a) {
     if (MotorControl_IsCoupled()) { MotorControl_StopAll(); return; }
+    if (a==MOTOR_AXIS_2) {
 #ifdef CONTROL_STUB_UI
-    if (a==MOTOR_AXIS_2) { second_ui.active=false; second_ui.target_iq=second_ui.target_velocity=second_ui.target_position=0; return; }
+        second_ui.active=false; second_ui.target_iq=second_ui.target_velocity=second_ui.target_position=0;
 #endif
-    (void)a; JerryFOC_stop();
+        return;
+    }
+    if (a==MOTOR_AXIS_1) JerryFOC_stop();
 }
 void MotorControl_StopAll(void) {
     following=false;
@@ -168,8 +205,9 @@ void MotorControl_StopAll(void) {
     second_ui.active=false; second_ui.target_iq=second_ui.target_velocity=second_ui.target_position=0;
 #endif
 }
-bool MotorControl_Command(MotorAxis a,JerryFOC_ControlMode m,float t,float l,bool c)
+bool MotorControl_CommandFrom(MotorAxis a,JerryFOC_ControlMode m,float t,float l,bool c,MotorInput input)
 {
+    if(!MotorControl_ClaimInput(a,input)) return false;
 #ifdef CONTROL_STUB_UI
     if (MotorControl_SixStepAllowed() && t==0) { JerryFOC_setMode(m); JerryFOC_stop(); return true; }
     if (a==MOTOR_AXIS_1 && MotorControl_HsoAllowed() && m==JERRYFOC_MODE_VELOCITY && t==0) {

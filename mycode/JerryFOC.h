@@ -86,6 +86,9 @@ void JerryFOC_setAxisVoltage(MotorAxis axis, float Uq, float Ud, float angle_el,
 /* PID 与滤波计算 */
 float JerryFOC_LPF_Calc(LowPassFilter* filter, float x);
 float JerryFOC_PID_Calc(PIDController* pid, float error);
+/* Shared stopped-controller initialization; states remain independent per axis. */
+void JerryFOC_ResetPID(PIDController *pid);
+void JerryFOC_InitPID(PIDController *pid,float p,float i,float limit,float ramp);
 
 /* Clarke 与 Park 变换 */
 void JerryFOC_Clarke(float Ia, float Ib, float* Ialpha, float* Ibeta);

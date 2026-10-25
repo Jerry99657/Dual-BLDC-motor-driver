@@ -1,6 +1,10 @@
 #ifndef UI_TEXT_H
 #define UI_TEXT_H
 #include <stddef.h>
+#include <stdint.h>
+
+/* Decimal places 0..3; optional unit is separated by one space. */
+int UiText_Fixed(char *buffer,size_t capacity,int32_t value,unsigned places,const char *unit);
 
 /* Application display text only: unpadded %s/%c/%% and 32-bit %d/%u/%X.
  * Integers support l, nonnegative numeric width (or *) and zero padding.

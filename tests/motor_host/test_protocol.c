@@ -182,7 +182,7 @@ static void check_configuration_queue(void) {
     }
     const char *unknown[]={"work:SingleM1","WorkSingleM1","Motor3:4015","Motor1x:4015","Feedbackx:HSO","Focusx:M1"};
     for(unsigned i=0;i<sizeof(unknown)/sizeof(*unknown);++i) {
-        command(unknown[i]);assert(Protocol_GetControlResult()==-1);Protocol_Service();
+        command(unknown[i]);assert(Protocol_GetControlResult()==-2);Protocol_Service();
         assert(MotorControl_GetWork()==MOTOR_WORK_INDEPENDENT);
     }
     char line[65];memset(line,'x',sizeof(line));memcpy(line,"Work:",5);line[63]=0;
@@ -253,6 +253,8 @@ int main(void) {
     command("HSO:Filter:25000,0.019"); assert(configurations==2);
     command("HSO:Use"); assert(Protocol_GetHsoResult()==-3 && !active);
     usable=true; command("HSO:Use"); assert(Protocol_GetHsoResult()==1 && active);
+    unsigned before_m2_stop=disables;
+    command("M2:Stop"); assert(active && disables==before_m2_stop);
     command("HSO:Motor:1,1,1"); assert(Protocol_GetHsoResult()==-3 && configurations==2);
     command("HSO:Learn"); assert(Protocol_GetHsoResult()==-3 && learns==0);
     command("Stop"); assert(!active && disables==1 && target==0);

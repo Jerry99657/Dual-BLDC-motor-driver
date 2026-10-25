@@ -15,6 +15,27 @@ static int finish(TextWriter *out,int result)
         out->buffer[out->length<out->capacity ? out->length : out->capacity-1]='\0';
     return result;
 }
+__attribute__((noinline))
+int UiText_Fixed(char *buffer,size_t capacity,int32_t value,unsigned places,const char *unit)
+{
+    TextWriter out={buffer,capacity,0};
+    uint32_t magnitude=value<0 ? 0U-(uint32_t)value : (uint32_t)value;
+    char digits[10];
+    unsigned count=0;
+    /* Include a leading integer zero even for values below one unit. */
+    do { digits[count++]=(char)('0'+magnitude%10U); magnitude/=10U; }
+    while(magnitude || count<=places);
+    if(value<0) put_char(&out,'-');
+    while(count) {
+        put_char(&out,digits[--count]);
+        if(count && count==places) put_char(&out,'.');
+    }
+    if(unit) {
+        put_char(&out,' ');
+        while(*unit) put_char(&out,*unit++);
+    }
+    return finish(&out,(int)out.length);
+}
 __attribute__((noinline,noclone))
 int UiText_Format(char *buffer,size_t capacity,const char *format,...)
 {

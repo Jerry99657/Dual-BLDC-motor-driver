@@ -74,17 +74,17 @@ static void MT6701_ObserveZero(MT6701Diagnostics *diag, MT6701Error error,
     }
 }
 
-static void MT6701_RecordError(MT6701Error error)
+__attribute__((noinline,noclone)) static void record_error(MT6701Diagnostics *diag,MT6701Error error,volatile uint32_t *total)
 {
-    ++first_diag.errors;
-    first_diag.last_error = error;
+    ++*total;
+    diag->last_error = error;
     switch (error) {
-    case MT6701_ERROR_CRC: ++first_diag.crc_errors; break;
-    case MT6701_ERROR_FIELD: ++first_diag.field_errors; break;
-    case MT6701_ERROR_TRACK: ++first_diag.track_errors; break;
+    case MT6701_ERROR_CRC: ++diag->crc_errors; break;
+    case MT6701_ERROR_FIELD: ++diag->field_errors; break;
+    case MT6701_ERROR_TRACK: ++diag->track_errors; break;
     case MT6701_ERROR_SPI:
-    case MT6701_ERROR_TIMEOUT: ++first_diag.spi_errors; break;
-    default: ++first_diag.frame_errors; break;
+    case MT6701_ERROR_TIMEOUT: ++diag->spi_errors; break;
+    default: ++diag->frame_errors; break;
     }
 }
 
@@ -95,7 +95,7 @@ static void MT6701_Fault(MT6701Error error)
      * scheduler must not publish/reuse this buffer during abort/reset. */
     mt6701_transfer_active=MT_RECOVER;
     mt6701_sample_valid=0U;
-    MT6701_RecordError(error);
+    record_error(&first_diag,error,&first_diag.errors);
 }
 
 static uint8_t MT6701_RequestSample(void)
@@ -140,7 +140,7 @@ void HAL_SPI_TxRxCpltCallback(SPI_HandleTypeDef *hspi)
         /* Mg[1:0] 非零表示磁场过强/过弱，Mg[3] 表示失跟踪；
          * Mg[2] 是按压状态，不影响转子角度。全 0/全 1 帧用于识别 MISO 卡死。 */
         if (error != MT6701_ERROR_NONE) {
-            MT6701_RecordError(error);
+            record_error(&first_diag,error,&first_diag.errors);
             mt6701_transfer_active = 0U;
             return;
         }
@@ -404,13 +404,7 @@ static void second_prepare(void)
 
 static void MT6701_2_RecordFailure(MT6701Error error)
 {
-    ++second.errors;
-    second_diag.last_error=error;
-    if (error==MT6701_ERROR_CRC) ++second_diag.crc_errors;
-    else if (error==MT6701_ERROR_FIELD) ++second_diag.field_errors;
-    else if (error==MT6701_ERROR_TRACK) ++second_diag.track_errors;
-    else if (error==MT6701_ERROR_SPI) ++second_diag.spi_errors;
-    else ++second_diag.frame_errors;
+    record_error(&second_diag,error,&second.errors);
     if (second_failures < MT6701_2_MAX_CONSECUTIVE_FAILURES) ++second_failures;
     if (second_failures>=MT6701_2_MAX_CONSECUTIVE_FAILURES) second_poll_at=HAL_GetTick();
 }

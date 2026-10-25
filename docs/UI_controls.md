@@ -1,5 +1,7 @@
 # 电机驱动板 UI 操作与验证
 
+当前固件 **UI-R81-CF**：第 4 批整理控制框架，新增 Motion → Input、LOCAL／USB／UART 来源检查与已确认参数发布。双机通信目标必须写 `M1:`／`M2:`，浏览 Run 不打断远程运行；明确的 Back／KEY1 继续停止。规则、构建占用与验证见 [R81 控制框架](Control_framework_R81.md)。无需修改 CubeMX。
+
 当前 R79 参数辨识已增加 Ls／磁链／Ke、左右结果翻页与 v5 保存，详见 [R79 操作与测量定义](Motor_detect_R79.md)。
 
 R78 为 M1 参数检测的 POLES 扫角加入最多 5 ms 的近零全零缺样窗口，保留最后有效角度并等待下一有效帧；正常有感的 3 周期失联门限及其他故障处理继续使用原规则。复现、边界与验证见 [R78 跨零修复](Motor_detect_zero_gap_R78.md)。无需修改 CubeMX。

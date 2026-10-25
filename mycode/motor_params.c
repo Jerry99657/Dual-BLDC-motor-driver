@@ -1,6 +1,11 @@
 #include "motor_params.h"
 #include <stddef.h>
 
+/* Cold application services: prioritize Flash; official sources/flags are unchanged. */
+#if defined(__arm__) && defined(__GNUC__)
+#pragma GCC optimize ("Oz")
+#endif
+
 /*
  * 2804 云台电机，参数按当前电机铭牌。
  * Rs=2.3 ohm, Ls=0.86 mH, 极对数 7, 母线 12 V

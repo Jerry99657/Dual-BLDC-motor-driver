@@ -153,7 +153,7 @@ M2:Stop
 Follow
 ```
 
-示例是命令格式，不要求连续执行全部模式切换。单电机模式中，原 Speed/Angle/Torque 默认发往启用的电机；双独立默认发往当前查看的路，推荐显式 M1:/M2: 前缀。在同步模式，运动命令作用于整个组，不允许单独覆盖从轴；组位置目标按上面的相对锚点定义解释。手动主从仅通过 Follow 启用、Stop 停止，拒绝 Speed/Angle/Torque（不改变正在进行的跟随）。独立 Angle 沿用原有的当前整圈基准语义。OpenLoop 仅允许 Single M1。
+示例是命令格式，不要求连续执行全部模式切换。单电机模式中，原 Speed/Angle/Torque 默认发往启用的电机；**R81 起所有双机模式的目标命令必须显式加 M1:/M2: 前缀**，不再按 View 选择路。在同步模式，向主轴下的运动命令作用于整个组，不允许单独覆盖从轴；组位置目标按上面的相对锚点定义解释。手动主从仅通过 Follow 启用、Stop 停止，拒绝 Speed/Angle/Torque（不改变正在进行的跟随）。独立 Angle 沿用原有的当前整圈基准语义，但默认位置速度统一读取 Settings 的 Pos Speed。OpenLoop 仅允许 Single M1。运行中的轴只接受原 LOCAL／USB／UART 来源更新，换来源先 Stop；停止不受来源限制。详见 [R81 控制框架](Control_framework_R81.md)。
 
 手动跟随最短流程：停止两路 → Work:MasterM1（或 MasterM2）→ Gear:1,0 → 等从轴对齐并静止 → Follow → 手转主轴。配置命令需要等待主循环应用，可通过 Status 的 Work、Cmd 核对后再发下一条；不要把配置与 Follow 在同一处理批次内连发。
 

@@ -84,6 +84,8 @@ bool MotorSampling_ClearIbusTrip(void) {
 static MT6701Diagnostics enc_diag,enc2_diag;
 extern void ControlStub_SetSecondState(MotorAxisSnapshot s);
 extern void ControlStub_SetDeferred(bool value);
+extern void ControlStub_SetOptionsAllowed(bool value);
+extern void ControlStub_ResetInput(void);
 volatile float JerryFOC_Target_Velocity, JerryFOC_Target_Position, JerryFOC_Target_Iq;
 volatile uint8_t g_openloop_debug;
 static AppSettings settings;
@@ -252,6 +254,7 @@ static void press(uint8_t key) { step(key,30); step(0,30); }
 static void settle(void) { step(0,600); }
 static void back(void) { press(KK_UI_KEY_BACK); settle(); }
 static void reset(void) {
+    ControlStub_SetOptionsAllowed(true); ControlStub_ResetInput();
     global_stopped=false;
     ibus_limit_ma=APP_IBUS_DEFAULT_MA; ibus_trip=ibus_set_failed=false; ibus_clear_allowed=true;
     ControlStub_SetDeferred(false);
@@ -971,6 +974,31 @@ static void check_r59(void) {
     back(); MotorControl_SelectWork(MOTOR_WORK_SINGLE_M1); MotorControl_SetFocus(MOTOR_AXIS_1);
     puts("PASS: R59 UI preserves KEY1 EXTI, global toast/Run reason in both independent views, both cached RUN states reset and fresh OK restarts without an extra toggle");
 }
+static void check_framework_ui(void)
+{
+    reset(); MotorControl_SelectWork(MOTOR_WORK_SINGLE_M1); MotorControl_SetFocus(MOTOR_AXIS_1);
+    ui_app_reset(tick); assert(KK_UI_Init(ui_app_get())==KK_UI_OK); settle();
+    output_requested=true; JerryFOC_Target_Iq=0.5f;
+    assert(MotorControl_ClaimInput(MOTOR_AXIS_1,MOTOR_INPUT_USB));
+    press(KK_UI_KEY_RIGHT); press(KK_UI_KEY_OK); settle();
+    select_setting("Curr Loop"); press(KK_UI_KEY_OK); settle();
+    unsigned saved_before=save_requests;
+    ControlStub_SetOptionsAllowed(false);
+    press(KK_UI_KEY_RIGHT); press(KK_UI_KEY_OK); settle();
+    assert(!(settings.flags & APP_FLAG_CURRENT_LOOP) && !*ui_app_get()->bool_bindings[0].value);
+    assert(output_requested && current_loop==0 && JerryFOC_Target_Iq==0.5f);
+    assert(!strcmp(status_value("Input"),"USB"));
+    step(0,1000); assert(save_requests==saved_before);
+    ControlStub_SetOptionsAllowed(true);
+    back(); assert(KK_UI_GoTo(UI_PAGE_RUN,tick)==KK_UI_OK); settle();
+    assert(KK_UI_GetCurrentPage()==UI_PAGE_RUN && output_requested && JerryFOC_Target_Iq==0.5f);
+    press(KK_UI_KEY_UP); press(KK_UI_KEY_OK); settle();
+    assert(output_requested && JerryFOC_Target_Iq==0.5f &&
+        MotorControl_GetInput(MOTOR_AXIS_1)==MOTOR_INPUT_USB);
+    assert(!strcmp(MotorControl_CommandText(),"CONTROL BUSY"));
+    back(); assert(!output_requested); /* Explicit Back remains an unconditional stop. */
+    puts("PASS: R81 UI source visibility, rejected settings restore/no-save, viewing and rejected OK preserve a USB-owned run, explicit Back stops");
+}
 int main(void) {
     ui_input_init(); assert(ui_input_poll()==0);
     assert(!(ui_gpio_init_mask & KEY1_Pin));
@@ -1568,6 +1596,7 @@ int main(void) {
     assert(MotorControl_GetFocus()==MOTOR_AXIS_2);
     press(KK_UI_KEY_OK); settle(); MotorControl_GetAxis(MOTOR_AXIS_2,&second);
     assert(MotorControl_IsGroupActive() && !output_requested && second.active && second.mode==JERRYFOC_MODE_POSITION);
+    assert(MotorControl_GetInput(MOTOR_AXIS_2)==MOTOR_INPUT_FOLLOW);
     press(KK_UI_KEY_UP); press(KK_UI_KEY_RIGHT); settle();
     assert(MotorControl_IsGroupActive() && !output_requested);
     snapshot("run-hand-follow");
@@ -1749,6 +1778,7 @@ int main(void) {
     check_r73();
     check_r76();
     check_r77();
+    check_framework_ui();
     puts("PASS: R54 applied Work marker, axis-qualified settings, HSO forced ON with retained encoder preference, Run feedback/bus/stages/actions/ranges, idle focus persistence and durable save states");
     puts("PASS: System/work routes, independent M1/M2 confirmed targets, KEY1 excluded from UI routing, long L/R view-only selection and KEY2 group stop");
     printf("PASS: GPIO, axes, bounce, repeat, Back/cancel, run modes, speed range, stop, fault, position origin, wrap, animations, async DMA (%u submissions)\n",submissions);

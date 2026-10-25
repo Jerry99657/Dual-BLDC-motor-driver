@@ -9,7 +9,7 @@ out.mkdir(parents=True, exist_ok=True)
 compiler = shutil.which("gcc") or "gcc"
 subprocess.run([sys.executable, "tests/motor_host/check_spi_clock.py"],
                cwd=repo, check=True)
-for name, sources in {
+suites = {
     "detect": ["mycode/JerryFOC.c", "mycode/motor_control.c", "mycode/protocol.c", "mycode/number_parse.c", "mycode/motor_params.c", "tests/motor_host/test_detect.c"],
     "control": ["mycode/JerryFOC.c", "mycode/motor_control.c", "mycode/protocol.c", "mycode/number_parse.c", "mycode/motor_params.c", "tests/motor_host/test_control.c"],
     "sensorless": ["mycode/JerryFOC.c", "mycode/motor_control.c", "mycode/protocol.c", "mycode/number_parse.c", "mycode/st_hso.c", "mycode/motor_params.c", "tests/motor_host/test_sensorless.c"],
@@ -25,7 +25,12 @@ for name, sources in {
     "hso": ["mycode/st_hso.c", "mycode/motor_params.c", "tests/motor_host/test_hso.c"],
     "protocol": ["mycode/protocol.c", "mycode/number_parse.c", "mycode/motor_params.c", "tests/motor_host/test_protocol.c"],
     "number_parse": ["mycode/number_parse.c", "tests/motor_host/test_number_parse.c"],
-}.items():
+}
+selected=set(sys.argv[1:])
+if selected-set(suites):
+    raise SystemExit("Unknown suites: "+", ".join(sorted(selected-set(suites))))
+for name, sources in suites.items():
+    if selected and name not in selected: continue
     if name in ("detect","control","sensorless"): sources += ["mycode/motor_sixstep.c","mycode/motor_detect.c"]
     if name in ("foc","protocol"):
         sources += ["tests/motor_host/control_stub.c"]

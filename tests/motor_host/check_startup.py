@@ -84,7 +84,7 @@ for mode in ("Debug", "Release"):
     assert any(c.startswith("MotorSampling_GlobalStopIRQ") for c in exti_calls), (mode,exti_calls)
 
     image = (root / "FOC_two.bin").read_bytes()
-    assert b"UI-R79-ID" in image and b"UI-R77-ID" not in image, mode
+    assert b"UI-R81-CF" in image and b"UI-R80-SZ" not in image, mode
     assert "__aeabi_ddiv" not in symbols and "__divdf3" not in symbols,mode
     for removed in ("snprintf","sniprintf","_printf_i","_svfprintf_r","_svfiprintf_r"):
         assert not re.search(r"^\w+ [tT] "+removed+r"$",symbols,re.M), (mode,removed)
