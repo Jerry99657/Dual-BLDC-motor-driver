@@ -226,12 +226,24 @@ void MT6701_Service(void)
     MT6701_RequestSample();
 }
 
-uint8_t MT6701_IsHealthy(void)
+__attribute__((noinline,noclone)) static uint8_t first_sample_fresh(unsigned cycles)
 {
     uint32_t sampled_at = mt6701_sample_at;
     return (mt6701_continuous && mt6701_sample_valid && mt6701_transfer_active!=MT_RECOVER &&
             HAL_GetTick() - sampled_at <= 5U &&
-            mt6701_sample_age_cycles <= MT6701_MAX_SAMPLE_AGE_CYCLES) ? 1U : 0U;
+            mt6701_sample_age_cycles <= cycles) ? 1U : 0U;
+}
+
+uint8_t MT6701_IsHealthy(void) { return first_sample_fresh(MT6701_MAX_SAMPLE_AGE_CYCLES); }
+uint8_t MT6701_HasNearZeroGap(void)
+{
+    /* Do not publish ambiguous zeros as valid data. Only the open-loop motor
+     * detector may bridge this bounded gap using the retained verified angle.
+     * A valid post-frame resolves the episode; CRC/field/SPI errors, stale
+     * prehistory, far-from-zero jumps and startup without a sample all fail. */
+    return first_diag.last_error==MT6701_ERROR_FRAME && first_diag.zero_after==UINT16_MAX &&
+        first_diag.zero_age<=MT6701_MAX_SAMPLE_AGE_CYCLES &&
+        (((unsigned)Angle_Raw+2U)&16383U)<=4U && first_sample_fresh(50U);
 }
 
 uint16_t MT6701_GetRawAngle(void)

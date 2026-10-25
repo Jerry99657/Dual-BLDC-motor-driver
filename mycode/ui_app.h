@@ -25,6 +25,7 @@ enum {
     UI_PAGE_PROTECTION,
     UI_PAGE_SENSORLESS,
     UI_PAGE_SIXSTEP,
+    UI_PAGE_DETECT,
 };
 
 const KK_UI_App *ui_app_get(void);

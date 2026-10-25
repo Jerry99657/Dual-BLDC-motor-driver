@@ -1,4 +1,6 @@
-# M1 六步无感：UI-R76-HSO
+# M1 六步无感：UI-R79-ID
+
+R77 新增单 M1 编码器模式下的[极对数／电阻检测](Motor_detect_R77.md)，与六步互斥；本页六步算法继续沿用。结果单独保存，完整固件占用与校验值见文末。
 
 2026-10-24。本版在编码器 FOC、独立 HSO FOC 之外，提供单 M1 的六步无感油门及速度控制。原有双有感独立／同步／主从、两套电机预设、按键、W25Q64、USB、连续 ADC/VREFINT 和保护保留。六步不依赖编码器或 ST HSO 静态库，不提供位置控制；RUN 无 dq 电流控制，起转辅助使用相电流闭环。实际相电流及全部过流保护持续工作。
 
@@ -266,11 +268,11 @@ Run 显示 `6STEP ALIGN`、`6STEP RAMP`、`6STEP SYNC`、`6STEP RUN` 或失败�
 
 R66 新增了上述电气／机械耦合假设模型，R67 扩展自适应采样及低速／降油门场景；现有寄存器、合成迹线及软件回归继续保留。R67 尚未实板验证，模型不等于实物。RC 失配后仍可能故障停机，不能把名义模型通过当成信号链已验证。现有功能回归通过；原 HSO 主计算保留 O2，共用 CORDIC 替代 CMSIS 正余弦表。未删除外设或保护。
 
-R76 当前构建均为 Flash **128304 / 131072 B**（余 **2768 B**）、RAM **23080 / 32768 B**。Debug 保留调试符号。保留原有 RWX LOAD 段链接警告。最终构建后的启动／强中断入口检查通过，从 ELF 提取二进制与交付 BIN 比较一致；BIN SHA256：
+R78 历史构建均为 Flash **131068 / 131072 B**（余 **4 B**）、RAM **23160 / 32768 B**。当前 R79 增加了 Ls／磁链辨识，固件占用及新流程见 [R79](Motor_detect_R79.md)，本页六步算法保留。以下为 R78 的历史 BIN SHA256：
 
 | 构建 | 文件 | SHA256 |
 | --- | --- | --- |
-| Debug | `build/Debug/FOC_two.bin` | `ee6a2fc645c790687cd0da25ad5fab37b6c01817ddf9377764e6e503942adbdc` |
-| Release | `build/Release/FOC_two.bin` | `b2781e0f7e81a8086bfbe9114a00f21a289c28282548ca9a0410d7540dd85b16` |
+| Debug | `build/Debug/FOC_two.bin` | `df1e32acc4a7dcc9ee5d848260cc59edebade752f4e7497480526b0a044bb207` |
+| Release | `build/Release/FOC_two.bin` | `5aa227485b8f931bfc4ca2b33c46933e89c696bee3408b94207b33141e39a223` |
 
 参考：[ST 六步算法及 ON/OFF 采样](https://wiki.st.com/stm32mcu/wiki/STM32MotorControl%3A6-step_Firmware_Algorithm)、[ST 六步启动配置](https://www.st.com/resource/en/user_manual/um3468-stm32-motor-control-sdk-6step-startup-configuration-stmicroelectronics.pdf)、[FD6288 官方手册](https://download.fortiortech.com/datasheet/HVIC-DS-28-FD6288.pdf)。

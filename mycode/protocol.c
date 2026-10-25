@@ -1,9 +1,11 @@
 #include "protocol.h"
+#include "number_parse.h"
 #include "main.h"
 #include "usart.h"
 #include "JerryFOC.h"
 #include "st_hso.h"
 #include "motor_control.h"
+#include "motor_detect.h"
 #include "motor_sampling.h"
 #include "app_storage.h"
 #include "usbd_cdc_if.h"
@@ -11,6 +13,7 @@
 #include <math.h>
 
 #define PROTO_LINE_MAX 64
+_Static_assert(PROTO_LINE_MAX==64,"Review Number_Parse integer capacity before increasing the wire limit");
 
 typedef struct {
     char buf[PROTO_LINE_MAX];
@@ -23,73 +26,11 @@ static ProtoCtx ctx[2];
 static volatile int8_t hso_result;
 int8_t Protocol_GetHsoResult(void) { return hso_result; }
 
-static int digit_value(char c,bool hex)
-{
-    if (c>='0' && c<='9') return c-'0';
-    if (hex && c>='a' && c<='f') return c-'a'+10;
-    if (hex && c>='A' && c<='F') return c-'A'+10;
-    return -1;
-}
-
-/* The wire format is at most 63 bytes and needs finite binary32 numbers,
- * not newlib's heap-based arbitrary-precision strtod machinery. Retain signs,
- * leading ASCII whitespace, decimal/scientific and C hexadecimal notation.
- * Accumulate/scale in double so tiny inductance/flux values do not underflow
- * before their exponent is applied; the control interface remains float. */
-static float parse_number(const char *text,const char **end)
-{
-    const char *p=text;
-    while (*p==' ' || (*p>='\t' && *p<='\r')) ++p;
-    bool negative=*p=='-';
-    if (*p=='-' || *p=='+') ++p;
-    bool hex=p[0]=='0' && (p[1]=='x' || p[1]=='X');
-    if (hex) p+=2;
-    double value=0.0;
-    unsigned digits=0;
-    int exponent=0,base=hex ? 16 : 10;
-    bool dot=false;
-    for (;;) {
-        int d=digit_value(*p,hex);
-        if (d>=0) {
-            value=value*base+d; ++digits; ++p;
-            if (dot) exponent-=hex ? 4 : 1;
-        } else if (*p=='.' && !dot) { dot=true; ++p; }
-        else break;
-    }
-    if (!digits) { *end=text; return 0.0f; }
-    if (*p==(hex ? 'p' : 'e') || *p==(hex ? 'P' : 'E')) {
-        const char *mark=p++;
-        bool minus=*p=='-';
-        if (*p=='-' || *p=='+') ++p;
-        const char *first=p;
-        int extra=0;
-        while (*p>='0' && *p<='9') {
-            if (extra<10000) extra=extra*10+(*p-'0');
-            ++p;
-        }
-        if (p==first) p=mark; /* Caller rejects the unconsumed suffix. */
-        else exponent+=minus ? -extra : extra;
-    }
-    *end=p;
-    if (value!=0.0) {
-        /* These are exactly the binary64 results of 1.0/2.0 and 1.0/10.0.
-         * Keep double accumulation without linking a software divider. */
-        double factor=exponent<0 ? (hex ? 0.5 : 0.1) : (hex ? 2.0 : 10.0);
-        if (exponent<0) exponent=-exponent;
-        while (exponent) {
-            if (exponent&1) value*=factor;
-            exponent>>=1;
-            if (exponent) factor*=factor;
-        }
-    }
-    return (float)(negative ? -value : value);
-}
-
 static bool parse_hso_values(const char *text, float *values, unsigned count)
 {
     for (unsigned i = 0U; i < count; ++i) {
         const char *end;
-        values[i] = parse_number(text, &end);
+        values[i] = Number_Parse(text, &end);
         if (end == text || !isfinite(values[i])) return false;
         if (i + 1U < count) {
             if (*end != ',') return false;
@@ -309,7 +250,7 @@ void Protocol_HandleLine(char *line)
         }
         control_result=MotorControl_Command(axis,mode,value,0,(flags & APP_FLAG_CURRENT_LOOP)!=0U) ? 1 : -1;
     } else if (strncmp(line, "OpenLoop:", 9) == 0) {
-        if (MotorControl_GetWork()!=MOTOR_WORK_SINGLE_M1 || MotorControl_HsoAllowed() || MotorControl_SixStepAllowed() || axis!=MOTOR_AXIS_1 ||
+        if (MotorDetect_Active() || MotorControl_GetWork()!=MOTOR_WORK_SINGLE_M1 || MotorControl_HsoAllowed() || MotorControl_SixStepAllowed() || axis!=MOTOR_AXIS_1 ||
             !JerryFOC_isDriveReady() || !MotorSampling_ResumeGlobalStop()) {
             control_result=-1; __set_PRIMASK(primask); return;
         }

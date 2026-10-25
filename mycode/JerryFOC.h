@@ -124,4 +124,8 @@ void JerryFOC_setAngleSource(AngleSource *src);
 const MotorParams* JerryFOC_getMotorParams(void);
 AngleSource* JerryFOC_getAngleSource(void);
 
+/* Shared 10 kHz current PI and applied-voltage antiwindup. */
+float JerryFOC_CurrentPI(PIDController *pid,float error);
+void JerryFOC_TrackCurrent(PIDController *pid,float applied,float requested);
+
 #endif /* __JERRYFOC_H */

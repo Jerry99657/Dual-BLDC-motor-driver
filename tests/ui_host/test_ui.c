@@ -15,6 +15,22 @@
 #include "motor_control.h"
 #include "ui_fonts.h"
 #include "motor_sixstep.h"
+#include "motor_detect.h"
+static bool detect_active;
+static uint32_t detect_result;
+static unsigned detect_current;
+bool MotorDetect_Active(void) { return detect_active; }
+void MotorDetect_Stop(void) { detect_active=false; }
+void MotorDetect_Reset(void) { detect_active=false; detect_result=0; }
+bool MotorDetect_Start(unsigned ma) {
+    detect_current=ma;
+    detect_active=MotorControl_GetWork()==MOTOR_WORK_SINGLE_M1 && !MotorControl_HsoAllowed() && !MotorControl_SixStepAllowed();
+    return detect_active;
+}
+const char *MotorDetect_Status(void) { return detect_active ? "RS LOW" : detect_result ? "DONE" : "READY"; }
+uint32_t MotorDetect_Result(void) { return detect_result; }
+uint32_t MotorDetect_Inductance(void) { return 1300; }
+uint32_t MotorDetect_Flux(void) { return 7500; }
 float SixStep_MinSpeed(void) { return MotorParams_GetActiveProfile()==MOTOR_PROFILE_4015 ? 10.0f : 15.0f; }
 float SixStep_MaxSpeed(void) { return 1256.637061f/MotorParams_GetActive()->pole_pairs; }
 static SixStepSnapshot six_ui={.gate='P',.phase_pct=50,.period_pct=100,.status="6STEP READY"};
@@ -898,6 +914,42 @@ static void check_r76(void) {
     }
     puts("PASS: R76 both HSO profiles round zero-to-minimum up to 5 rad/s; +/-0.1 configured steps, return to zero and no draft auto-start");
 }
+static void check_r77(void) {
+    reset(); MotorControl_StopAll(); MotorControl_SelectWork(MOTOR_WORK_SINGLE_M1);
+    MotorControl_SelectFeedback(false);
+    settings.motor_detect=(1800U<<8)|11U;
+    ui_app_reset(tick); assert(KK_UI_Init(ui_app_get())==KK_UI_OK); settle();
+    assert(KK_UI_GoTo(UI_PAGE_DETECT,tick)==KK_UI_OK); settle(); probe_frame();
+    assert(drew("M1 Detect") && drew("Saved") && drew("PP 11+ R 1.80 ohm") && !detect_active);
+    press(KK_UI_KEY_UP); press(KK_UI_KEY_OK); probe_frame();
+    assert(detect_active && detect_current==350 && drew("RS LOW") && drew("NO DATA"));
+    press(KK_UI_KEY_DOWN); assert(detect_current==350);
+    press(KK_UI_KEY_OK); assert(!detect_active);
+    press(KK_UI_KEY_OK); assert(detect_active);
+    back(); assert(!detect_active);
+    assert(KK_UI_GoTo(UI_PAGE_DETECT,tick)==KK_UI_OK); settle();
+    press(KK_UI_KEY_OK);detect_active=false;detect_result=(2300U<<8)|7U;
+    probe_frame(); assert(drew("DONE") && drew("PP 7+ R 2.30 ohm") && drew("OK:Save LR:View"));
+    snapshot("r77-detect-done");
+    press(KK_UI_KEY_OK); assert(settings.motor_detect==detect_result);
+    step(0,3200); assert(saved_settings.motor_detect==detect_result && !detect_active);
+    assert(saved_settings.motor_detect_l_uh==1300 && saved_settings.motor_detect_flux_uwb==7500);
+    press(KK_UI_KEY_RIGHT); probe_frame(); assert(drew("Ls 1300 uH"));
+    snapshot("r79-detect-inductance");
+    press(KK_UI_KEY_RIGHT);probe_frame();assert(drew("Flux 7500 uWb"));
+    snapshot("r79-detect-flux");
+    press(KK_UI_KEY_RIGHT);probe_frame();assert(drew("Ke 6.73 V/krpm"));
+    snapshot("r79-detect-ke");
+    press(KK_UI_KEY_UP);probe_frame();assert(!detect_result && drew("OK:Start K2:Back"));
+    back();
+    assert(KK_UI_GoTo(UI_PAGE_DETECT,tick)==KK_UI_OK);settle();probe_frame();assert(drew("Saved"));
+    press(KK_UI_KEY_RIGHT);probe_frame();assert(drew("Ls 1300 uH"));
+    press(KK_UI_KEY_LEFT);probe_frame();assert(drew("PP 7+ R 2.30 ohm"));
+    back();
+    assert(MotorControl_SelectWork(MOTOR_WORK_SINGLE_M2)); step(0,1000);
+    assert(((ui_app_get()->menu_pages[1].item_states[0]>>6U)&3U)==KK_UI_ITEM_DISABLED);
+    puts("PASS: R77 M1 Detect draft/current bounds, saved result preview, explicit start/stop/back, immutable running current, done/save/persistence/retry and disabled M2 route");
+}
 static void check_r59(void) {
     enter_independent_run();
     press(KK_UI_KEY_UP); press(KK_UI_KEY_OK); assert(output_requested);
@@ -1696,6 +1748,7 @@ int main(void) {
     check_r72();
     check_r73();
     check_r76();
+    check_r77();
     puts("PASS: R54 applied Work marker, axis-qualified settings, HSO forced ON with retained encoder preference, Run feedback/bus/stages/actions/ranges, idle focus persistence and durable save states");
     puts("PASS: System/work routes, independent M1/M2 confirmed targets, KEY1 excluded from UI routing, long L/R view-only selection and KEY2 group stop");
     printf("PASS: GPIO, axes, bounce, repeat, Back/cancel, run modes, speed range, stop, fault, position origin, wrap, animations, async DMA (%u submissions)\n",submissions);

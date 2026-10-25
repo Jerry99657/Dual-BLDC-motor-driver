@@ -150,7 +150,7 @@ int main(void) {
     service(20); memset(flash,255,sizeof(flash)); memcpy(flash,&legacy,sizeof(legacy));
     assert(AppStorage_Init());
     const AppSettings *migrated=AppStorage_Get();
-    assert(migrated->version==3 && migrated->speed_x10==-123 && migrated->voltage_x100==250 && migrated->led_brightness==35);
+    assert(migrated->version==5 && migrated->speed_x10==-123 && migrated->voltage_x100==250 && migrated->led_brightness==35);
     assert(migrated->speed_step_x10==5 && migrated->torque_step_x100==5 && migrated->position_step_x100==5);
     assert((migrated->flags & APP_SPEED_LIMIT_MASK)==0); /* UI supplies default for old records. */
     assert(!(migrated->flags & APP_FLAG_MOTOR_4015));
@@ -166,7 +166,7 @@ int main(void) {
     legacy2.crc=crc32(&legacy2,offsetof(struct Legacy2,crc));
     service(20); memset(flash,255,sizeof(flash)); memcpy(flash,&legacy2,sizeof(legacy2));
     assert(AppStorage_Init()); migrated=AppStorage_Get();
-    assert(migrated->version==3 && migrated->speed_x10==456 && migrated->position_x100==-100);
+    assert(migrated->version==5 && migrated->speed_x10==456 && migrated->position_x100==-100);
     assert((migrated->flags & APP_FLAG_MOTOR_4015) && migrated->torque_step_x100==9);
     assert(migrated->gear_ratio_x100==100 && migrated->control_config==0);
     assert(migrated->axis2_speed_step_x10==5 && migrated->axis2_speed_x10==0);
@@ -183,11 +183,30 @@ int main(void) {
     AppSettings legacy3=*migrated;
     legacy3.seq=100; legacy3.flags=APP_FLAG_MOTOR_4015|(120UL<<APP_SPEED_LIMIT_SHIFT)|(60UL<<8);
     legacy3.axis2_flags=APP_FLAG_CURRENT_LOOP|(110UL<<APP_SPEED_LIMIT_SHIFT)|(47UL<<8);
-    legacy3.crc=crc32(&legacy3,offsetof(AppSettings,crc));
-    service(20); memset(flash,255,sizeof(flash)); memcpy(flash,&legacy3,sizeof(legacy3));
+    legacy3.version=3; legacy3.size=offsetof(AppSettings,motor_detect)+4;
+    legacy3.motor_detect=crc32(&legacy3,offsetof(AppSettings,motor_detect));
+    service(20); memset(flash,255,sizeof(flash)); memcpy(flash,&legacy3,legacy3.size);
     assert(AppStorage_Init());
     assert(AppSettings_GetPositionSpeed(AppStorage_Get()->flags)==60);
     assert(AppSettings_GetPositionSpeed(AppStorage_Get()->axis2_flags)==47);
+    assert(AppStorage_Get()->version==5 && AppStorage_Get()->motor_detect==0);
+    /* R78 v4 stores its CRC immediately after the packed poles/Rs result. */
+    AppSettings legacy4=*AppStorage_Get();
+    legacy4.version=4; legacy4.seq=101; legacy4.size=offsetof(AppSettings,motor_detect_l_uh)+4;
+    legacy4.motor_detect=(2300U<<8)|249U; /* reversed seven pole pairs */
+    legacy4.motor_detect_l_uh=crc32(&legacy4,offsetof(AppSettings,motor_detect_l_uh));
+    service(20); memset(flash,255,sizeof(flash)); memcpy(flash,&legacy4,legacy4.size);
+    assert(AppStorage_Init() && AppStorage_Get()->version==5);
+    assert(AppStorage_Get()->motor_detect==legacy4.motor_detect);
+    assert(AppStorage_Get()->motor_detect_l_uh==0 && AppStorage_Get()->motor_detect_flux_uwb==0);
+    AppStorage_Get()->motor_detect=(1800U<<8)|11U;
+    AppStorage_Get()->motor_detect_l_uh=1326;
+    AppStorage_Get()->motor_detect_flux_uwb=7437;
+    assert(AppStorage_RequestSave()); service(80); assert(result());
+    assert(AppStorage_Init() && AppStorage_Get()->motor_detect==((1800U<<8)|11U));
+    assert(AppStorage_Get()->motor_detect_l_uh==1326 && AppStorage_Get()->motor_detect_flux_uwb==7437);
+    AppStorage_ResetDefaults(); assert(AppStorage_Get()->motor_detect==0);
+    assert(!AppStorage_Get()->motor_detect_l_uh && !AppStorage_Get()->motor_detect_flux_uwb);
     printf("PASS: async save/log, A/B recovery, failure paths, step/speed-limit persistence, versions 1/2 migration and dual-axis v3 persistence\n");
     return 0;
 }

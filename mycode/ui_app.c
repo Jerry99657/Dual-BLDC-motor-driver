@@ -19,6 +19,7 @@
 #include "ui_input.h"
 #include "protocol.h"
 #include "motor_sixstep.h"
+#include "motor_detect.h"
 
 /* ---------- 事件 ---------- */
 enum {
@@ -50,7 +51,11 @@ static bool s_hso_choice;
 static bool s_six_choice;
 static int32_t s_ratio_x100=100,s_offset_x100;
 static uint8_t sensorless_states[1];
-static uint8_t motor_states[1];
+static uint8_t motor_states[2];
+static int32_t s_detect_ma=300;
+static uint32_t s_detect_result;
+static uint32_t s_detect_l,s_detect_flux;
+static uint8_t s_detect_page;
 static uint8_t settings_states[3]={[2]=KK_UI_ITEM_DISABLED<<2U};
 static uint8_t protection_states[1]={[0]=KK_UI_ITEM_DISABLED<<4U};
 static int32_t s_ibus_limit_ma;
@@ -80,13 +85,13 @@ static char s_txt_motor[8], s_txt_motor_menu[20];
 static char s_txt_settings[24],s_txt_steps[20],s_txt_loop_title[24];
 static char s_txt_system[24],s_txt_work_menu[24],s_txt_save_state[24];
 static char s_txt_status[20],s_txt_groups[5][20];
-static const char *const group_names[]={"Drive","Motion","Encoder","ADC","HSO"};
+static const char *const group_names[]={"Drive","Motion","Encoder","ADC"};
 static char s_txt_rpm[24],s_txt_target_aux[24],s_txt_elec_deg[24],s_txt_mech_deg[24];
 static char s_txt_target_unit[12];
 static char s_txt_hso_min[24],s_txt_hso_max[24];
-static char s_txt_work_items[MOTOR_WORK_COUNT][24]={"  Single M1","  Single M2","  Dual Independent",
+static char s_txt_work_items[MOTOR_WORK_COUNT][21]={"  Single M1","  Single M2","  Dual Independent",
     "  Dual Sync Speed","  Dual Sync Position","  Dual Master M1","  Dual Master M2"};
-static char s_txt_axes[2][12]={"Axis M1  ","Axis M2  "};
+static char s_txt_axes[2][10]={"Axis M1  ","Axis M2  "};
 static char s_txt_target[24];
 static char s_txt_speed[24];
 static char s_txt_iq[24];
@@ -98,8 +103,9 @@ static char s_txt_enc2[16];
 static char s_txt_enc2_err[16];
 static char s_txt_drive[16];
 static char s_txt_output[8];
-static char s_txt_run_stop[24] = "--";
-static char s_txt_stop_age[16] = "--", s_txt_stop_errors[16] = "--";
+/* ui_app_reset always seeds these before KK_UI_Init; no Flash zero padding. */
+static char s_txt_run_stop[24];
+static char s_txt_stop_age[16], s_txt_stop_errors[16];
 static char s_txt_enc_crc[16], s_txt_enc_field[16], s_txt_enc_track[16];
 static char s_txt_enc_spi[16], s_txt_enc_frame[16], s_txt_enc_age[24], s_txt_enc_last[16];
 static char s_txt_enc_zero[16], s_txt_enc_zpre[16], s_txt_enc_zpost[16], s_txt_enc_ztime[16];
@@ -250,12 +256,12 @@ static int32_t hso_draft(int32_t value)
 
 __attribute__((noinline)) static int32_t to_x10(float v)
 {
-    return (int32_t)(v * 10.0f + (v >= 0.0f ? 0.5f : -0.5f));
+    return (int32_t)(v * 10.0f + copysignf(0.5f,v));
 }
 
 __attribute__((noinline)) static int32_t to_x100(float v)
 {
-    return (int32_t)(v * 100.0f + (v >= 0.0f ? 0.5f : -0.5f));
+    return (int32_t)(v * 100.0f + copysignf(0.5f,v));
 }
 
 __attribute__((noinline)) static void fmt_fixed(char *buf, size_t len, int32_t v, int scale)
@@ -363,7 +369,7 @@ static void refresh_texts(void)
     axis_title(s_txt_settings,"Settings");
     axis_title(s_txt_steps,"Steps");
     axis_title(s_txt_status,"Status");
-    for (unsigned i=0;i<5;++i) axis_title(s_txt_groups[i],group_names[i]);
+    for (unsigned i=0;i<4;++i) axis_title(s_txt_groups[i],group_names[i]);
     UiText_Format(s_txt_groups[4],sizeof(s_txt_groups[4]),"M1 %s HSO",MotorParams_GetAxis(MOTOR_AXIS_1)->name);
     fmt_unit(s_txt_hso_min,hso_min_x10(),10,"rad/s");
     fmt_unit(s_txt_hso_max,hso_max_x10(),10,"rad/s");
@@ -582,6 +588,7 @@ static const KK_UI_MenuItem motor_items[] = {
     {"2804", KK_UI_MENU_CONFIRM, CONFIRM_MOTOR_2804},
     {"4015", KK_UI_MENU_CONFIRM, CONFIRM_MOTOR_4015},
     {"ESC Auto", KK_UI_MENU_CONFIRM, CONFIRM_MOTOR_ESC},
+    {"M1 Detect", KK_UI_MENU_PAGE, UI_PAGE_DETECT},
 };
 
 static const KK_UI_MenuItem system_items[] = {
@@ -749,7 +756,7 @@ static const KK_UI_InfoRow diagnostics_rows[] = {
 };
 
 static const KK_UI_InfoRow about_rows[] = {
-    {"FW",      "UI-R76-HSO"},
+    {"FW",      "UI-R79-ID"},
     {"MCU",     "STM32G431"},
     {"Motor",   s_txt_motor},
     {"Control", "10kHz FOC"},
@@ -791,6 +798,7 @@ static const KK_UI_PageRoute routes[] = {
     {KK_UI_PAGE_MENU,   5U},
     {KK_UI_PAGE_MENU,   6U},
     {KK_UI_PAGE_INFO,   7U},
+    {KK_UI_PAGE_CUSTOM, 2U},
 };
 
 static KK_UI_IntBinding int_bindings[] = {
@@ -827,7 +835,7 @@ static const KK_UI_App s_app = {
     .menu_page_count = sizeof(menu_pages) / sizeof(menu_pages[0]),
     .info_pages = info_pages,
     .info_page_count = sizeof(info_pages) / sizeof(info_pages[0]),
-    .custom_page_count = 2U,
+    .custom_page_count = 3U,
     .int_bindings = int_bindings,
     .int_binding_count = sizeof(int_bindings) / sizeof(int_bindings[0]),
     .bool_bindings = bool_bindings,
@@ -1167,6 +1175,9 @@ void ui_app_update(uint32_t now_ms)
     KK_UI_ItemState esc_state=s_view_axis==MOTOR_AXIS_1 && MotorControl_SixStepAllowed() ? KK_UI_ITEM_NORMAL : KK_UI_ITEM_DISABLED;
     if(((motor_states[0]>>4U)&3U)!=(unsigned)esc_state)
         (void)KK_UI_SetMenuItemState(UI_PAGE_MOTOR,2U,esc_state);
+    KK_UI_ItemState detect_state=hso_state==KK_UI_ITEM_NORMAL && s_view_axis==MOTOR_AXIS_1 && !sensorless() ? KK_UI_ITEM_NORMAL : KK_UI_ITEM_DISABLED;
+    if(((motor_states[0]>>6U)&3U)!=(unsigned)detect_state)
+        (void)KK_UI_SetMenuItemState(UI_PAGE_MOTOR,3U,detect_state);
     if ((sensorless_states[0] & 3U)!=(unsigned)hso_state)
         for(unsigned i=0;i<2;++i)
             (void)KK_UI_SetMenuItemState(UI_PAGE_SENSORLESS,(uint16_t)i,hso_state);
@@ -1375,6 +1386,12 @@ void ui_app_process_events(void)
 /* ---------- Run 页自定义绘制 ---------- */
 void KK_UI_CustomOnEnter(KK_UI_PageId page)
 {
+    if (page == UI_PAGE_DETECT) {
+        MotorDetect_Reset(); s_detect_result=AppStorage_Get()->motor_detect;
+        s_detect_l=AppStorage_Get()->motor_detect_l_uh;
+        s_detect_flux=AppStorage_Get()->motor_detect_flux_uwb; s_detect_page=0;
+        return;
+    }
     if (page == UI_PAGE_RUN_STEPS) {
         for (unsigned i = 0U; i < 3U; ++i) s_step_drafts[i] = s_run_steps[i];
         s_step_selected = 0U;
@@ -1401,6 +1418,7 @@ void KK_UI_CustomOnEnter(KK_UI_PageId page)
 
 void KK_UI_CustomOnLeave(KK_UI_PageId page)
 {
+    if (page == UI_PAGE_DETECT) MotorDetect_Stop();
     if (page == UI_PAGE_RUN) {
         s_run_lr_key=0U;
         if (s_run_active || views[1U-s_view_axis].run_active) MotorControl_StopAll();
@@ -1411,6 +1429,31 @@ void KK_UI_CustomOnLeave(KK_UI_PageId page)
 void KK_UI_CustomOnInput(KK_UI_PageId page, KK_UI_InputEvent event)
 {
     s_last_input_at = HAL_GetTick();
+    if (page == UI_PAGE_DETECT) {
+        if (event.action==KK_UI_INPUT_BACK) {
+            MotorDetect_Stop(); (void)KK_UI_CustomRequestClose();
+        } else if (event.action==KK_UI_INPUT_OK) {
+            if (MotorDetect_Active()) MotorDetect_Stop();
+            else if (MotorDetect_Result()) {
+                AppStorage_Get()->motor_detect=MotorDetect_Result();
+                AppStorage_Get()->motor_detect_l_uh=MotorDetect_Inductance();
+                AppStorage_Get()->motor_detect_flux_uwb=MotorDetect_Flux();
+                mark_settings_dirty(HAL_GetTick());
+                (void)KK_UI_ShowToast("Save queued",900U);
+            } else {
+                s_detect_result=0; (void)MotorDetect_Start((unsigned)s_detect_ma);
+            }
+        } else if (!MotorDetect_Active()) {
+            if(s_detect_result && (event.action==KK_UI_INPUT_LEFT || event.action==KK_UI_INPUT_RIGHT)) {
+                s_detect_page=(s_detect_page+(event.action==KK_UI_INPUT_LEFT ? 3 : 1))%4;
+                KK_UI_Invalidate(); return;
+            }
+            if (event.action==KK_UI_INPUT_UP || event.action==KK_UI_INPUT_DOWN)
+                s_detect_ma=clamp_i32(s_detect_ma+(event.action==KK_UI_INPUT_UP ? 1 : -1)*(int32_t)event.steps*50,100,500);
+            MotorDetect_Reset(); s_detect_result=0; s_detect_page=0;
+        }
+        KK_UI_Invalidate(); return;
+    }
     if ((page == UI_PAGE_RUN || page == UI_PAGE_RUN_STEPS) &&
         event.source == KK_UI_INPUT_REPEAT) ++s_input_repeats;
     if (page == UI_PAGE_RUN_STEPS) {
@@ -1539,7 +1582,7 @@ void KK_UI_CustomOnInput(KK_UI_PageId page, KK_UI_InputEvent event)
 
 bool KK_UI_CustomOnTick(KK_UI_PageId page, uint32_t now_ms)
 {
-    if (page != UI_PAGE_RUN || now_ms - s_last_live_at < 100U) return false;
+    if ((page != UI_PAGE_RUN && page != UI_PAGE_DETECT) || now_ms - s_last_live_at < 100U) return false;
     s_last_live_at = now_ms;
     return true;
 }
@@ -1547,7 +1590,7 @@ bool KK_UI_CustomOnTick(KK_UI_PageId page, uint32_t now_ms)
 void KK_UI_CustomOnDraw(KK_UI_PageId page, int16_t x_offset,
                         int16_t clip_x, uint16_t clip_width)
 {
-    if (page != UI_PAGE_RUN && page != UI_PAGE_RUN_STEPS) return;
+    if (page != UI_PAGE_RUN && page != UI_PAGE_RUN_STEPS && page != UI_PAGE_DETECT) return;
     const MotorAxisSnapshot motor_state=ui_state();
     const int16_t W = (int16_t)OLED_GetWidth();
     const int16_t H = (int16_t)OLED_GetHeight();
@@ -1555,6 +1598,33 @@ void KK_UI_CustomOnDraw(KK_UI_PageId page, int16_t x_offset,
     char v[16];
     OLED_SetClipWindow(clip_x, 0, clip_width, (uint16_t)H);
     OLED_SetDrawMode(OLED_DRAW_SET);
+    if (page == UI_PAGE_DETECT) {
+        OLED_SetFont(ui_font_body);
+        OLED_DrawUTF8((int16_t)(4+x_offset),1,"M1 Detect");
+        OLED_DrawHLine(x_offset,14,(uint16_t)W);
+        UiText_Format(buf,sizeof(buf),"I test %ld mA",(long)s_detect_ma);
+        OLED_DrawUTF8((int16_t)(4+x_offset),17,buf);
+        uint32_t detected=MotorDetect_Result();
+        OLED_DrawUTF8((int16_t)(4+x_offset),33,!detected && s_detect_result ? "Saved" : MotorDetect_Status());
+        if(detected) {
+            s_detect_result=detected; s_detect_l=MotorDetect_Inductance(); s_detect_flux=MotorDetect_Flux();
+        }
+        int p=(int8_t)s_detect_result;
+        fmt_fixed(v,sizeof(v),(int32_t)((s_detect_result>>8)&65535U)/10,100);
+        UiText_Format(buf,sizeof(buf),"PP %u%s R %s ohm",(unsigned)abs(p),p<0 ? "-" : "+",v);
+        if(s_detect_page==1) UiText_Format(buf,sizeof(buf),"Ls %lu uH",(unsigned long)s_detect_l);
+        if(s_detect_page==2) UiText_Format(buf,sizeof(buf),"Flux %lu uWb",(unsigned long)s_detect_flux);
+        if(s_detect_page==3) {
+            fmt_fixed(v,sizeof(v),(int32_t)((float)s_detect_flux*(float)abs(p)*0.0128254983f+0.5f),100);
+            UiText_Format(buf,sizeof(buf),"Ke %s V/krpm",v); /* Line-line RMS / mechanical krpm. */
+        }
+        if(s_detect_page && !(s_detect_page==1 ? s_detect_l : s_detect_flux)) strcpy(buf,"NO DATA");
+        OLED_DrawUTF8((int16_t)(4+x_offset),49,s_detect_result ? buf : "NO DATA");
+        OLED_DrawHLine(x_offset,65,(uint16_t)W);
+        OLED_DrawUTF8((int16_t)(4+x_offset),67,MotorDetect_Active() ? "OK:Stop K2:Back" :
+            detected ? "OK:Save LR:View" : "OK:Start K2:Back");
+        OLED_ResetClipWindow(); return;
+    }
     if (page == UI_PAGE_RUN_STEPS) {
         /* Compact header keeps its existing baseline; Home uses the restored
          * family line box, independently of which title glyphs were retained. */

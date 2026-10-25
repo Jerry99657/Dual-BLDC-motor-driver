@@ -7,6 +7,7 @@
 #include "MT6701.h"
 #include "motor_sampling.h"
 #include "st_hso.h"
+#include "motor_detect.h"
 #include "protocol.h"
 #include "motor_math.h"
 #include "motor_control.h"
@@ -242,7 +243,23 @@ uint8_t JerryFOC_selectMotor(MotorProfile profile)
     return 1U;
 }
 
-#define _constrain(amt, low, high) ((amt) < (low) ? (low) : ((amt) > (high) ? (high) : (amt)))
+/* Share the repeated finite-controller saturation sequence; retain its NaN
+ * behavior as well (unlike replacing it with fminf/fmaxf). */
+__attribute__((noinline)) static float _constrain(float amt,float low,float high)
+{ return amt<low ? low : amt>high ? high : amt; }
+__attribute__((noinline)) static float symmetric_limit(float amt,float limit)
+{ return amt< -limit ? -limit : amt>limit ? limit : amt; }
+__attribute__((noinline)) float JerryFOC_CurrentPI(PIDController *pid,float error)
+{
+    float integral=pid->integral_prev+pid->I*0.00005f*(error+pid->error_prev);
+    pid->integral_prev=symmetric_limit(integral,pid->limit);
+    pid->error_prev=error;
+    return symmetric_limit(pid->P*error+pid->integral_prev,pid->limit);
+}
+__attribute__((noinline)) void JerryFOC_TrackCurrent(PIDController *pid,float applied,float requested)
+{
+    pid->integral_prev=symmetric_limit(pid->integral_prev+0.2f*(applied-requested),pid->limit);
+}
 
 __RAM_FUNC static float _normalizeAngle(float angle)
 {
@@ -268,12 +285,12 @@ __RAM_FUNC float JerryFOC_PID_Calc(PIDController* pid, float error)
 
     float integral = pid->integral_prev +
         pid->I * Ts * 0.5f * (error + pid->error_prev);
-    integral = _constrain(integral, -pid->limit, pid->limit);
+    integral = symmetric_limit(integral,pid->limit);
 
     float derivative = pid->D * (error - pid->error_prev) / Ts;
 
     float output = proportional + integral + derivative;
-    output = _constrain(output, -pid->limit, pid->limit);
+    output = symmetric_limit(output,pid->limit);
 
     if (pid->output_ramp > 0.0f) {
         float output_rate = (output - pid->output_prev) / Ts;
@@ -453,7 +470,7 @@ static uint8_t sensored_control_ready(void)
             AngleSrc_Encoder_IsAligned()) ? 1U : 0U;
 }
 
-static void reset_pid_state(PIDController *pid)
+__attribute__((noinline)) static void reset_pid_state(PIDController *pid)
 {
     pid->integral_prev = 0.0f;
     pid->error_prev = 0.0f;
@@ -462,6 +479,7 @@ static void reset_pid_state(PIDController *pid)
 
 void JerryFOC_stop(void)
 {
+    MotorDetect_Stop();
     uint32_t mask = __get_PRIMASK();
     __disable_irq();
     /* Equal 50% PWM is a zero vector / dynamic brake, not a coast state.
@@ -488,6 +506,7 @@ void JerryFOC_stop(void)
 
 uint8_t JerryFOC_startOutput(void)
 {
+    if (MotorDetect_Active()) return 0U;
     uint32_t mask = __get_PRIMASK();
     __disable_irq();
     if (MotorControl_SixStepAllowed()) { __set_PRIMASK(mask); return 0U; }
@@ -525,9 +544,8 @@ static void seed_sensored_velocity_pi(void)
 {
     sensored_velocity_reference = filtered_velocity_global;
     float error = sensored_velocity_reference - filtered_velocity_global;
-    vel_loop_M0.integral_prev = _constrain(
-        JerryFOC_Target_Iq - vel_loop_M0.P * error,
-        -vel_loop_M0.limit, vel_loop_M0.limit);
+    vel_loop_M0.integral_prev = symmetric_limit(
+        JerryFOC_Target_Iq - vel_loop_M0.P * error,vel_loop_M0.limit);
     vel_loop_M0.error_prev = error;
     vel_loop_M0.output_prev = JerryFOC_Target_Iq;
 }
@@ -641,7 +659,7 @@ void JerryFOC_setVelocity(float target_vel)
     if (!isfinite(target_vel)) return;
     uint32_t mask = __get_PRIMASK();
     __disable_irq();
-    target_vel=_constrain(target_vel,-active_motor->max_speed_mech,active_motor->max_speed_mech);
+    target_vel=symmetric_limit(target_vel,active_motor->max_speed_mech);
     if (MotorControl_HsoAllowed()) {
         if (target_vel==0.0f) { JerryFOC_stop(); __set_PRIMASK(mask); return; }
         if (!StHso_ValidTarget(target_vel)) { __set_PRIMASK(mask); return; }
@@ -653,8 +671,7 @@ void JerryFOC_setVelocity(float target_vel)
         current_control_mode = JERRYFOC_MODE_VELOCITY;
         recover_hso_stop_for_command();
     }
-    JerryFOC_Target_Velocity = _constrain(target_vel,
-        -active_motor->max_speed_mech, active_motor->max_speed_mech);
+    JerryFOC_Target_Velocity = symmetric_limit(target_vel,active_motor->max_speed_mech);
     __set_PRIMASK(mask);
 }
 void JerryFOC_setCurrent(float target_Iq)
@@ -663,9 +680,9 @@ void JerryFOC_setCurrent(float target_Iq)
     if (current_control_mode == JERRYFOC_MODE_TORQUE && target_Iq != 0.0f)
         recover_hso_stop_for_command();
     if (flag_use_current_loop)
-        target_Iq = _constrain(target_Iq, -active_motor->rated_current, active_motor->rated_current);
+        target_Iq = symmetric_limit(target_Iq,active_motor->rated_current);
     else
-        target_Iq = _constrain(target_Iq, -active_motor->vel_limit, active_motor->vel_limit);
+        target_Iq = symmetric_limit(target_Iq,active_motor->vel_limit);
     JerryFOC_Target_Iq = target_Iq;
 }
 JerryFOC_ControlMode JerryFOC_getMode(void) { return current_control_mode; }
@@ -789,40 +806,21 @@ __RAM_FUNC void JerryFOC_run(void)
         /* Also enforce this at the fast-loop boundary: the velocity outer
          * loop and external application code can write Target_Iq directly. */
         float iq_cap=sqrtf(fmaxf(0.0f,active_motor->rated_current*active_motor->rated_current-target_id*target_id));
-        target_iq = _constrain(target_iq, -iq_cap, iq_cap);
+        target_iq = symmetric_limit(target_iq,iq_cap);
         /* HSO's dq crossfade is an applied current, not the 1 kHz speed-PI
          * request. Feeding it back here would blend the same request again
          * on each of the ten fast-loop ticks and distort startup torque. */
         if (!MotorControl_HsoAllowed()) JerryFOC_Target_Iq = target_iq;
-        float err_q = target_iq - iq_current;
-        float integ_q = iq_loop_M0.integral_prev +
-            iq_loop_M0.I * Ts_curr * 0.5f * (err_q + iq_loop_M0.error_prev);
-        integ_q = _constrain(integ_q, -iq_loop_M0.limit, iq_loop_M0.limit);
-        iq_loop_M0.integral_prev = integ_q;
-        iq_loop_M0.error_prev = err_q;
-        Uq = _constrain(iq_loop_M0.P * err_q + integ_q,
-                        -iq_loop_M0.limit, iq_loop_M0.limit);
-
-        float err_d = target_id - id_current;
-        float integ_d = id_loop_M0.integral_prev +
-            id_loop_M0.I * Ts_curr * 0.5f * (err_d + id_loop_M0.error_prev);
-        integ_d = _constrain(integ_d, -id_loop_M0.limit, id_loop_M0.limit);
-        id_loop_M0.integral_prev = integ_d;
-        id_loop_M0.error_prev = err_d;
-        Ud = _constrain(id_loop_M0.P * err_d + integ_d,
-                        -id_loop_M0.limit, id_loop_M0.limit);
+        Uq=JerryFOC_CurrentPI(&iq_loop_M0,target_iq-iq_current);
+        Ud=JerryFOC_CurrentPI(&id_loop_M0,target_id-id_current);
     }
 
     JerryFOC_setPhaseVoltage(Uq, Ud, electrical_angle);
 
     /* 矢量限幅后的实际电压回算到 PI，抑制饱和时的积分累积。 */
     if (flag_use_current_loop) {
-        iq_loop_M0.integral_prev = _constrain(
-            iq_loop_M0.integral_prev + 0.2f * (g_shared_prev_Uq - Uq),
-            -iq_loop_M0.limit, iq_loop_M0.limit);
-        id_loop_M0.integral_prev = _constrain(
-            id_loop_M0.integral_prev + 0.2f * (g_shared_prev_Ud - Ud),
-            -id_loop_M0.limit, id_loop_M0.limit);
+        JerryFOC_TrackCurrent(&iq_loop_M0,g_shared_prev_Uq,Uq);
+        JerryFOC_TrackCurrent(&id_loop_M0,g_shared_prev_Ud,Ud);
     }
 }
 
@@ -836,12 +834,14 @@ void HAL_ADCEx_InjectedConvCpltCallback(ADC_HandleTypeDef *hadc)
         MT6701_Service();
         MT6701_2_FastService();
         const MotorSampleFrame *frame = MotorSampling_GetFrame();
-        if (MotorControl_HsoAllowed()) StHso_Process(frame,
-            MotorSampling_IsReady() && MotorSampling_IsCalibrated(),0.0f,0.0f,false);
-        if (foc_fast_loop_enabled) {
-            JerryFOC_run();
+        if (!MotorDetect_Process(frame)) {
+            if (MotorControl_HsoAllowed()) StHso_Process(frame,
+                MotorSampling_IsReady() && MotorSampling_IsCalibrated(),0.0f,0.0f,false);
+            if (foc_fast_loop_enabled) {
+                JerryFOC_run();
+            }
+            MotorControl_Fast();
         }
-        MotorControl_Fast();
         StHso_RecordControlCycles(DWT->CYCCNT - control_start);
         MotorControl_RecordCycles(DWT->CYCCNT - control_start);
         service_hso_feedback();
@@ -881,6 +881,8 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 
     MotorControl_PrepareOuter();
 
+    if (MotorDetect_Active()) return;
+
     if (MotorControl_SixStepAllowed() || !MotorSampling_IsOutputRequested() ||
         (!g_openloop_debug && (!control_ready || hso_stop_inhibit))) {
         /* 编码器异常时清空外环状态，防止恢复后误差一次性施加到电机。 */
@@ -893,8 +895,8 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
         /* 开环诊断：目标电压由协议命令直接设置，外环不介入 */
     } else if (current_control_mode == JERRYFOC_MODE_POSITION) {
         float error_pos = JerryFOC_Target_Position - current_mechanical_angle;
-        JerryFOC_Target_Velocity = _constrain(MotorControl_PositionVelocity(
-            MOTOR_AXIS_1, &pos_loop_M0, error_pos), -pos_loop_M0.limit, pos_loop_M0.limit);
+        JerryFOC_Target_Velocity = symmetric_limit(MotorControl_PositionVelocity(
+            MOTOR_AXIS_1, &pos_loop_M0, error_pos),pos_loop_M0.limit);
 
         float velocity_reference =
             update_velocity_reference(JerryFOC_Target_Velocity);

@@ -105,7 +105,10 @@ bool MotorSampling_Capture(void) { ++captures; return complete; }
 const MotorSampleFrame *MotorSampling_GetFrame(void) { return &frame; }
 uint8_t MT6701_IsContinuous(void) { return 1; }
 uint8_t MT6701_IsHealthy(void) { return healthy; }
-uint16_t MT6701_GetRawAngle(void) { return 1000; }
+static uint8_t encoder_zero_gap;
+uint8_t MT6701_HasNearZeroGap(void) { return encoder_zero_gap; }
+static uint16_t encoder_raw=1000;
+uint16_t MT6701_GetRawAngle(void) { return encoder_raw; }
 uint8_t MT6701_GetStatus(void) { return 0; }
 uint16_t MT6701_GetSampleAgeCycles(void) { return 0; }
 uint32_t MT6701_GetErrorCounter(void) { return 0; }

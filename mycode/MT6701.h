@@ -27,6 +27,9 @@ void MT6701_Service(void);
 void MT6701_MainService(void);
 uint8_t MT6701_IsContinuous(void);
 uint8_t MT6701_IsHealthy(void);
+/* Detection-only all-zero gap near raw zero, <=50 ADC cycles / 5 ms: retain the last verified
+ * angle, never refresh it or relax the normal 3-cycle FOC health threshold. */
+uint8_t MT6701_HasNearZeroGap(void);
 uint16_t MT6701_GetRawAngle(void);
 uint8_t MT6701_GetStatus(void);
 uint32_t MT6701_GetSampleCounter(void);

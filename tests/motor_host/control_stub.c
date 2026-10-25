@@ -6,8 +6,17 @@
 #include "MT6701.h"
 #include "angle_src_encoder.h"
 #include "motor_sixstep.h"
+#include "motor_detect.h"
 #define WEAK __attribute__((weak))
 #ifndef CONTROL_STUB_UI
+bool MotorDetect_Active(void) { return false; }
+void MotorDetect_Stop(void) {}
+void MotorDetect_Reset(void) {}
+bool MotorDetect_Start(unsigned ma) { (void)ma; return false; }
+bool MotorDetect_Process(const MotorSampleFrame *frame) { (void)frame; return false; }
+void MotorDetect_Service(uint32_t now) { (void)now; }
+const char *MotorDetect_Status(void) { return "READY"; }
+uint32_t MotorDetect_Result(void) { return 0; }
 bool SixStep_IsGeneric(void) { return false; }
 void SixStep_SetGeneric(bool enable) { (void)enable; }
 #endif
@@ -226,4 +235,9 @@ bool MotorSampling_IsAxisReady(MotorAxis a) { (void)a; return JerryFOC_isDriveRe
 void MT6701_2_FastService(void) {}
 #ifndef CONTROL_STUB_UI
 void MT6701_2_GetDiagnostics(MT6701Diagnostics *o) { *o=(MT6701Diagnostics){0}; }
+#endif
+
+#ifndef CONTROL_STUB_UI
+uint32_t MotorDetect_Inductance(void) { return 0; }
+uint32_t MotorDetect_Flux(void) { return 0; }
 #endif

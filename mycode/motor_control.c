@@ -5,6 +5,7 @@
 #include "app_storage.h"
 #include "st_hso.h"
 #include "motor_sixstep.h"
+#include "motor_detect.h"
 #include <string.h>
 
 /* M1 retains its proven encoder/HSO controller. M2 owns all estimator, PI,
@@ -170,6 +171,7 @@ void MotorControl_Stop(MotorAxis axis)
 }
 static bool stationary(void)
 {
+    if (MotorDetect_Active()) return false;
     if (MotorControl_SixStepAllowed()) return SixStep_AtRest() && !m2.aligning &&
         !MotorSampling_IsOutputRequested() && !MotorSampling_IsAxisOutputRequested(MOTOR_AXIS_2);
     if (MotorControl_HsoAllowed() && !StHso_AtRest()) return false;
@@ -539,6 +541,7 @@ float MotorControl_PositionVelocity(MotorAxis axis,PIDController *position,float
 }
 bool MotorControl_Command(MotorAxis axis,JerryFOC_ControlMode mode,float value,float limit,bool loop)
 {
+    if (MotorDetect_Active()) { command_text="M1 DETECT BUSY"; return false; }
     if (MotorControl_IsHandFollow()) { command_text="Use Follow"; return false; }
     if ((unsigned)axis>=MOTOR_AXIS_COUNT || !isfinite(value) || !isfinite(limit) || !MotorControl_ModeAllowed(mode)) {
         command_text="MODE / VALUE"; return false;
@@ -611,6 +614,7 @@ bool MotorControl_Command(MotorAxis axis,JerryFOC_ControlMode mode,float value,f
 }
 void MotorControl_Service(uint32_t now)
 {
+    MotorDetect_Service(now);
     if (MotorSampling_TakeGlobalStop()) {
         MotorControl_StopAll();
         command_text=m1_stop_reason=m2.stop_reason=group_stop_reason="GLOBAL STOP";
@@ -638,12 +642,6 @@ void MotorControl_Service(uint32_t now)
         stop_axis(MOTOR_AXIS_2);
     }
     __set_PRIMASK(mask);
-}
-static float current_pi(PIDController *p,float error)
-{
-    p->integral_prev=clamp(p->integral_prev+p->I*0.00005f*(error+p->error_prev),-p->limit,p->limit);
-    p->error_prev=error;
-    return clamp(p->P*error+p->integral_prev,-p->limit,p->limit);
 }
 void MotorControl_Fast(void)
 {
@@ -697,13 +695,13 @@ void MotorControl_Fast(void)
     float uq=m2.target_q,ud=0,aq,ad;
     if (m2.loop) {
         float cap=MotorParams_GetAxis(MOTOR_AXIS_2)->rated_current;
-        uq=current_pi(&m2.q,clamp(m2.target_q,-cap,cap)-m2.iq);
-        ud=current_pi(&m2.d,-m2.id);
+        uq=JerryFOC_CurrentPI(&m2.q,clamp(m2.target_q,-cap,cap)-m2.iq);
+        ud=JerryFOC_CurrentPI(&m2.d,-m2.id);
     }
     JerryFOC_setAxisVoltage(MOTOR_AXIS_2,uq,ud,angle,&aq,&ad);
     if (m2.loop) {
-        m2.q.integral_prev=clamp(m2.q.integral_prev+0.2f*(aq-uq),-m2.q.limit,m2.q.limit);
-        m2.d.integral_prev=clamp(m2.d.integral_prev+0.2f*(ad-ud),-m2.d.limit,m2.d.limit);
+        JerryFOC_TrackCurrent(&m2.q,aq,uq);
+        JerryFOC_TrackCurrent(&m2.d,ad,ud);
     }
 }
 static void update_encoder2(void)

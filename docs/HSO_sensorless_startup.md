@@ -1,5 +1,7 @@
 # M1 独立无感启动
 
+R77 新增单 M1 编码器模式下的[极对数／电阻检测](Motor_detect_R77.md)。检测结果单独保存，HSO 继续使用既有预设及配置参数；进入检测前需关闭 HSO Feedback 和 Six Step。
+
 R76：HSO 最低非零机械速度指令按 5 rad/s 向上取整，2804／4015 均为 5 rad/s，正负方向一致，之后按 Run Steps 调节。观测器实际运行／接管判据不因指令取整而提高。实现和验证见 [R76 最低速度](HSO_speed_floor_R76.md)。
 
 R72 起，HSO 的设置入口为 `Settings → System → Sensorless → HSO Feedback`，六步开关也在同一目录；Status 下 HSO 与 Six Step 分别独立。仅调整界面分类，本页控制流程保留，见 [R72 UI](UI_R72_sensorless_menu.md)。
@@ -14,7 +16,7 @@ UI-R59-STOP 增加 KEY1 全局停止，取消 HSO 启动或 CONTROL，松开后�
 
 UI-R58-IBUS 在既有无感控制上加入独立的 M1 母线硬件过流保护，见 [IBUS 门限与恢复](M1_IBUS_hardware_protection.md)。硬件过流后优先显示 M1 IBUS TRIP；确认清除不自动重启，下次仍需手动进行完整 HSO 启动。以下保留 R53 无感算法和 R57 界面说明。
 
-当前固件为 **UI-R76-HSO**，HSO 速度编辑边界以 [R76 最低速度](HSO_speed_floor_R76.md) 为准，Status 分组和辅助单位见 [R57 UI 说明](UI_R57_status_units.md)。HSO 控制沿用 R53：在有效 PWM 高平台上对齐三相电压采样时间，减少错时采样把 PWM 共模变成假差分电压的问题。保留 R52 偏置估计使能修复、R51 固定相位窗口和 dq 电流交接、R49 周期平均磁链学习、R50 有限资格窗口，以及 R48 的 SPI2/保存修复，见 [W25Q64_HSO_save_recovery.md](W25Q64_HSO_save_recovery.md)。
+当前固件为 **UI-R79-ID**，HSO 速度编辑边界以 [R76 最低速度](HSO_speed_floor_R76.md) 为准，Status 分组和辅助单位见 [R57 UI 说明](UI_R57_status_units.md)。HSO 控制沿用 R53：在有效 PWM 高平台上对齐三相电压采样时间，减少错时采样把 PWM 共模变成假差分电压的问题。保留 R52 偏置估计使能修复、R51 固定相位窗口和 dq 电流交接、R49 周期平均磁链学习、R50 有限资格窗口，以及 R48 的 SPI2/保存修复，见 [W25Q64_HSO_save_recovery.md](W25Q64_HSO_save_recovery.md)。
 
 本版把 Single M1 的 HSO Feedback 改为独立无感速度控制。编码器不参与启动、磁链估算、角度资格、速度反馈或故障后回退；允许 MT6701 未连接。双电机模式及 Single M2 继续使用编码器，原有主从跟随算法和 E1/E2 诊断保留。
 

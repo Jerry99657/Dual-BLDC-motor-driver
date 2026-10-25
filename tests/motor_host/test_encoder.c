@@ -437,11 +437,13 @@ static void check_zero_episode(unsigned axis) {
     else MT6701_StartContinuous();
     MT6701Diagnostics d=zero_diag(axis);
     assert(d.zero_count==1 && d.zero_age==UINT16_MAX && d.zero_after==UINT16_MAX);
+    if(!axis) assert(!MT6701_HasNearZeroGap());
     zero_send(axis,0xFFFC1FU); /* raw=16383, CRC-valid independent test vector. */
     d=zero_diag(axis); assert(d.zero_after==16383);
     zero_send(axis,0); d=zero_diag(axis);
     assert(d.zero_before==16383 && d.zero_age==1 && d.zero_count==1 && d.zero_after==UINT16_MAX);
     zero_send(axis,0x800028U); /* raw=8192 with one wrong CRC bit: not the next valid angle. */
+    if(!axis) assert(!MT6701_HasNearZeroGap());
     d=zero_diag(axis); assert(d.zero_after==UINT16_MAX && d.zero_count==1);
     zero_send(axis,0); d=zero_diag(axis); assert(d.zero_count==2 && d.zero_before==16383 && d.zero_age==1);
     tick+=4U;
@@ -452,6 +454,7 @@ static void check_zero_episode(unsigned axis) {
     zero_send(axis,0x823U); /* raw=2, then a far-from-zero event. */
     zero_send(axis,0x0FA006U); zero_send(axis,0); d=zero_diag(axis);
     assert(d.zero_before==1000 && d.zero_age==1 && d.zero_count==1);
+    if(!axis) assert(!MT6701_HasNearZeroGap());
     zero_send(axis,0x0FA436U); d=zero_diag(axis); assert(d.zero_after==1001);
     tick+=6U; /* Frozen sample age alone must not imply freshness. */
     zero_send(axis,0); d=zero_diag(axis); assert(d.zero_age>3 && d.zero_before==1001);
@@ -466,6 +469,22 @@ static void check_zero_episode(unsigned axis) {
     d=zero_diag(axis); assert(d.zero_after==0 && d.zero_count==5);
     zero_send(axis,0); d=zero_diag(axis);
     assert(d.zero_before==0 && d.zero_age==1 && d.zero_count==1 && d.zero_after==UINT16_MAX);
+    if(!axis) {
+        zero_send(0,0x430U); /* Verified raw=1 immediately before zero. */
+        uint32_t samples=MT6701_GetSampleCounter();
+        for(unsigned i=1;i<=50;++i) {
+            zero_send(0,0);
+            assert(MT6701_IsHealthy()==(i<=3)); /* FOC remains strict. */
+            assert(MT6701_HasNearZeroGap() && MT6701_GetRawAngle()==1);
+            assert(MT6701_GetSampleCounter()==samples); /* No fake fresh sample. */
+        }
+        zero_send(0,0); assert(!MT6701_HasNearZeroGap());
+        zero_send(0,0xFFFC1FU); assert(MT6701_IsHealthy() && !MT6701_HasNearZeroGap());
+        zero_send(0,0); assert(MT6701_HasNearZeroGap());
+        tick+=6U; assert(!MT6701_HasNearZeroGap());
+        zero_send(0,0); assert(!MT6701_HasNearZeroGap());
+        puts("PASS: detection-only zero-wrap gap: strict FOC 3 cycles unchanged, <=50 retained-angle cycles, no accepted/published zero, valid-post resolution and stale-wall-clock refusal");
+    }
     printf("PASS: E%u zero-episode before/after/count/freshness, wrap/near/far/no-history, bad CRC exclusion, unchanged stale/latch protection, valid raw zero\n",axis+1);
 }
 static void check_zero_poll(void) {

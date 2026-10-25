@@ -71,6 +71,8 @@ typedef struct {
     int32_t axis2_speed_step_x10;
     int32_t axis2_torque_step_x100;
     int32_t axis2_position_step_x100;
+    uint32_t motor_detect; /* Signed poles in byte 0, equivalent Rs mOhm in bits[23:8]. Results only. */
+    uint32_t motor_detect_l_uh, motor_detect_flux_uwb;
     uint32_t crc;
 } AppSettings;
 

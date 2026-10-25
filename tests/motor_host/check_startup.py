@@ -66,6 +66,10 @@ for mode in ("Debug", "Release"):
     adc_calls=calls(tool("objdump", "-d", "--disassemble=HAL_ADC_IRQHandler", elf))
     tim_calls=calls(tool("objdump", "-d", "--disassemble=HAL_TIM_IRQHandler", elf))
     assert any(c.startswith("StHso_Process") for c in adc_calls), (mode, adc_calls)
+    # LTO may inline the detector into the ADC IRQ. Its ownership gate and
+    # two independent pole checks must then remain in the real linked path.
+    assert any(c.startswith("MotorDetect_Process") for c in adc_calls) or (
+        "MotorDetect_Active" in adc_calls and adc_calls.count("poles")>=2), (mode, adc_calls)
     assert "service_hso_feedback" in adc_calls, (mode, adc_calls)
     assert "MotorControl_PositionVelocity" in tim_calls, (mode, tim_calls)
     assert "MotorControl_VelocityControl" in tim_calls, (mode, tim_calls)
@@ -80,12 +84,13 @@ for mode in ("Debug", "Release"):
     assert any(c.startswith("MotorSampling_GlobalStopIRQ") for c in exti_calls), (mode,exti_calls)
 
     image = (root / "FOC_two.bin").read_bytes()
-    assert b"UI-R76-HSO" in image and b"UI-R75-OPT" not in image, mode
+    assert b"UI-R79-ID" in image and b"UI-R77-ID" not in image, mode
     assert "__aeabi_ddiv" not in symbols and "__divdf3" not in symbols,mode
     for removed in ("snprintf","sniprintf","_printf_i","_svfprintf_r","_svfiprintf_r"):
         assert not re.search(r"^\w+ [tT] "+removed+r"$",symbols,re.M), (mode,removed)
     assert "UiText_Format" in symbols,mode
     assert b"M1 Sensorless" in image and b"M1 Six Step" in image, mode
+    assert b"M1 Detect" in image and b"RS NOT STEADY" in image and b"POLES / REPEAT" in image, mode
     assert b"ESC Auto" in image and b"Throttle only" in image,mode
     assert "__udivmoddi4" in symbols,mode
     assert b"PERIOD HIGH" in image and b"6S Sample" in image, mode

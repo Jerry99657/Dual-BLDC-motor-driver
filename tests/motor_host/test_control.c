@@ -613,7 +613,11 @@ static void check_six_control(void)
     assert(!(settings.control_config & APP_CONFIG_THROTTLE_MASK));
     puts("PASS: real six-step integration: encoder absent, throttle + Speed, strict protocol/axis/unit admission, zero coast, HSO mutual exclusion/persistence, untouched dual encoder modes, KEY1 and explicit restart, live mode/reverse/open-loop refusal");
 }
+#ifdef MOTOR_HOST_DETECT_TEST
+int existing_control_main(int argc,char **argv)
+#else
 int main(int argc,char **argv)
+#endif
 {
     if (argc>1 && !strcmp(argv[1],"follow-model")) { follow_models(false); return 0; }
     if (argc>1 && !strcmp(argv[1],"follow-current")) { follow_current_models(false); return 0; }
