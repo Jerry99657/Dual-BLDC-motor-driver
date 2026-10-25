@@ -15,7 +15,7 @@
 #include "motor_control.h"
 #include "ui_fonts.h"
 #include "motor_sixstep.h"
-float SixStep_MinSpeed(void) { return 75.398224f/MotorParams_GetActive()->pole_pairs; }
+float SixStep_MinSpeed(void) { return MotorParams_GetActiveProfile()==MOTOR_PROFILE_4015 ? 10.0f : 15.0f; }
 float SixStep_MaxSpeed(void) { return 1256.637061f/MotorParams_GetActive()->pole_pairs; }
 static SixStepSnapshot six_ui={.gate='P',.phase_pct=50,.period_pct=100,.status="6STEP READY"};
 static bool generic;
@@ -93,7 +93,7 @@ uint8_t JerryFOC_useHSO(uint8_t en) {
     return 1;
 }
 void StHso_GetSnapshot(StHsoSnapshot *out) { *out=hso_snapshot; }
-float StHso_MinSpeed(void) { return 6.283185307f*5/MotorParams_GetAxis(MOTOR_AXIS_1)->pole_pairs; }
+float StHso_MinSpeed(void) { return 5.0f; } /* Both supported HSO profiles round up to 5 rad/s. */
 bool StHso_AtRest(void) { return hso_at_rest; }
 bool StHso_IsStarting(void) { return hso_active && hso_snapshot.state!=ST_HSO_CONTROL; }
 const char *StHso_StateText(StHsoState state) {
@@ -386,20 +386,28 @@ static const char *save_label(void) {
         if(!strncmp(page->items[i].label,"Save: ",6)) return page->items[i].label;
     assert(0); return "";
 }
+static bool ascii_glyph_present(const uint8_t *font,unsigned char code) {
+    const uint8_t *record=font+23;
+    while(record[1]) {
+        if(record[0]==code) return true;
+        record+=record[1];
+    }
+    return false;
+}
 static void title_coverage(void) {
     const KK_UI_App *app=ui_app_get();
     OLED_SetFont(ui_font_title);
     for(unsigned i=0;i<app->menu_page_count;++i)
         for(const unsigned char *p=(const unsigned char *)app->menu_pages[i].title;*p;++p)
-            assert(OLED_GetGlyphAdvance(*p)>0);
+            assert(ascii_glyph_present(ui_font_title,*p) && OLED_GetGlyphAdvance(*p)>0);
     for(unsigned i=0;i<app->info_page_count;++i)
         for(const unsigned char *p=(const unsigned char *)app->info_pages[i].title;*p;++p)
-            assert(OLED_GetGlyphAdvance(*p)>0);
+            assert(ascii_glyph_present(ui_font_title,*p) && OLED_GetGlyphAdvance(*p)>0);
     for(unsigned i=0;i<app->home_pages[0].item_count;++i)
         for(const unsigned char *p=(const unsigned char *)app->home_pages[0].items[i].label;*p;++p)
-            assert(OLED_GetGlyphAdvance(*p)>0);
+            assert(ascii_glyph_present(ui_font_title,*p) && OLED_GetGlyphAdvance(*p)>0);
     OLED_SetFont(ui_font_body);
-    for(unsigned c=32;c<127;++c) assert(OLED_GetGlyphAdvance(c)>0);
+    for(unsigned c=32;c<127;++c) assert(ascii_glyph_present(ui_font_body,(unsigned char)c) && OLED_GetGlyphAdvance(c)>0);
 }
 
 static void hso_run(MotorProfile profile,int32_t speed,unsigned limit) {
@@ -407,7 +415,7 @@ static void hso_run(MotorProfile profile,int32_t speed,unsigned limit) {
     MotorControl_SelectFeedback(true); MotorParams_Select(profile);
     settings.flags=(profile==MOTOR_PROFILE_4015 ? APP_FLAG_MOTOR_4015 : 0U) |
         (limit<<APP_SPEED_LIMIT_SHIFT);
-    settings.speed_x10=speed;
+    settings.speed_x10=speed; settings.speed_step_x10=1;
     ui_app_reset(tick); assert(KK_UI_Init(ui_app_get())==KK_UI_OK); settle();
     press(KK_UI_KEY_OK); settle();
     assert(KK_UI_GetCurrentPage()==UI_PAGE_RUN);
@@ -420,11 +428,11 @@ static void check_r57(void) {
     /* Real button repeats enter the legal grid in both directions. */
     const KK_UI_App *app=ui_app_get();
     for(unsigned p=0;p<2;++p) {
-        int minimum=p ? 29 : 45;
+        int minimum=50;
         hso_run(p ? MOTOR_PROFILE_4015 : MOTOR_PROFILE_2804,0,600);
-        press(KK_UI_KEY_UP); probe_frame(); assert(drew(p ? "2.9" : "4.5"));
+        press(KK_UI_KEY_UP); probe_frame(); assert(drew("5.0"));
         press(KK_UI_KEY_DOWN); probe_frame(); assert(drew("0.0"));
-        press(KK_UI_KEY_DOWN); probe_frame(); assert(drew(p ? "-2.9" : "-4.5"));
+        press(KK_UI_KEY_DOWN); probe_frame(); assert(drew("-5.0"));
         press(KK_UI_KEY_OK); assert(JerryFOC_Target_Velocity==-(float)minimum/10);
         run_delta(true,10000); probe_frame(); assert(drew("0.0") && drew("OK:Stop K2:Back")); /* Cannot skip zero. */
         run_delta(true,1); probe_frame(); assert(drew("0.0")); /* Running reverse blocked. */
@@ -445,7 +453,7 @@ static void check_r57(void) {
     }
     /* A retained encoder target is adapted only as a draft, before explicit OK. */
     hso_run(MOTOR_PROFILE_4015,1,600); probe_frame();
-    assert(drew("2.9") && settings.speed_x10==1 && drew("OK:Start K2:Back"));
+    assert(drew("5.0") && settings.speed_x10==1 && drew("OK:Start K2:Back"));
     snapshot("r57-hso-min");
     hso_run(MOTOR_PROFILE_4015,-6000,600); probe_frame(); assert(drew("-228.4"));
     hso_run(MOTOR_PROFILE_4015,0,2); press(KK_UI_KEY_UP); step(0,1400);
@@ -454,31 +462,33 @@ static void check_r57(void) {
     /* Long hold still repeats; only the first zero-to-minimum step jumps. */
     hso_run(MOTOR_PROFILE_4015,0,100); step(KK_UI_KEY_UP,1600); step(0,30);
     probe_frame(); press(KK_UI_KEY_OK);
-    assert(JerryFOC_Target_Velocity>2.9f && JerryFOC_Target_Velocity<100);
+    assert(JerryFOC_Target_Velocity>5.0f && JerryFOC_Target_Velocity<100);
     back();
-    /* Real menu navigation, six Info routes, return stack and axis actions. */
+    /* Real menu navigation, seven Info routes, return stack and axis actions. */
     reset(); MotorControl_StopAll(); MotorControl_SelectFeedback(false);
     MotorControl_SelectWork(MOTOR_WORK_INDEPENDENT);
     ui_app_reset(tick); assert(KK_UI_Init(app)==KK_UI_OK); settle();
     press(KK_UI_KEY_RIGHT); press(KK_UI_KEY_RIGHT); press(KK_UI_KEY_OK); settle();
-    assert(KK_UI_GetCurrentPage()==UI_PAGE_STATUS && app->menu_pages[4].item_count==8);
+    assert(KK_UI_GetCurrentPage()==UI_PAGE_STATUS && app->menu_pages[4].item_count==9);
     step(0,2000); snapshot("r57-status-menu");
-    for(unsigned i=0;i<6;++i) {
+    const KK_UI_PageId status_routes[]={UI_PAGE_DRIVE,UI_PAGE_MOTION,UI_PAGE_ENCODER,
+        UI_PAGE_ADC,UI_PAGE_HSO,UI_PAGE_SIXSTEP,UI_PAGE_DIAGNOSTICS};
+    for(unsigned i=0;i<7;++i) {
         while(kk_ui.current.selected!=i) press(KK_UI_KEY_DOWN);
         press(KK_UI_KEY_OK); settle();
-        assert(KK_UI_GetCurrentPage()==UI_PAGE_DRIVE+i);
+        assert(KK_UI_GetCurrentPage()==status_routes[i]);
         probe_frame(); title_coverage();
         if(i==0) snapshot("r57-drive");
         if(i==4) snapshot("r57-hso-limits");
         press(KK_UI_KEY_DOWN); settle(); assert(kk_ui.current.scroll_q8>0);
         back(); assert(KK_UI_GetCurrentPage()==UI_PAGE_STATUS && kk_ui.current.selected==i);
     }
-    while(kk_ui.current.selected!=7) press(KK_UI_KEY_DOWN);
+    while(kk_ui.current.selected!=8) press(KK_UI_KEY_DOWN);
     press(KK_UI_KEY_OK); settle();
     assert(MotorControl_GetFocus()==MOTOR_AXIS_2 && strstr(app->menu_pages[4].title,"M2"));
     assert(!strcmp(status_value("E2 State"),"OK"));
     assert(strstr(app->info_pages[3].title,"M2") && strstr(app->info_pages[5].title,"M1"));
-    while(kk_ui.current.selected!=6) press(KK_UI_KEY_UP);
+    while(kk_ui.current.selected!=7) press(KK_UI_KEY_UP);
     press(KK_UI_KEY_OK); settle(); assert(MotorControl_GetFocus()==MOTOR_AXIS_1);
     /* Auxiliary units retain SI targets and identify wrapped Status angles. */
     velocity=-10; angle=-0.5f*PI; JerryFOC_Target_Velocity=-10; mode=JERRYFOC_MODE_VELOCITY;
@@ -503,7 +513,7 @@ static void check_r57(void) {
     press(KK_UI_KEY_RIGHT); angle=PI/2;
     probe_frame(); assert(drew("Act 1.57 90deg") && drew("0deg")); snapshot("r57-run-deg");
     back();
-    puts("PASS: R57 HSO legal grid/min/max/zero/reversal/rest/repeat; six Status routes/axis context; signed rpm, wrapped degrees and unchanged SI commands");
+    puts("PASS: R57 HSO legal grid/min/max/zero/reversal/rest/repeat; seven Status routes/axis context; signed rpm, wrapped degrees and unchanged SI commands");
 }
 static void check_r58(void) {
     reset(); MotorControl_StopAll(); MotorControl_SelectWork(MOTOR_WORK_SINGLE_M1);
@@ -650,10 +660,14 @@ static void check_r60(void) {
     select_setting("System"); press(KK_UI_KEY_OK); settle();
     const KK_UI_MenuPage *system=&ui_app_get()->menu_pages[2];
     unsigned item=0;
-    while(item<system->item_count && strcmp(system->items[item].label,"Six Step")) ++item;
+    while(item<system->item_count && strcmp(system->items[item].label,"Sensorless")) ++item;
     assert(item<system->item_count);
     while(kk_ui.current.selected!=item) press(KK_UI_KEY_DOWN);
     press(KK_UI_KEY_OK); settle();
+    assert(KK_UI_GetCurrentPage()==UI_PAGE_SENSORLESS);
+    system=&ui_app_get()->menu_pages[6]; item=1;
+    assert(!strcmp(system->items[item].label,"Six Step"));
+    press(KK_UI_KEY_DOWN); press(KK_UI_KEY_OK); settle();
     assert(kk_ui.overlay.type==KK_UI_OVERLAY_BOOL);
     OLED_SetFont(ui_font_title);
     const char *title=ui_app_get()->bool_bindings[system->items[item].ref].title;
@@ -663,7 +677,7 @@ static void check_r60(void) {
     assert(MotorControl_SixStepAllowed() && !MotorControl_HsoAllowed());
     assert(settings.control_config & APP_CONFIG_SIXSTEP);
     snapshot("r60-system-sixstep");
-    back();
+    back(); back();
     const KK_UI_MenuItem *loop=&ui_app_get()->menu_pages[0].items[1];
     assert(!*ui_app_get()->bool_bindings[loop->ref].value);
     assert(settings.flags & APP_FLAG_CURRENT_LOOP); /* Encoder preference retained. */
@@ -701,7 +715,7 @@ static void check_r60(void) {
     assert(!strcmp(status_value("Mode"),"Throttle"));
     assert(strchr(status_value("Target"),'%')!=NULL && settings.voltage_x100==125);
     press(KK_UI_KEY_RIGHT); probe_frame(); assert(drew("M1 Speed 6STEP") && !output_requested);
-    press(KK_UI_KEY_UP); probe_frame(); assert(drew("10.8")); /* ceil(12 electrical Hz / 7 poles). */
+    press(KK_UI_KEY_UP); probe_frame(); assert(drew("15.0")); /* Upward to a multiple of 5 rad/s. */
     run_delta(true,10000); probe_frame(); assert(drew("100.0")); /* Configured Speed Limit still applies. */
     snapshot("r60-run-sixstep");
     press(KK_UI_KEY_RIGHT); probe_frame(); assert(drew("M1 Throttle 6STEP") && drew("100")); /* Skips position. */
@@ -775,6 +789,114 @@ static void check_generic_esc_menu(void) {
     assert(!SixStep_IsGeneric() && !(settings.control_config & APP_CONFIG_ESC));
     assert(MotorControl_ModeAllowed(JERRYFOC_MODE_VELOCITY));
     puts("PASS: ESC Auto confirm/cancel, throttle-only without L/R stop, electrical Hz/no false rpm, saved bit, 2804 preset exit and layout/font");
+}
+static void check_r72(void) {
+    reset(); MotorControl_StopAll(); MotorControl_SelectWork(MOTOR_WORK_SINGLE_M1);
+    MotorControl_SelectFeedback(false);
+    ui_app_reset(tick); assert(KK_UI_Init(ui_app_get())==KK_UI_OK); settle();
+    const KK_UI_App *app=ui_app_get();
+    const KK_UI_MenuPage *system=&app->menu_pages[2],*sensorless=&app->menu_pages[6];
+    assert(sensorless->item_count==2 && !strcmp(sensorless->items[0].label,"HSO Feedback") &&
+        !strcmp(sensorless->items[1].label,"Six Step"));
+    for(unsigned i=0;i<system->item_count;++i)
+        assert(strcmp(system->items[i].label,"HSO Feedback") && strcmp(system->items[i].label,"Six Step"));
+    press(KK_UI_KEY_RIGHT); press(KK_UI_KEY_OK); settle();
+    select_setting("System"); press(KK_UI_KEY_OK); settle();
+    for(unsigned i=0;i<3;++i) press(KK_UI_KEY_DOWN);
+    assert(system->items[kk_ui.current.selected].ref==UI_PAGE_SENSORLESS);
+    probe_frame(); assert(drew("Sensorless")); snapshot("r72-system");
+    press(KK_UI_KEY_OK); settle();
+    assert(KK_UI_GetCurrentPage()==UI_PAGE_SENSORLESS);
+    probe_frame(); assert(drew("M1 Sensorless") && drew("HSO Feedback") && drew("Six Step"));
+    title_coverage(); snapshot("r72-sensorless");
+    /* The moved bindings still apply, exclude each other and keep outputs off. */
+    press(KK_UI_KEY_OK); settle(); assert(kk_ui.overlay.type==KK_UI_OVERLAY_BOOL);
+    press(KK_UI_KEY_RIGHT); press(KK_UI_KEY_OK); press(KK_UI_KEY_OK); settle();
+    assert(MotorControl_HsoAllowed() && !MotorControl_SixStepAllowed() && !output_requested);
+    assert(KK_UI_GetCurrentPage()==UI_PAGE_SENSORLESS && (settings.control_config&8U));
+    press(KK_UI_KEY_DOWN); press(KK_UI_KEY_OK); settle();
+    press(KK_UI_KEY_RIGHT); press(KK_UI_KEY_OK); press(KK_UI_KEY_OK); settle();
+    assert(MotorControl_SixStepAllowed() && !MotorControl_HsoAllowed() && !output_requested);
+    assert(settings.control_config&APP_CONFIG_SIXSTEP);
+    assert(!*app->bool_bindings[sensorless->items[0].ref].value &&
+        *app->bool_bindings[sensorless->items[1].ref].value);
+    step(0,2600); assert(saved_settings.control_config&APP_CONFIG_SIXSTEP);
+    press(KK_UI_KEY_UP); press(KK_UI_KEY_OK); settle(); press(KK_UI_KEY_RIGHT);
+    uint32_t config=settings.control_config;
+    back(); assert(KK_UI_GetCurrentPage()==UI_PAGE_SENSORLESS && settings.control_config==config);
+    back(); assert(KK_UI_GetCurrentPage()==UI_PAGE_SYSTEM && kk_ui.current.selected==3);
+    back(); assert(KK_UI_GetCurrentPage()==UI_PAGE_SETTINGS);
+    back(); assert(KK_UI_GetCurrentPage()==UI_PAGE_HOME);
+    /* All other work modes expose the directory with both M1-only toggles disabled. */
+    for(unsigned work=MOTOR_WORK_SINGLE_M2;work<MOTOR_WORK_COUNT;++work) {
+        MotorControl_SelectWork((MotorWorkMode)work); settle();
+        assert(KK_UI_GoTo(UI_PAGE_SENSORLESS,tick)==KK_UI_OK); settle();
+        for(unsigned i=0;i<2;++i)
+            assert(KK_UI_MenuGetItemState(sensorless,(uint16_t)i)==KK_UI_ITEM_DISABLED);
+        config=settings.control_config;
+        assert(kk_ui.current.selected==sensorless->item_count); /* Only Back is selectable. */
+        if(work==MOTOR_WORK_SINGLE_M2) { step(0,3000); probe_frame(); snapshot("r72-sensorless-disabled"); }
+        press(KK_UI_KEY_OK); settle();
+        assert(KK_UI_GetCurrentPage()==UI_PAGE_HOME && kk_ui.overlay.type==KK_UI_OVERLAY_NONE && settings.control_config==config);
+    }
+    /* Six-step rows moved intact out of Drive and stay physical M1 in an M2 view. */
+    MotorControl_SelectWork(MOTOR_WORK_INDEPENDENT); MotorControl_SetFocus(MOTOR_AXIS_2); settle();
+    six_ui=(SixStepSnapshot){.quality=2,.gate='P',.phase_pct=52,.period_pct=105,.period_fraction=1,
+        .duty=0.091f,.bemf=-0.34f,.velocity=12,.startup_ms=500,.startup_emf=0.45f,
+        .sampling_off=true,.status="6STEP NO ZC"};
+    const char *names[]={"6S ZC","6Step Duty","6Step EMF","6Step Speed",
+        "6S Hold","6S Start EMF","6S Cause","6S Sample"};
+    for(unsigned i=0;i<8;++i) {
+        assert(!strcmp(app->info_pages[7].rows[i].name,names[i]));
+        for(unsigned j=0;j<app->info_pages[0].row_count;++j)
+            assert(strcmp(app->info_pages[0].rows[j].name,names[i]));
+    }
+    assert(KK_UI_GoTo(UI_PAGE_STATUS,tick)==KK_UI_OK); settle();
+    for(unsigned i=0;i<5;++i) press(KK_UI_KEY_DOWN);
+    press(KK_UI_KEY_OK); settle(); assert(KK_UI_GetCurrentPage()==UI_PAGE_SIXSTEP);
+    step(0,3000); probe_frame(); assert(drew("M1 Six Step") && drew("2/12 P 52/105.1"));
+    assert(!strcmp(status_value("6Step Duty"),"9.1 %") && !strcmp(status_value("6Step EMF"),"-0.34 V"));
+    snapshot("r72-sixstep");
+    for(unsigned i=0;i<8;++i) press(KK_UI_KEY_DOWN);
+    probe_frame(); snapshot("r72-sixstep-tail");
+    assert(drew("6S Sample") && drew("OFF"));
+    back(); assert(KK_UI_GetCurrentPage()==UI_PAGE_STATUS && kk_ui.current.selected==5);
+    puts("PASS: R72 System/Sensorless nested routes, HSO/Six Step apply/cancel/exclusion/save/disabled modes/Back; dedicated M1 Six Step rows, scroll, M2 view and existing fonts");
+}
+static void check_r73(void) {
+    for(unsigned p=0;p<2;++p) {
+        reset(); MotorControl_StopAll(); MotorControl_SelectWork(MOTOR_WORK_SINGLE_M1);
+        MotorControl_SelectFeedback(false); MotorParams_Select((MotorProfile)p);
+        assert(MotorControl_SelectSixStep(true));
+        settings.speed_step_x10=1; settings.speed_x10=0;
+        ui_app_reset(tick); assert(KK_UI_Init(ui_app_get())==KK_UI_OK); settle();
+        press(KK_UI_KEY_OK); settle(); press(KK_UI_KEY_RIGHT); probe_frame();
+        assert(drew("M1 Speed 6STEP") && drew("0.0"));
+        press(KK_UI_KEY_UP); probe_frame(); assert(drew(p ? "10.0" : "15.0"));
+        snapshot(p ? "r73-min-4015" : "r73-min-2804");
+        press(KK_UI_KEY_UP); probe_frame(); assert(drew(p ? "10.1" : "15.1"));
+        press(KK_UI_KEY_DOWN); press(KK_UI_KEY_DOWN); probe_frame(); assert(drew("0.0"));
+        press(KK_UI_KEY_DOWN); probe_frame(); assert(drew(p ? "-10.0" : "-15.0"));
+        press(KK_UI_KEY_DOWN); probe_frame(); assert(drew(p ? "-10.1" : "-15.1"));
+        press(KK_UI_KEY_UP); press(KK_UI_KEY_UP); probe_frame(); assert(drew("0.0"));
+        assert(!output_requested); back();
+    }
+    MotorControl_SelectSixStep(false);
+    puts("PASS: R73 both six-step profiles round zero-to-minimum upward to 5 rad/s; +/-0.1 configured increments, deadband back to zero and no draft auto-start");
+}
+static void check_r76(void) {
+    for(unsigned p=0;p<2;++p) {
+        hso_run((MotorProfile)p,0,600);
+        press(KK_UI_KEY_UP); probe_frame(); assert(drew("5.0"));
+        snapshot(p ? "r76-hso-min-4015" : "r76-hso-min-2804");
+        press(KK_UI_KEY_UP); probe_frame(); assert(drew("5.1"));
+        press(KK_UI_KEY_DOWN); press(KK_UI_KEY_DOWN); probe_frame(); assert(drew("0.0"));
+        press(KK_UI_KEY_DOWN); probe_frame(); assert(drew("-5.0"));
+        press(KK_UI_KEY_DOWN); probe_frame(); assert(drew("-5.1"));
+        press(KK_UI_KEY_UP); press(KK_UI_KEY_UP); probe_frame(); assert(drew("0.0"));
+        assert(!output_requested); back();
+    }
+    puts("PASS: R76 both HSO profiles round zero-to-minimum up to 5 rad/s; +/-0.1 configured steps, return to zero and no draft auto-start");
 }
 static void check_r59(void) {
     enter_independent_run();
@@ -1571,6 +1693,9 @@ int main(void) {
     check_r60();
     check_sensorless_profile_menu();
     check_generic_esc_menu();
+    check_r72();
+    check_r73();
+    check_r76();
     puts("PASS: R54 applied Work marker, axis-qualified settings, HSO forced ON with retained encoder preference, Run feedback/bus/stages/actions/ranges, idle focus persistence and durable save states");
     puts("PASS: System/work routes, independent M1/M2 confirmed targets, KEY1 excluded from UI routing, long L/R view-only selection and KEY2 group stop");
     printf("PASS: GPIO, axes, bounce, repeat, Back/cancel, run modes, speed range, stop, fault, position origin, wrap, animations, async DMA (%u submissions)\n",submissions);

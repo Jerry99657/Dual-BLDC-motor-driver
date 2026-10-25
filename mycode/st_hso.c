@@ -114,12 +114,14 @@ __attribute__((optimize("Os"))) bool StHso_LearnFlux(void)
     if (ok) { requested.flux_wb=0; config_pending=true; quiet=0; }
     __set_PRIMASK(mask); return ok;
 }
-float StHso_MinSpeed(void) { return TWO_PI*5.0f/(float)pole_pairs; }
+/* Round the 5-electrical-Hz command floor upward to a 5-rad/s multiple.
+ * ceil(2*pi/poles) == 6/poles+1 for positive integer pole counts. */
+float StHso_MinSpeed(void) { return (float)(5*(6/pole_pairs+1)); }
 bool StHso_AtRest(void) { return !running && quiet>=2000U; }
 __attribute__((optimize("Os"))) bool StHso_ValidTarget(float target)
 {
     float hz=target*(float)pole_pairs/TWO_PI;
-    return isfinite(target) && fabsf(hz)>=5 && fabsf(hz)<400 &&
+    return isfinite(target) && fabsf(target)>=StHso_MinSpeed() && fabsf(hz)>=5 && fabsf(hz)<400 &&
         (!running || target*capture_speed>0);
 }
 __attribute__((optimize("Os"))) bool StHso_Start(float target)

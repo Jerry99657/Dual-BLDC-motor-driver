@@ -80,7 +80,12 @@ for mode in ("Debug", "Release"):
     assert any(c.startswith("MotorSampling_GlobalStopIRQ") for c in exti_calls), (mode,exti_calls)
 
     image = (root / "FOC_two.bin").read_bytes()
-    assert b"UI-R71-ESC" in image and b"UI-R70-ESC" not in image, mode
+    assert b"UI-R76-HSO" in image and b"UI-R75-OPT" not in image, mode
+    assert "__aeabi_ddiv" not in symbols and "__divdf3" not in symbols,mode
+    for removed in ("snprintf","sniprintf","_printf_i","_svfprintf_r","_svfiprintf_r"):
+        assert not re.search(r"^\w+ [tT] "+removed+r"$",symbols,re.M), (mode,removed)
+    assert "UiText_Format" in symbols,mode
+    assert b"M1 Sensorless" in image and b"M1 Six Step" in image, mode
     assert b"ESC Auto" in image and b"Throttle only" in image,mode
     assert "__udivmoddi4" in symbols,mode
     assert b"PERIOD HIGH" in image and b"6S Sample" in image, mode
@@ -93,5 +98,5 @@ for mode in ("Debug", "Release"):
         output = Path(scratch) / "verified.bin"
         tool("objcopy", "-O", "binary", elf, output)
         assert image == output.read_bytes(), mode
-    print(f"PASS: {mode}: HAL_Init precedes clocks/peripherals; strong MSP/COMP/DAC/BRK/EXTI/TIM7, real KEY1 shutdown callback; R71 shared six-step capture/compact division/CORDIC, no sine table; "
+    print(f"PASS: {mode}: HAL_Init precedes clocks/peripherals; strong MSP/COMP/DAC/BRK/EXTI/TIM7, real KEY1 shutdown callback; R75 typed protocol queue, no double division/printf runtime; "
           f"ELF/BIN match ({len(image)} B), SHA256 {hashlib.sha256(image).hexdigest()}")

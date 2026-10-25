@@ -1,6 +1,22 @@
-# M1 六步无感：UI-R71-ESC
+# M1 六步无感：UI-R76-HSO
 
 2026-10-24。本版在编码器 FOC、独立 HSO FOC 之外，提供单 M1 的六步无感油门及速度控制。原有双有感独立／同步／主从、两套电机预设、按键、W25Q64、USB、连续 ADC/VREFINT 和保护保留。六步不依赖编码器或 ST HSO 静态库，不提供位置控制；RUN 无 dq 电流控制，起转辅助使用相电流闭环。实际相电流及全部过流保护持续工作。
+
+## R75：协议 Flash 优化
+
+用户协议解析使用等价常量倒数，并将配置命令识别集中到静态表及类型队列。六步命令和控制流程不变。两套构建为 Flash 128272 B，余 2800 B；实现及数值逐位对照见 [R75 协议优化](Flash_protocol_R75.md)。
+
+## R74：用户代码 Flash 优化
+
+应用层显示格式化改为紧凑的整数／字符串拼接，六步控制和诊断内容继续沿用。两套构建均为 Flash 129000 B，余 2072 B；HAL、ST 库和中断分发未修改。当前固件与验证见 [R74 用户代码优化](Flash_user_code_R74.md)。
+
+## R73：最低 Speed 向上取整
+
+六步最低非零 Speed 按 5 rad/s 向上进位：2804 从 15 起、4015 从 10 起，之后仍按自定义步长加减。界面与控制端共用范围，内部启动信号资格保留，详见 [R73 最低速度](Six_step_speed_floor_R73.md)。
+
+## R72：无感目录与独立诊断页
+
+Six Step 开关移入 `Settings → System → Sensorless`，与 HSO Feedback 归为同一目录；六步诊断从 Drive 移入 `Status → Six Step`，页标题固定标注 M1。控制继续使用 R71 的统一启动资格，设置和采样数据格式不变。操作与当前固件见 [R72 菜单说明](UI_R72_sensorless_menu.md)。
 
 ## R71：预设与 ESC 共用启动资格
 
@@ -215,12 +231,12 @@ Run 速度使用 `Est` 标识估计值。R62 的 Status → Drive `6Step Qual` �
 
 ## 范围与显示
 
-六步 Speed 命令电频率范围为 12～200 Hz，还受当前轴 Speed Limit 限制；这不是 Throttle 的百分比范围，也不是接管必须达到的转速：
+R73 将 12 电气 Hz 换算的机械 Speed 指令下限向上取到 5 rad/s 的倍数，上限仍对应 200 电气 Hz，并受当前轴 Speed Limit 限制；内部启动资格仍按电频率和信号强度检查：
 
 | 电机 | Run 可选非零机械速度，rad/s |
 | --- | --- |
-| 2804，7 极对 | ±10.8～±179.5 |
-| 4015，11 极对 | ±6.9～±114.2 |
+| 2804，7 极对 | ±15.0～±179.5 |
+| 4015，11 极对 | ±10.0～±114.2 |
 
 零值滑行停止；编辑跨过低速禁区时直接到零，运行中禁止直接反转。原 FOC/HSO 速度范围不因此缩小。六步下 Curr Loop 显示 OFF 且不可编辑，保留原编码器电流环偏好，返回 FOC 后仍按原设置应用。
 
@@ -250,11 +266,11 @@ Run 显示 `6STEP ALIGN`、`6STEP RAMP`、`6STEP SYNC`、`6STEP RUN` 或失败�
 
 R66 新增了上述电气／机械耦合假设模型，R67 扩展自适应采样及低速／降油门场景；现有寄存器、合成迹线及软件回归继续保留。R67 尚未实板验证，模型不等于实物。RC 失配后仍可能故障停机，不能把名义模型通过当成信号链已验证。现有功能回归通过；原 HSO 主计算保留 O2，共用 CORDIC 替代 CMSIS 正余弦表。未删除外设或保护。
 
-R71 当前构建均为 Flash **130992 / 131072 B**（余 **80 B**）、RAM **23112 / 32768 B**。Debug 保留调试符号。保留原有 RWX LOAD 段链接警告。最终构建后的启动／强中断入口检查通过，从 ELF 提取二进制与交付 BIN 比较一致；BIN SHA256：
+R76 当前构建均为 Flash **128304 / 131072 B**（余 **2768 B**）、RAM **23080 / 32768 B**。Debug 保留调试符号。保留原有 RWX LOAD 段链接警告。最终构建后的启动／强中断入口检查通过，从 ELF 提取二进制与交付 BIN 比较一致；BIN SHA256：
 
 | 构建 | 文件 | SHA256 |
 | --- | --- | --- |
-| Debug | `build/Debug/FOC_two.bin` | `0a618a83c5323ee5b0b1a531ac2fbac51e0b4f701ed669fae50d0b275cbed4f4` |
-| Release | `build/Release/FOC_two.bin` | `e67bfc161f84e8e3a8a4394fca3bd1c098f38853f8eaf987bc8bab143477b2dc` |
+| Debug | `build/Debug/FOC_two.bin` | `ee6a2fc645c790687cd0da25ad5fab37b6c01817ddf9377764e6e503942adbdc` |
+| Release | `build/Release/FOC_two.bin` | `b2781e0f7e81a8086bfbe9114a00f21a289c28282548ca9a0410d7540dd85b16` |
 
 参考：[ST 六步算法及 ON/OFF 采样](https://wiki.st.com/stm32mcu/wiki/STM32MotorControl%3A6-step_Firmware_Algorithm)、[ST 六步启动配置](https://www.st.com/resource/en/user_manual/um3468-stm32-motor-control-sdk-6step-startup-configuration-stmicroelectronics.pdf)、[FD6288 官方手册](https://download.fortiortech.com/datasheet/HVIC-DS-28-FD6288.pdf)。

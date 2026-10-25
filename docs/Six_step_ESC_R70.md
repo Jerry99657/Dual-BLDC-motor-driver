@@ -1,5 +1,7 @@
 # 通用六步油门：UI-R70-ESC
 
+R72 界面入口更新：六步开关位于 `Settings → System → Sensorless → Six Step`，诊断位于 `Status → Six Step`。ESC Auto 的选择仍在 `Settings → Motor`，详见 [R72 UI](UI_R72_sensorless_menu.md)。下文保留历史实现与验证记录。
+
 本文保留 R70 的实现与验证记录。当前 **UI-R71-ESC** 已将两套预设的六步启动信号资格与 ESC 统一；原文中的“预设固定 20 Hz／较低交接门槛”属于历史实现。新增实板反馈、20% 油门对照和当前固件资源见 [R71 启动资格](Six_step_capture_R71.md)。ESC 的入口、油门／Hz 及保存规则继续有效。
 
 2026-10-25。本版增加 `Settings → Motor → ESC Auto`，仅用于 **Single M1 的六步无感驱动**。通用模式不填写极对数、Rs、Ls、KV 或磁链，使用 0～100% 油门和电气频率 Hz。2804／4015 预设继续提供机械速度 Speed 模式；原有编码器 FOC、独立 HSO、双机有感、主从、存储与保护保留。**无需重新配置 CubeMX，本轮未改变 SPI1／SPI2 的通信配置。**

@@ -31,7 +31,9 @@ static uint16_t percent(float value)
 }
 static bool active(void) { return s.state>=SIX_ALIGN && s.state<=SIX_RUN; }
 /* Shared UI/command boundaries, not part of the commutation ISR. */
-__attribute__((noinline)) float SixStep_MinSpeed(void) { return 75.398224f/MotorParams_GetActive()->pole_pairs; } /* 12 electrical Hz */
+/* Round the 12-electrical-Hz command floor upward to a 5-rad/s multiple.
+ * ceil(2*pi*12/(5*poles)) == 15/poles+1 for positive integer pole counts. */
+__attribute__((noinline)) float SixStep_MinSpeed(void) { return (float)(5*(15/MotorParams_GetActive()->pole_pairs+1)); }
 __attribute__((noinline)) float SixStep_MaxSpeed(void) { return 1256.637061f/MotorParams_GetActive()->pole_pairs; } /* 200 Hz */
 bool SixStep_AtRest(void) { return !active() && quiet>=2000U; }
 void SixStep_GetSnapshot(SixStepSnapshot *out)

@@ -199,18 +199,36 @@ static void check_shared_capture(void) {
     idle(); sine_flux=0.0075f;
     puts("PASS: 2804 preset/ESC 20% share strong capture frequency/hold/voltage; low Speed never exceeds target or enters weak-signal SYNC");
 }
+static void check_rounded_speed_floor(void) {
+    SixStep_SetGeneric(false);
+    for(unsigned p=0;p<2;++p) {
+        MotorParams_Select((MotorProfile)p);
+        float minimum=p ? 10.0f : 15.0f;
+        assert(SixStep_MinSpeed()==minimum);
+        idle();
+        assert(!SixStep_Start(minimum-0.1f) && !SixStep_Start(-minimum+0.1f) && !requested);
+        for(int sign=-1;sign<=1;sign+=2) {
+            assert(SixStep_Start(sign*minimum) && state().target==sign*minimum);
+            idle();
+        }
+    }
+    puts("PASS: rounded six-step Speed command floors 2804=15 / 4015=10 rad/s; both signs inclusive, smaller nonzero commands refused");
+}
 int main(void) {
+    check_rounded_speed_floor();
     check_shared_capture();
     check_generic_capture_floor();
     check_alignment_current();
     check_throttle();
     MotorParams_Select(MOTOR_PROFILE_4015); bus=12; idle();
-    assert(SixStep_Start(30)); advance(18500);
+    sine_flux=0.0032f; /* Keep the synthetic ramp moving above the new 10-rad/s floor. */
+    assert(SixStep_Start(30)); advance(20000);
     assert(state().state==SIX_RAMP && state().reference>SixStep_MinSpeed());
     float sine_ref=state().reference;
     assert(SixStep_Start(SixStep_MinSpeed())); advance(1);
     assert(state().state==SIX_RAMP && state().startup_ms==0);
     assert(sine_ref-state().reference<0.002f && state().reference<sine_ref);
+    sine_flux=0.0075f;
     const float invalid[]={NAN,INFINITY,1,-1,1000};
     for(unsigned profile=0;profile<2;++profile) for(int direction=-1;direction<=1;direction+=2) {
         MotorParams_Select((MotorProfile)profile); idle();

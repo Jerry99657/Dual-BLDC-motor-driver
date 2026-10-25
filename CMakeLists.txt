@@ -117,6 +117,7 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     mycode/kk_ui/src/kk_ui_page.c
 
     mycode/ui_app.c
+    mycode/ui_text.c
     mycode/ui_input.c
     mycode/ui_fonts.c
     mycode/w25q64.c
@@ -140,6 +141,7 @@ set(FOC_UI_SOURCES
     mycode/kk_ui/src/kk_ui_nav.c
     mycode/kk_ui/src/kk_ui_page.c
     mycode/ui_app.c
+    mycode/ui_text.c
     mycode/ui_input.c
     mycode/ui_fonts.c
     mycode/w25q64.c

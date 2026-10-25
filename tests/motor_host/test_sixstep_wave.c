@@ -128,7 +128,8 @@ static void wave_trial(float supply,int direction,bool clamp_diodes,unsigned sce
     if(state().state!=SIX_RUN) fprintf(stderr,"wave failed %.0fV dir %d scenario %u diode %d: %s q%u zc%lu emf %.3f duty %.3f phase/period %u/%u\n",
         supply,direction,scenario,clamp_diodes,state().status,state().quality,(unsigned long)state().crossings,state().bemf,state().duty,state().phase_pct,state().period_pct);
     assert(state().state==SIX_RUN && state().quality==12 && state().velocity*direction>0);
-    if(scenario==3) assert(fabsf(state().velocity)>=SixStep_MinSpeed());
+    /* Actual capture can be below the rounded command floor while speeding up. */
+    if(scenario==3) assert(fabsf(state().velocity)*MotorParams_GetActive()->pole_pairs>=75.398224f);
     assert(state().crossings>=12);
     assert(state().speed_control==(scenario!=4));
     if(scenario>=5) assert(run_samples>=20000);

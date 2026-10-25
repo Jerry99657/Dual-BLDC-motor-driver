@@ -1,8 +1,18 @@
 # 电机驱动板 UI 操作与验证
 
+R76 将 HSO 的最低非零 Speed 向上取到 5 rad/s 的倍数：2804／4015 均为 5 rad/s；后续增减仍按 Run Steps，反向同样处理。Run、Status → HSO 的 H Min 和控制端共用范围，0 仍为停止。详见 [R76 HSO 最低速度](HSO_speed_floor_R76.md)。无需修改 CubeMX。
+
+R75 优化用户协议代码：负指数使用等价的 double 常量倒数，配置命令识别一次后按类型排队执行。保留所有命令、数值精度和界面；本轮再回收 728 B，Flash 余量为 2800 B。对照测试与当前固件见 [R75 协议优化](Flash_protocol_R75.md)。
+
+R74 仅优化应用显示格式化：使用有界的整数／字符串拼接替代 `ui_app.c` 中的 `snprintf`，保持原界面、数值格式和控制功能。HAL、ST 库、中断及 KK_UI 核心文件未修改。两套构建均回收 2064 B，Flash 余量为 2072 B；对照测试与交付见 [R74 用户代码优化](Flash_user_code_R74.md)。
+
+R73 将六步 Speed 的最低非零指令统一向上取到 5 rad/s 的倍数：2804 为 15、4015 为 10；后续增减仍按 Run Steps，正反方向一致。界面与控制端范围同步，详见 [R73 最低速度](Six_step_speed_floor_R73.md)。
+
+**UI-R72-UI** 将两个无感开关归到 `Settings → System → Sensorless → HSO Feedback / Six Step`；Single M2／双机模式可查看目录，但两项禁用。Status 新增与 HSO 同级的 `Six Step`，原 Drive 中的八项六步诊断完整移入，标题固定标注 `M1 Six Step`。返回层级、互斥、保存及原控制行为保留。标题补齐同字体、同字号的 `l/x`，原字形和行框不变。操作、预览和验证见 [R72 菜单说明](UI_R72_sensorless_menu.md)。无需修改 CubeMX。
+
 R71 针对“2804 预设与 ESC 同为 Throttle 20%，只有 ESC 能运行”的反馈，统一两条路径的六步启动信号资格；没有放宽过零或增大电流。Speed 启动参考不主动超过目标，原模式与界面继续保留。对照测试与当前固件见 [R71 启动资格](Six_step_capture_R71.md)。
 
-当前固件 **UI-R71-ESC**（2026-10-25）：`Single M1 + Six Step ON` 下，`Settings → Motor` 新增 `ESC Auto`。通用 Run 仅提供油门 0～100%，显示电气 Hz，机械 rpm 为 `--`；左右短按不切换到其他控制模式。确认后清空目标，停止后后台保存，掉电恢复但不自动运行。选择 2804／4015 返回原预设及 Speed 模式。通用启动不读取电机 Rs／Ls／极对数，既有两套预设共用的六步启动也改为固定电流 PI 与实测电压交接；具体电流边界、模型验证和实板复测步骤见 [R70 ESC Auto](Six_step_ESC_R70.md)。无需修改 CubeMX。
+当前固件 **UI-R76-HSO**（2026-10-25）：`Single M1 + Six Step ON` 下，`Settings → Motor` 新增 `ESC Auto`。通用 Run 仅提供油门 0～100%，显示电气 Hz，机械 rpm 为 `--`；左右短按不切换到其他控制模式。确认后清空目标，停止后后台保存，掉电恢复但不自动运行。选择 2804／4015 返回原预设及 Speed 模式。通用启动不读取电机 Rs／Ls／极对数，既有两套预设共用的六步启动也改为固定电流 PI 与实测电压交接；具体电流边界、模型验证和实板复测步骤见 [R70 ESC Auto](Six_step_ESC_R70.md)。无需修改 CubeMX。
 
 此前 R69 为启动时的 W25Q64 识别加入最多三次尝试及错误保留，SPI2 速率／模式／片选保持原值，详见 [R69 Flash 初始化](Flash_init_retry_R69.md)。R68 的无感型号切换修复继续保留。About 的 Flash 是固定型号文字，不是实际 Flash ID；诊断看 Status → Diagnostics 的 Flash Err、SPI2 Fault／Reset。
 
@@ -125,7 +135,7 @@ UI-R23-LCD 按用户提供的 BOE 屏幕示例将可见区偏移从 26/1 修正�
 
 当前版本增加了 VREFINT 平均与低通滤波，使用测得的 VREF+ 统一换算电流、母线和相电压。Status 新增 VREF（有效估算的电压）、RefState、Ref R/C、RefCnt、RefErr；显示精度不代表测量精度。首个有效平均值完成前不使能电机，参考估计超时锁存 ADC REF。CubeMX 工程和 ADC 初始化均已同步修改，配置、滤波参数与上板核对见 [VREFINT_reference_tracking.md](VREFINT_reference_tracking.md)。
 
-本轮固件在 `About` 首行 `FW` 显示 **UI-R71-ESC**。ENC2 停止/重连见 [Encoder_reconnect_clock_restore.md](Encoder_reconnect_clock_restore.md)，USB 修复见 [USB_CDC_tx_recovery.md](USB_CDC_tx_recovery.md)。HSO 的启动、最低速度、停止和失锁恢复采用 [R44 独立无感规则](HSO_sensorless_startup.md)，不再按编码器实测 45rpm 自动回退。H Gate 为当前校验原因，H Qual 为学习/接管进度和保持异常计数，H Lost 保留上次异常，H Actual 为观测磁链。手动加载过载预算见 [2804_current_limits.md](2804_current_limits.md)。Status → ADC 的 I Trip、IU/IV/IW R/Z 和 ChipRev 见 [current_adc_diagnostics.md](current_adc_diagnostics.md)。
+本轮固件在 `About` 首行 `FW` 显示 **UI-R76-HSO**。ENC2 停止/重连见 [Encoder_reconnect_clock_restore.md](Encoder_reconnect_clock_restore.md)，USB 修复见 [USB_CDC_tx_recovery.md](USB_CDC_tx_recovery.md)。HSO 的启动、最低速度、停止和失锁恢复采用 [R44 独立无感规则](HSO_sensorless_startup.md)，不再按编码器实测 45rpm 自动回退。H Gate 为当前校验原因，H Qual 为学习/接管进度和保持异常计数，H Lost 保留上次异常，H Actual 为观测磁链。手动加载过载预算见 [2804_current_limits.md](2804_current_limits.md)。Status → ADC 的 I Trip、IU/IV/IW R/Z 和 ChipRev 见 [current_adc_diagnostics.md](current_adc_diagnostics.md)。
 
 `Status → Bus` 为 ADC 实测母线电压。`Drive` 显示采样/电流零点的具体状态或锁存故障，编码器在线与对齐另看 Encoder / Aligned。BusRaw 是最新母线原始值，BusCnt / FrameCnt 是规则组样本数 / 完整注入帧数，正常约每秒增加 2000 / 10000；ADC1Err / ADC2Err 显示 HAL 错误码。Enc2 显示第二路 MT6701 的健康状态和原始角度，Enc2Err 为其错误累计值。第二路是否参与控制由 Work Mode 决定；Single M1 六步／HSO 不依赖编码器2，双有感的控制与故障恢复规则保持。
 
@@ -164,4 +174,4 @@ Run 在采样未就绪时显示具体原因并拒绝确认启动；运行中采�
 
 尚未烧录或连接电机验证。实屏帧率、物理按键电平、实际负载下三模式运行和电流环参数需要上板确认；主机模拟不代表这些项目已经验收。
 
-最终构建占用（2026-10-25，UI-R71-ESC）：Debug、Release 均为 Flash 130992 B / RAM 23112 B，Flash 余量 80 B。Debug 保留调试符号；两套 ELF/BIN 一致性检查通过，本轮修改尚未实板验证。固件仍为 `build/Debug/FOC_two.elf`、`build/Release/FOC_two.elf` 和同目录的 BIN、MAP。通用六步操作、电流边界及 Flash 优化见 [R70 ESC Auto](Six_step_ESC_R70.md)；KEY1 见 [全局停止](KEY1_global_stop.md)，硬件保护见 [M1 IBUS 硬件保护](M1_IBUS_hardware_protection.md)，独立 HSO 见 [HSO_sensorless_startup.md](HSO_sensorless_startup.md)，两套电机参数见 [Motor_profiles.md](Motor_profiles.md)。
+最终构建占用（2026-10-25，UI-R76-HSO）：Debug、Release 均为 Flash 128304 B / RAM 23080 B，Flash 余量 2768 B。Debug 保留调试符号；两套 ELF/BIN 一致性检查通过，本轮修改尚未实板验证。固件仍为 `build/Debug/FOC_two.elf`、`build/Release/FOC_two.elf` 和同目录的 BIN、MAP。通用六步操作、电流边界及 Flash 优化见 [R70 ESC Auto](Six_step_ESC_R70.md)；KEY1 见 [全局停止](KEY1_global_stop.md)，硬件保护见 [M1 IBUS 硬件保护](M1_IBUS_hardware_protection.md)，独立 HSO 见 [HSO_sensorless_startup.md](HSO_sensorless_startup.md)，两套电机参数见 [Motor_profiles.md](Motor_profiles.md)。

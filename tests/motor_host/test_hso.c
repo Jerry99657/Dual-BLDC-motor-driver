@@ -218,7 +218,23 @@ static void capture_tests(void) {
     }
     puts("PASS: CAPTURE frequency/energy ripple filtering, 100 ms settle + bounded 200 ms quality window, 2.5% total/2 ms run limits, raw final-frame entry, persistent reset cause/angle/frequency/energy diagnostics, sustained faults rejected (ST binaries mocked)");
 }
+static void command_floor_tests(void) {
+    const MotorParams *motors[]={&MOTOR_2804,&MOTOR_4015};
+    for(unsigned p=0;p<2;++p) for(unsigned reverse=0;reverse<2;++reverse) {
+        init(); StHso_Init(motors[p]); idle();
+        float sign=reverse ? -1.0f : 1.0f;
+        float below=sign*nextafterf(5.0f,0.0f);
+        assert(StHso_MinSpeed()==5.0f);
+        assert(!StHso_ValidTarget(below) && !StHso_Start(below));
+        assert(!StHso_ValidTarget(0) && !StHso_ValidTarget(NAN) && !StHso_ValidTarget(sign*INFINITY));
+        assert(StHso_AtRest() && !StHso_IsRunning());
+        assert(StHso_ValidTarget(sign*5.0f) && StHso_Start(sign*5.0f));
+        assert(StHso_IsStarting() && !StHso_ValidTarget(-sign*5.0f));
+    }
+    puts("PASS: R76 real HSO command floor is 5 rad/s for both profiles/directions; immediately lower values rejected, zero/nonfinite and running reverse guards retained");
+}
 int main(void) {
+    command_floor_tests();
     init(); assert(!StHso_Start(0) && !StHso_Start(1) && !StHso_Start(NAN));
     assert(state().emf_offset_v==0 && state().emf_offset_limit_v==0); /* No configured observer yet. */
     StHsoConfig c; StHso_GetConfig(&c); assert(c.flux_wb==0);
@@ -276,9 +292,9 @@ int main(void) {
     StHso_GetConfig(&c);assert(fabsf(c.flux_wb-0.012f)<0.00002f);
     init();binary_d_ripple=0.8f;assert(StHso_Start(-10));reach_control();
     StHso_GetConfig(&c);assert(fabsf(c.flux_wb-0.012f)<0.00002f);
-    /* The 5 Hz low target uses full 200 ms cycles; enough bounded time remains
-     * for settling + at least 1 s of accepted estimates + HSO qualification. */
-    init();binary_d_ripple=0.8f;assert(StHso_Start(3));reach_control();
+    /* The rounded minimum target still leaves enough bounded time for full
+     * electrical cycles, settling, flux learning and HSO qualification. */
+    init();binary_d_ripple=0.8f;assert(StHso_Start(5));reach_control();
     /* Finite, stable measurements still must pass strength/direction/phase. */
     const float phases[]={0,3.14159265359f,1.0471975512f};
     const StHsoReason gates[]={ST_HSO_REASON_EMF_LOW,ST_HSO_REASON_FREQUENCY,ST_HSO_REASON_ANGLE};

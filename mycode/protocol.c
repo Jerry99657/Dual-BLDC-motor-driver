@@ -72,8 +72,10 @@ static float parse_number(const char *text,const char **end)
     }
     *end=p;
     if (value!=0.0) {
-        double factor=hex ? 2.0 : 10.0;
-        if (exponent<0) { factor=1.0/factor; exponent=-exponent; }
+        /* These are exactly the binary64 results of 1.0/2.0 and 1.0/10.0.
+         * Keep double accumulation without linking a software divider. */
+        double factor=exponent<0 ? (hex ? 0.5 : 0.1) : (hex ? 2.0 : 10.0);
+        if (exponent<0) exponent=-exponent;
         while (exponent) {
             if (exponent&1) value*=factor;
             exponent>>=1;
@@ -169,42 +171,62 @@ void Protocol_Feed(uint8_t source, const uint8_t *data, uint32_t len)
     }
 }
 
-static char config_queue[4][PROTO_LINE_MAX];
+/* Every recognized prefix contains at least one byte. Replacing that prefix
+ * with its kind leaves room for the complete payload at the old 64B size. */
+typedef struct { uint8_t kind; char value[PROTO_LINE_MAX-1]; } ConfigLine;
+_Static_assert(sizeof(ConfigLine)==PROTO_LINE_MAX,"Configuration queue record size");
+static ConfigLine config_queue[4];
 static volatile uint8_t config_head,config_count;
 static volatile bool config_applying;
 static volatile int8_t control_result;
 static bool config_save;
 int8_t Protocol_GetControlResult(void) { return control_result; }
-static bool is_configuration(const char *s)
+enum { CONFIG_WORK,CONFIG_MOTOR1,CONFIG_MOTOR2,CONFIG_FEEDBACK,
+       CONFIG_GEAR,CONFIG_ALIGN,CONFIG_FOCUS,CONFIG_COUNT };
+static const struct { const char *prefix; uint8_t length; } config_prefixes[] = {
+    {"Work:",5},{"Motor1:",7},{"Motor2:",7},{"Feedback:",9},
+    {"Gear:",5},{"Align:",6},{"Focus:",6}
+};
+static uint8_t configuration_kind(const char *s)
 {
-    return !strncmp(s,"Work:",5) || !strncmp(s,"Motor1:",7) || !strncmp(s,"Motor2:",7) ||
-           !strncmp(s,"Feedback:",9) || !strncmp(s,"Gear:",5) || !strncmp(s,"Align:",6) || !strncmp(s,"Focus:",6);
+    for(uint8_t i=0;i<CONFIG_COUNT;++i)
+        if(!strncmp(s,config_prefixes[i].prefix,config_prefixes[i].length)) return i;
+    return CONFIG_COUNT;
 }
-static bool apply_configuration(char *s)
+static bool apply_configuration(uint8_t kind,const char *value)
 {
-    if (!strncmp(s,"Work:",5)) {
+    switch(kind) {
+    case CONFIG_WORK: {
         static const char *const names[]={"SingleM1","SingleM2","Independent","SyncSpeed","SyncPosition","MasterM1","MasterM2"};
         for (unsigned i=0;i<MOTOR_WORK_COUNT;++i)
-            if (!strcmp(s+5,names[i])) return MotorControl_SelectWork((MotorWorkMode)i);
-    } else if (!strncmp(s,"Motor1:",7) || !strncmp(s,"Motor2:",7)) {
-        MotorAxis a=s[5]=='1' ? MOTOR_AXIS_1 : MOTOR_AXIS_2;
-        if (!strcmp(s+7,"2804")) return MotorControl_SelectProfile(a,MOTOR_PROFILE_2804);
-        if (!strcmp(s+7,"4015")) return MotorControl_SelectProfile(a,MOTOR_PROFILE_4015);
-    } else if (!strncmp(s,"Feedback:",9)) {
-        if (!strcmp(s+9,"Encoder")) return MotorControl_SelectFeedback(false);
-        if (!strcmp(s+9,"HSO")) return MotorControl_SelectFeedback(true);
-        if (!strcmp(s+9,"SixStep")) return MotorControl_SelectSixStep(true);
-    } else if (!strncmp(s,"Gear:",5)) {
+            if (!strcmp(value,names[i])) return MotorControl_SelectWork((MotorWorkMode)i);
+        break;
+    }
+    case CONFIG_MOTOR1: case CONFIG_MOTOR2: {
+        MotorAxis a=kind==CONFIG_MOTOR1 ? MOTOR_AXIS_1 : MOTOR_AXIS_2;
+        if (!strcmp(value,"2804")) return MotorControl_SelectProfile(a,MOTOR_PROFILE_2804);
+        if (!strcmp(value,"4015")) return MotorControl_SelectProfile(a,MOTOR_PROFILE_4015);
+        break;
+    }
+    case CONFIG_FEEDBACK:
+        if (!strcmp(value,"Encoder")) return MotorControl_SelectFeedback(false);
+        if (!strcmp(value,"HSO")) return MotorControl_SelectFeedback(true);
+        if (!strcmp(value,"SixStep")) return MotorControl_SelectSixStep(true);
+        break;
+    case CONFIG_GEAR: {
         float v[2];
-        if (parse_hso_values(s+5,v,2) && fabsf(v[0])>=0.01f && fabsf(v[0])<=10.0f && fabsf(v[1])<=62.83f)
+        if (parse_hso_values(value,v,2) && fabsf(v[0])>=0.01f && fabsf(v[0])<=10.0f && fabsf(v[1])<=62.83f)
             return MotorControl_SetGear((int32_t)roundf(v[0]*100),(int32_t)roundf(v[1]*100));
-    } else if (!strncmp(s,"Align:",6) || !strncmp(s,"Focus:",6)) {
-        bool view=s[0]=='F';
-        if (!strcmp(s+6,"M1") || !strcmp(s+6,"M2")) {
-            MotorAxis a=s[7]=='1' ? MOTOR_AXIS_1 : MOTOR_AXIS_2;
-            if (view) { MotorControl_SetFocus(a); return true; }
+        break;
+    }
+    case CONFIG_ALIGN: case CONFIG_FOCUS:
+        if (!strcmp(value,"M1") || !strcmp(value,"M2")) {
+            MotorAxis a=value[1]=='1' ? MOTOR_AXIS_1 : MOTOR_AXIS_2;
+            if (kind==CONFIG_FOCUS) { MotorControl_SetFocus(a); return true; }
             return MotorControl_RequestAlign(a);
         }
+        break;
+    default: break;
     }
     return false;
 }
@@ -212,16 +234,16 @@ void Protocol_Service(void)
 {
     /* Drain the bounded batch before main services automatic alignment. */
     for (unsigned i=0;i<4;++i) {
-        char line[PROTO_LINE_MAX];
+        ConfigLine request;
         uint32_t mask=__get_PRIMASK(); __disable_irq();
         if (!config_count) { __set_PRIMASK(mask); break; }
         config_applying=true;
-        memcpy(line,config_queue[config_head],sizeof(line));
+        memcpy(&request,&config_queue[config_head],sizeof(request));
         config_head=(config_head+1U)%4U; --config_count;
         __set_PRIMASK(mask);
-        bool ok=apply_configuration(line);
+        bool ok=apply_configuration(request.kind,request.value);
         control_result=ok ? 1 : -1;
-        if (ok && strncmp(line,"Focus:",6) && strncmp(line,"Align:",6)) config_save=true;
+        if (ok && request.kind!=CONFIG_FOCUS && request.kind!=CONFIG_ALIGN) config_save=true;
     }
     config_applying=false;
     if (config_save && AppStorage_RequestSave()) config_save=false;
@@ -229,12 +251,16 @@ void Protocol_Service(void)
 
 void Protocol_HandleLine(char *line)
 {
-    if (is_configuration(line)) {
+    uint8_t kind=configuration_kind(line);
+    if (kind<CONFIG_COUNT) {
         if (strlen(line)>=PROTO_LINE_MAX) { control_result=-2; return; }
         uint32_t mask=__get_PRIMASK(); __disable_irq();
         if (config_count>=4U) control_result=-3;
         else {
-            strcpy(config_queue[(config_head+config_count)%4U],line);
+            unsigned tail=(config_head+config_count)%4U;
+            config_queue[tail].kind=kind;
+            strcpy(config_queue[tail].value,line+config_prefixes[kind].length);
+            /* Publish the complete request before the count. */
             ++config_count; control_result=0;
         }
         __set_PRIMASK(mask); return;

@@ -69,7 +69,7 @@ float StHso_ControlAngle(void);
 float StHso_ControlVelocity(void);
 float StHso_CurrentD(void); /* Remaining I/F current-vector amplitude, before frame rotation. */
 void StHso_BlendCurrent(float *d,float *q); /* q input is speed-PI request; outputs are control-frame dq. */
-float StHso_MinSpeed(void);
+float StHso_MinSpeed(void); /* Nonzero command floor, rounded upward to a 5-rad/s multiple. */
 bool StHso_AtRest(void);
 bool StHso_ValidTarget(float target);
 void StHso_Process(const MotorSampleFrame *frame, bool sampling_ready,

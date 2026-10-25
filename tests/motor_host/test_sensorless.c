@@ -33,6 +33,9 @@ int main(void) {
     assert(!JerryFOC_needsAlignment());
     assert(!MotorControl_Command(MOTOR_AXIS_1,JERRYFOC_MODE_VELOCITY,10,0,false));
     sensor_step(2000);assert(StHso_AtRest());
+    float pending_target=JerryFOC_Target_Velocity;
+    command("Speed:4.9"); assert(Protocol_GetControlResult()==-1 && !output_requested && JerryFOC_Target_Velocity==pending_target);
+    command("Speed:-4.9"); assert(Protocol_GetControlResult()==-1 && !output_requested && JerryFOC_Target_Velocity==pending_target);
     binary_jump=-0.502654825f; /* Real FOC handover at the reported -28.8 deg offset. */
     assert(MotorControl_Command(MOTOR_AXIS_1,JERRYFOC_MODE_VELOCITY,10,0,false));
     assert(output_requested && state(MOTOR_AXIS_1).current_loop);
@@ -44,6 +47,7 @@ int main(void) {
     assert(!MotorControl_Command(MOTOR_AXIS_1,JERRYFOC_MODE_POSITION,1,10,false));
     assert(!MotorControl_Command(MOTOR_AXIS_1,JERRYFOC_MODE_TORQUE,1,0,false));
     float target=JerryFOC_Target_Velocity;
+    command("Speed:4.9"); assert(JerryFOC_Target_Velocity==target && output_requested);
     assert(!MotorControl_Command(MOTOR_AXIS_1,JERRYFOC_MODE_VELOCITY,-10,0,false));
     assert(JerryFOC_Target_Velocity==target);
     assert(!MotorControl_Command(MOTOR_AXIS_1,JERRYFOC_MODE_VELOCITY,1,0,false));

@@ -1,7 +1,7 @@
 #include "ui_app.h"
 
 #include <math.h>
-#include <stdio.h>
+#include "ui_text.h"
 #include <stdlib.h>
 #include <string.h>
 
@@ -49,7 +49,7 @@ static bool s_led_enable;
 static bool s_hso_choice;
 static bool s_six_choice;
 static int32_t s_ratio_x100=100,s_offset_x100;
-static uint8_t system_states[2];
+static uint8_t sensorless_states[1];
 static uint8_t motor_states[1];
 static uint8_t settings_states[3]={[2]=KK_UI_ITEM_DISABLED<<2U};
 static uint8_t protection_states[1]={[0]=KK_UI_ITEM_DISABLED<<4U};
@@ -264,9 +264,9 @@ __attribute__((noinline)) static void fmt_fixed(char *buf, size_t len, int32_t v
     const char *sign = (v < 0) ? "-" : "";
 
     if (scale == 1) {
-        snprintf(buf,len,"%ld",(long)v);
+        UiText_Format(buf,len,"%ld",(long)v);
     } else {
-        snprintf(buf,len,"%s%ld.%0*ld",sign,(long)(a/scale),scale==10 ? 1 : 2,(long)(a%scale));
+        UiText_Format(buf,len,"%s%ld.%0*ld",sign,(long)(a/scale),scale==10 ? 1 : 2,(long)(a%scale));
     }
 }
 
@@ -276,19 +276,19 @@ __attribute__((noinline)) static void fmt_unit(char *buf,int32_t value,int scale
 {
     char number[16];
     fmt_fixed(number,sizeof(number),value,scale);
-    snprintf(buf,24U,"%s %s",number,unit);
+    UiText_Format(buf,24U,"%s %s",number,unit);
 }
 
 /* Share the repeated 16-byte diagnostic-counter formatting in the 128KiB
  * image. A bounded call avoids expanding the same snprintf setup per row. */
 __attribute__((noinline)) static void fmt_counter(char *buf,uint32_t count)
 {
-    snprintf(buf,16U,"%lu",(unsigned long)count);
+    UiText_Format(buf,16U,"%lu",(unsigned long)count);
 }
 
 __attribute__((noinline)) static void fmt_pair(char *buf,unsigned first,unsigned second)
 {
-    snprintf(buf,16U,"%u / %u",first,second);
+    UiText_Format(buf,16U,"%u / %u",first,second);
 }
 
 /* Angle auxiliaries in Status describe the within-turn angle. The original
@@ -306,7 +306,7 @@ static void fmt_run_aux(char *buf,int32_t value)
 {
     if(esc_view()) { strcpy(buf,"Hz"); return; }
     bool position=s_run_mode==JERRYFOC_MODE_POSITION;
-    snprintf(buf,16U,"%ld%s",(long)to_x10((float)value*(position ? 0.05729578f : 0.095492966f)),
+    UiText_Format(buf,16U,"%ld%s",(long)to_x10((float)value*(position ? 0.05729578f : 0.095492966f)),
         position ? "deg" : "rpm");
 }
 
@@ -327,33 +327,33 @@ static void refresh_save_state(void)
     if (s_settings_dirty && AppStorage_IsReady() && state!=APP_SAVE_WRITING)
         state=AppStorage_IsDeferred() ? APP_SAVE_DEFERRED : APP_SAVE_PENDING;
     static const char *const names[]={"Defaults","Pending","Saving","Wait bus","Saved","Failed"};
-    snprintf(s_txt_save_state,sizeof(s_txt_save_state),"Save: %s",names[state]);
+    UiText_Format(s_txt_save_state,sizeof(s_txt_save_state),"Save: %s",names[state]);
 }
 
 __attribute__((noinline)) static void axis_title(char *text,const char *suffix)
 {
-    snprintf(text,20U,"M%u %s %s",(unsigned)s_view_axis+1U,s_txt_motor,suffix);
+    UiText_Format(text,20U,"M%u %s %s",(unsigned)s_view_axis+1U,s_txt_motor,suffix);
 }
 
 static void refresh_texts(void)
 {
     const MotorAxisSnapshot state=ui_state();
     strcpy(s_txt_work,MotorControl_WorkText());
-    snprintf(s_txt_command,sizeof(s_txt_command),"%d",(int)Protocol_GetControlResult());
+    UiText_Format(s_txt_command,sizeof(s_txt_command),"%d",(int)Protocol_GetControlResult());
     strcpy(s_txt_axis,s_view_axis==MOTOR_AXIS_1 ? "M1" : "M2");
     strcpy(s_txt_m1,SixStep_IsGeneric() ? "ESC" : MotorParams_GetAxis(MOTOR_AXIS_1)->name);
     strcpy(s_txt_m2,MotorParams_GetAxis(MOTOR_AXIS_2)->name);
     fmt_fixed(s_txt_sync,sizeof(s_txt_sync),to_x100(MotorControl_GroupError()),100);
-    snprintf(s_txt_control_time,sizeof(s_txt_control_time),"%lu us",(unsigned long)(MotorControl_MaxCycles()/170U));
+    UiText_Format(s_txt_control_time,sizeof(s_txt_control_time),"%lu us",(unsigned long)(MotorControl_MaxCycles()/170U));
     strcpy(s_txt_save,AppStorage_IsDeferred() ? "DEFERRED" : "AVAILABLE");
     strcpy(s_txt_save_result,AppStorage_SaveErrorText());
     uint32_t flash_error=AppStorage_FlashError();
     MT6701_2_BusDiagnostics bus_diag;
     MT6701_2_GetBusDiagnostics(&bus_diag);
-    snprintf(s_txt_spi2_fault,sizeof(s_txt_spi2_fault),"%04X/%04X/%04X",
+    UiText_Format(s_txt_spi2_fault,sizeof(s_txt_spi2_fault),"%04X/%04X/%04X",
              (unsigned)bus_diag.cr1,(unsigned)bus_diag.cr2,(unsigned)bus_diag.sr);
-    snprintf(s_txt_spi2_resets,sizeof(s_txt_spi2_resets),"%u",(unsigned)bus_diag.resets);
-    snprintf(s_txt_flash_error,sizeof(s_txt_flash_error),"%lu/%lu/%02lX/%02lX",
+    UiText_Format(s_txt_spi2_resets,sizeof(s_txt_spi2_resets),"%u",(unsigned)bus_diag.resets);
+    UiText_Format(s_txt_flash_error,sizeof(s_txt_flash_error),"%lu/%lu/%02lX/%02lX",
         (unsigned long)(flash_error>>24),(unsigned long)((flash_error>>16)&255U),
         (unsigned long)((flash_error>>8)&255U),(unsigned long)(flash_error&255U));
     s_hso_choice=MotorControl_HsoAllowed();
@@ -364,13 +364,13 @@ static void refresh_texts(void)
     axis_title(s_txt_steps,"Steps");
     axis_title(s_txt_status,"Status");
     for (unsigned i=0;i<5;++i) axis_title(s_txt_groups[i],group_names[i]);
-    snprintf(s_txt_groups[4],sizeof(s_txt_groups[4]),"M1 %s HSO",MotorParams_GetAxis(MOTOR_AXIS_1)->name);
+    UiText_Format(s_txt_groups[4],sizeof(s_txt_groups[4]),"M1 %s HSO",MotorParams_GetAxis(MOTOR_AXIS_1)->name);
     fmt_unit(s_txt_hso_min,hso_min_x10(),10,"rad/s");
     fmt_unit(s_txt_hso_max,hso_max_x10(),10,"rad/s");
     if (hso_max_x10()<hso_min_x10()) strcpy(s_txt_hso_max,"No run range");
     axis_title(s_txt_loop_title,"Curr Loop");
-    snprintf(s_txt_system,sizeof(s_txt_system),"System: %s",MotorControl_WorkText());
-    snprintf(s_txt_work_menu,sizeof(s_txt_work_menu),"Mode: %s",MotorControl_WorkText());
+    UiText_Format(s_txt_system,sizeof(s_txt_system),"System: %s",MotorControl_WorkText());
+    UiText_Format(s_txt_work_menu,sizeof(s_txt_work_menu),"Mode: %s",MotorControl_WorkText());
     for (unsigned i=0;i<MOTOR_WORK_COUNT;++i)
         s_txt_work_items[i][0]=i==(unsigned)MotorControl_GetWork() ? '*' : ' ';
     for (unsigned i=0;i<2;++i)
@@ -426,27 +426,27 @@ static void refresh_texts(void)
              (s_view_axis==MOTOR_AXIS_1 ? MT6701_IsHealthy()!=0U : state.healthy) ? "OK" : "ERROR");
     MT6701_2_Snapshot encoder2;
     MT6701_2_GetSnapshot(&encoder2);
-    snprintf(s_txt_enc2, sizeof(s_txt_enc2), "%s %u",
+    UiText_Format(s_txt_enc2, sizeof(s_txt_enc2), "%s %u",
              encoder2.healthy ? "OK" : encoder2.stopped ? "OFF" : "ERROR", (unsigned)encoder2.raw_angle);
     fmt_counter(s_txt_enc2_err,encoder2.errors);
-    snprintf(s_txt_drive, sizeof(s_txt_drive), "%s",
+    UiText_Format(s_txt_drive, sizeof(s_txt_drive), "%s",
              drive_status_text());
     StHsoSnapshot hso;
     StHso_GetSnapshot(&hso);
     strcpy(s_txt_feedback,(s_view_axis==MOTOR_AXIS_1 ? JerryFOC_getFeedbackText() : "ENCODER"));
     SixStepSnapshot six; SixStep_GetSnapshot(&six);
-    snprintf(s_txt_six_quality,sizeof(s_txt_six_quality),"%u/12 %c %u/%u.%c",six.quality,six.gate ? six.gate : '-',six.phase_pct,six.period_pct,'0'+six.period_fraction%10U);
+    UiText_Format(s_txt_six_quality,sizeof(s_txt_six_quality),"%u/12 %c %u/%u.%c",six.quality,six.gate ? six.gate : '-',six.phase_pct,six.period_pct,'0'+six.period_fraction%10U);
     static const char *const reject_text[]={"-","PHASE EARLY","PHASE LATE","PERIOD LOW","PERIOD HIGH"};
     strcpy(s_txt_six_reject,reject_text[six.reject<=SIX_REJECT_LONG ? six.reject : 0]);
     strcpy(s_txt_six_sample,six.sampling_off ? "OFF" : "ON");
     fmt_unit(s_txt_six_duty,to_x10(six.duty*100.0f),10,"%");
     fmt_unit(s_txt_six_bemf,to_x100(six.bemf),100,"V");
     fmt_unit(s_txt_six_speed,to_x10(six.velocity),10,SixStep_IsGeneric() ? "Hz" : "rad/s");
-    snprintf(s_txt_six_start,sizeof(s_txt_six_start),"%u/500 ms",six.startup_ms);
+    UiText_Format(s_txt_six_start,sizeof(s_txt_six_start),"%u/500 ms",six.startup_ms);
     fmt_unit(s_txt_six_start_emf,to_x100(six.startup_emf),100,"V");
     /* All reason literals fit these 16-byte application buffers. */
     strcpy(s_txt_hso_gate,StHso_ReasonText(JerryFOC_isHSOActive() ? hso.reason : hso.entry_reason));
-    snprintf(s_txt_hso_qual, sizeof(s_txt_hso_qual), "%lu/%u ms %lu/20",
+    UiText_Format(s_txt_hso_qual, sizeof(s_txt_hso_qual), "%lu/%u ms %lu/20",
              (unsigned long)(hso.qualified_samples / 10U),
              hso.state==ST_HSO_LEARNING || hso.reason==ST_HSO_REASON_LEARN_TIMEOUT ? 1000U : 200U,
              (unsigned long)hso.bad_samples);
@@ -466,8 +466,8 @@ static void refresh_texts(void)
     if (isfinite(hso.angle_error_rad)) {
         fmt_unit(s_txt_hso_error, to_x10(hso.angle_error_rad * 57.2957795f), 10, "deg");
     } else strcpy(s_txt_hso_error,"--"); /* Do not convert the startup NaN to integer. */
-    snprintf(s_txt_hso_flux, sizeof(s_txt_hso_flux), "%lu uWb", (unsigned long)(hso.reference_flux_wb * 1000000.0f));
-    snprintf(s_txt_hso_time, sizeof(s_txt_hso_time), "%lu us / %lu", (unsigned long)(hso.max_control_cycles / 170U), (unsigned long)hso.overruns);
+    UiText_Format(s_txt_hso_flux, sizeof(s_txt_hso_flux), "%lu uWb", (unsigned long)(hso.reference_flux_wb * 1000000.0f));
+    UiText_Format(s_txt_hso_time, sizeof(s_txt_hso_time), "%lu us / %lu", (unsigned long)(hso.max_control_cycles / 170U), (unsigned long)hso.overruns);
     strcpy(s_txt_align,state.aligning ? "ALIGNING" : state.aligned ? "YES" : "NO");
     fmt_counter(s_txt_raw,ui_encoder_raw());
 
@@ -494,7 +494,7 @@ static void refresh_texts(void)
     const char *zero=enc.zero_age>3U ? "GAP" :
         (enc.zero_before<=128U || enc.zero_before>=16384U-128U) ? "NEAR" : "FAR";
     if (enc.zero_count) {
-        snprintf(s_txt_enc_zero,sizeof(s_txt_enc_zero),"%s %u",zero,enc.zero_count);
+        UiText_Format(s_txt_enc_zero,sizeof(s_txt_enc_zero),"%s %u",zero,enc.zero_count);
         if (enc.zero_age!=UINT16_MAX) fmt_counter(s_txt_enc_zpre,enc.zero_before);
         else strcpy(s_txt_enc_zpre,"--");
         if (enc.zero_after!=UINT16_MAX) fmt_counter(s_txt_enc_zpost,enc.zero_after);
@@ -516,7 +516,7 @@ static void refresh_texts(void)
     strcpy(s_txt_ibus_state,adc.ibus_latched ? "IBUS: TRIPPED" : adc.ibus_ready ? "IBUS: READY" : "IBUS: NOT READY");
     unsigned reference_mv = (unsigned)(adc.reference_voltage * 1000.0f + 0.5f);
     if (adc.reference_updates != 0U)
-        snprintf(s_txt_reference, sizeof(s_txt_reference), "%u.%03u V",
+        UiText_Format(s_txt_reference, sizeof(s_txt_reference), "%u.%03u V",
                  reference_mv / 1000U, reference_mv % 1000U);
     else
         strcpy(s_txt_reference,"NO DATA");
@@ -525,7 +525,7 @@ static void refresh_texts(void)
     fmt_pair(s_txt_ref_raw,adc.reference_raw,adc.reference_cal);
     fmt_counter(s_txt_ref_count,adc.reference_updates);
     fmt_counter(s_txt_ref_errors,adc.reference_errors);
-    snprintf(s_txt_adc_revision, sizeof(s_txt_adc_revision), "0x%04X", (unsigned)adc.silicon_revision);
+    UiText_Format(s_txt_adc_revision, sizeof(s_txt_adc_revision), "0x%04X", (unsigned)adc.silicon_revision);
     for (unsigned i = 0U; i < 3U; ++i) {
         if (s_view_axis==MOTOR_AXIS_2 && i==2U) { strcpy(s_txt_current_adc[i],"derived"); continue; }
         fmt_pair(s_txt_current_adc[i],adc.current_raw[i],adc.current_zero[i]);
@@ -534,7 +534,7 @@ static void refresh_texts(void)
         strcpy(s_txt_current_trip,"RUN W derived");
     } else if (adc.fault_phase != 0U) {
         unsigned i = adc.fault_phase - 1U;
-        snprintf(s_txt_current_trip, sizeof(s_txt_current_trip), "%s %c %u",
+        UiText_Format(s_txt_current_trip, sizeof(s_txt_current_trip), "%s %c %u",
                  adc.fault_during_zero ? "ZERO" : "RUN", "UVW"[i],
                  (unsigned)adc.fault_current_raw[i]);
     } else {
@@ -548,8 +548,8 @@ static void refresh_texts(void)
     fmt_counter(s_txt_bus_raw,adc.bus_raw);
     fmt_counter(s_txt_bus_count,adc.bus_samples);
     fmt_counter(s_txt_frame_count,adc.frame_samples);
-    snprintf(s_txt_adc1_error, sizeof(s_txt_adc1_error), "0x%lX", (unsigned long)adc.adc1_error);
-    snprintf(s_txt_adc2_error, sizeof(s_txt_adc2_error), "0x%lX", (unsigned long)adc.adc2_error);
+    UiText_Format(s_txt_adc1_error, sizeof(s_txt_adc1_error), "0x%lX", (unsigned long)adc.adc1_error);
+    UiText_Format(s_txt_adc2_error, sizeof(s_txt_adc2_error), "0x%lX", (unsigned long)adc.adc2_error);
 }
 
 /* ---------- 页面描述 ---------- */
@@ -588,10 +588,13 @@ static const KK_UI_MenuItem system_items[] = {
     {s_txt_work_menu, KK_UI_MENU_PAGE, UI_PAGE_WORK},
     {s_txt_axes[0], KK_UI_MENU_ACTION, EVT_FOCUS_M1},
     {s_txt_axes[1], KK_UI_MENU_ACTION, EVT_FOCUS_M2},
-    {"HSO Feedback", KK_UI_MENU_BOOL, BOOL_HSO},
+    {"Sensorless", KK_UI_MENU_PAGE, UI_PAGE_SENSORLESS},
     {"Gear Ratio", KK_UI_MENU_INT, INT_GEAR_RATIO},
     {"Gear Offset", KK_UI_MENU_INT, INT_GEAR_OFFSET},
     {"Align / Retry", KK_UI_MENU_ACTION, EVT_ALIGN},
+};
+static const KK_UI_MenuItem sensorless_items[] = {
+    {"HSO Feedback", KK_UI_MENU_BOOL, BOOL_HSO},
     {"Six Step", KK_UI_MENU_BOOL, BOOL_SIXSTEP},
 };
 static const KK_UI_MenuItem work_items[] = {
@@ -610,6 +613,7 @@ static const KK_UI_MenuItem status_items[] = {
     {"Encoder",KK_UI_MENU_PAGE,UI_PAGE_ENCODER},
     {"ADC",KK_UI_MENU_PAGE,UI_PAGE_ADC},
     {"HSO",KK_UI_MENU_PAGE,UI_PAGE_HSO},
+    {"Six Step",KK_UI_MENU_PAGE,UI_PAGE_SIXSTEP},
     {"System",KK_UI_MENU_PAGE,UI_PAGE_DIAGNOSTICS},
     {s_txt_axes[0],KK_UI_MENU_ACTION,EVT_FOCUS_M1},
     {s_txt_axes[1],KK_UI_MENU_ACTION,EVT_FOCUS_M2},
@@ -625,10 +629,11 @@ static const KK_UI_MenuPage menu_pages[] = {
      sizeof(settings_items) / sizeof(settings_items[0])},
     {s_txt_motor_menu, motor_items, motor_states,
      sizeof(motor_items) / sizeof(motor_items[0])},
-    {"System", system_items, system_states, sizeof(system_items)/sizeof(system_items[0])},
+    {"System", system_items, NULL, sizeof(system_items)/sizeof(system_items[0])},
     {"Work Mode", work_items, NULL, sizeof(work_items)/sizeof(work_items[0])},
     {s_txt_status,status_items,NULL,sizeof(status_items)/sizeof(status_items[0])},
     {"M1 Protection",protection_items,protection_states,sizeof(protection_items)/sizeof(protection_items[0])},
+    {"M1 Sensorless",sensorless_items,sensorless_states,sizeof(sensorless_items)/sizeof(sensorless_items[0])},
 };
 
 static const KK_UI_InfoRow drive_rows[] = {
@@ -647,6 +652,8 @@ static const KK_UI_InfoRow drive_rows[] = {
     {"Stop Age",s_txt_stop_age},
     {"Stop Err",s_txt_stop_errors},
     {"Sync Err",s_txt_sync},
+};
+static const KK_UI_InfoRow sixstep_rows[] = {
     {"6S ZC",s_txt_six_quality}, {"6Step Duty",s_txt_six_duty},
     {"6Step EMF",s_txt_six_bemf}, {"6Step Speed",s_txt_six_speed},
     {"6S Hold",s_txt_six_start}, {"6S Start EMF",s_txt_six_start_emf},
@@ -742,7 +749,7 @@ static const KK_UI_InfoRow diagnostics_rows[] = {
 };
 
 static const KK_UI_InfoRow about_rows[] = {
-    {"FW",      "UI-R71-ESC"},
+    {"FW",      "UI-R76-HSO"},
     {"MCU",     "STM32G431"},
     {"Motor",   s_txt_motor},
     {"Control", "10kHz FOC"},
@@ -761,6 +768,7 @@ static const KK_UI_InfoPage info_pages[] = {
     {s_txt_groups[3],adc_rows,sizeof(adc_rows)/sizeof(adc_rows[0])},
     {s_txt_groups[4],hso_rows,sizeof(hso_rows)/sizeof(hso_rows[0])},
     {"System",diagnostics_rows,sizeof(diagnostics_rows)/sizeof(diagnostics_rows[0])},
+    {"M1 Six Step",sixstep_rows,sizeof(sixstep_rows)/sizeof(sixstep_rows[0])},
 };
 
 /* 下标 = 页面 ID - 1 */
@@ -781,6 +789,8 @@ static const KK_UI_PageRoute routes[] = {
     {KK_UI_PAGE_INFO,   5U},
     {KK_UI_PAGE_INFO,   6U},
     {KK_UI_PAGE_MENU,   5U},
+    {KK_UI_PAGE_MENU,   6U},
+    {KK_UI_PAGE_INFO,   7U},
 };
 
 static KK_UI_IntBinding int_bindings[] = {
@@ -1157,10 +1167,9 @@ void ui_app_update(uint32_t now_ms)
     KK_UI_ItemState esc_state=s_view_axis==MOTOR_AXIS_1 && MotorControl_SixStepAllowed() ? KK_UI_ITEM_NORMAL : KK_UI_ITEM_DISABLED;
     if(((motor_states[0]>>4U)&3U)!=(unsigned)esc_state)
         (void)KK_UI_SetMenuItemState(UI_PAGE_MOTOR,2U,esc_state);
-    if (((system_states[0]>>6U) & 3U)!=(unsigned)hso_state)
-        (void)KK_UI_SetMenuItemState(UI_PAGE_SYSTEM,3U,hso_state);
-    if (((system_states[1]>>6U) & 3U)!=(unsigned)hso_state)
-        (void)KK_UI_SetMenuItemState(UI_PAGE_SYSTEM,7U,hso_state);
+    if ((sensorless_states[0] & 3U)!=(unsigned)hso_state)
+        for(unsigned i=0;i<2;++i)
+            (void)KK_UI_SetMenuItemState(UI_PAGE_SENSORLESS,(uint16_t)i,hso_state);
     KK_UI_ItemState loop_state=s_view_axis==MOTOR_AXIS_1 && sensorless() ? KK_UI_ITEM_DISABLED : KK_UI_ITEM_NORMAL;
     if (((settings_states[0]>>2U) & 3U)!=(unsigned)loop_state)
         (void)KK_UI_SetMenuItemState(UI_PAGE_SETTINGS,1U,loop_state);
@@ -1212,9 +1221,9 @@ void ui_app_update(uint32_t now_ms)
         }
         __set_PRIMASK(mask);
         if (reason) {
-            snprintf(s_txt_run_stop, sizeof(s_txt_run_stop), "%s", reason);
-            snprintf(s_txt_stop_age, sizeof(s_txt_stop_age), "E%u %u", (unsigned)stop_axis+1U, enc.age_cycles);
-            snprintf(s_txt_stop_errors, sizeof(s_txt_stop_errors), "E%u %lu", (unsigned)stop_axis+1U, (unsigned long)enc.errors);
+            UiText_Format(s_txt_run_stop, sizeof(s_txt_run_stop), "%s", reason);
+            UiText_Format(s_txt_stop_age, sizeof(s_txt_stop_age), "E%u %u", (unsigned)stop_axis+1U, enc.age_cycles);
+            UiText_Format(s_txt_stop_errors, sizeof(s_txt_stop_errors), "E%u %lu", (unsigned)stop_axis+1U, (unsigned long)enc.errors);
             stop_run();
             s_pending_toast = reason;
             refresh_texts();
@@ -1567,7 +1576,7 @@ void KK_UI_CustomOnDraw(KK_UI_PageId page, int16_t x_offset,
             const char *unit = i == JERRYFOC_MODE_VELOCITY ? "rad/s" :
                                i == JERRYFOC_MODE_POSITION ? "rad" : s_current_loop ? "A" : "V";
             fmt_fixed(v, sizeof(v), s_step_drafts[i], i == JERRYFOC_MODE_VELOCITY ? 10 : 100);
-            snprintf(buf, sizeof(buf), "%s %s", v, unit);
+            UiText_Format(buf, sizeof(buf), "%s %s", v, unit);
             OLED_DrawUTF8((int16_t)(W - 5 - OLED_GetUTF8Width(buf) + x_offset), y, buf);
             OLED_SetDrawMode(OLED_DRAW_SET);
         }
@@ -1583,12 +1592,12 @@ void KK_UI_CustomOnDraw(KK_UI_PageId page, int16_t x_offset,
     if (MotorControl_IsHandFollow()) {
         unsigned master=MotorControl_GetWork()==MOTOR_WORK_MASTER_M2 ? 2U : 1U;
         bool active=MotorControl_IsGroupActive();
-        snprintf(buf,sizeof(buf),"Hand M%u>M%u ENC",master,3U-master);
+        UiText_Format(buf,sizeof(buf),"Hand M%u>M%u ENC",master,3U-master);
         OLED_DrawUTF8((int16_t)(4+x_offset),1,buf);
         OLED_DrawHLine(x_offset,14,(uint16_t)W);
         OLED_DrawUTF8((int16_t)(4+x_offset),19,"Turn master by hand");
         fmt_fixed(v,sizeof(v),to_x100(MotorControl_GroupError()),100);
-        snprintf(buf,sizeof(buf),"Error %s rad",v);
+        UiText_Format(buf,sizeof(buf),"Error %s rad",v);
         OLED_DrawUTF8((int16_t)(4+x_offset),35,buf);
         OLED_DrawUTF8((int16_t)(4+x_offset),51,active ? "RUN: Following" :
             strcmp(s_txt_run_stop,"--") ? s_txt_run_stop : "STOP: OK to set zero");
@@ -1602,7 +1611,7 @@ void KK_UI_CustomOnDraw(KK_UI_PageId page, int16_t x_offset,
     bool independent=MotorControl_GetWork()==MOTOR_WORK_INDEPENDENT;
     bool starting=hso && StHso_IsStarting();
     const char *mode=oil ? "Throttle" : s_run_mode==JERRYFOC_MODE_TORQUE ? (s_current_loop ? "Iq(A)" : "Uq(V)") : mode_name(s_run_mode);
-    snprintf(buf,sizeof(buf),"M%u %s %s",(unsigned)s_view_axis+1U,mode,six ? (esc_view() ? "ESC" : "6STEP") : hso ? "HSO" : "ENC");
+    UiText_Format(buf,sizeof(buf),"M%u %s %s",(unsigned)s_view_axis+1U,mode,six ? (esc_view() ? "ESC" : "6STEP") : hso ? "HSO" : "ENC");
     OLED_DrawUTF8((int16_t)(4+x_offset),1,buf);
     OLED_DrawHLine(x_offset,14,(uint16_t)W);
     bool changed=run_target_changed();
@@ -1625,7 +1634,7 @@ void KK_UI_CustomOnDraw(KK_UI_PageId page, int16_t x_offset,
     else if (!s_run_active && strcmp(s_txt_run_stop,"--")) fault=s_txt_run_stop;
     else if (!motor_state.healthy || !motor_state.aligned)
         fault=motor_state.healthy ? "NOT ALIGNED" : MotorControl_EncoderLostText(s_view_axis);
-    if (fault) snprintf(buf,sizeof(buf),"%s",fault);
+    if (fault) UiText_Format(buf,sizeof(buf),"%s",fault);
     else {
         const char *speed_tag=starting ? "Ref" : six ? "Est" : "Act";
         int32_t actual=s_run_mode==JERRYFOC_MODE_POSITION ?
@@ -1633,19 +1642,19 @@ void KK_UI_CustomOnDraw(KK_UI_PageId page, int16_t x_offset,
         fmt_fixed(v,sizeof(v),actual,s_run_mode==JERRYFOC_MODE_POSITION ? 100 : 10);
         if (changed) {
             char applied[16]; fmt_fixed(applied,sizeof(applied),*run_target(false),scale);
-            snprintf(buf,sizeof(buf),"%s %s Set %s",speed_tag,v,applied);
-        } else if (hso && *run_target(true)==0) snprintf(buf,sizeof(buf),"Act %s 0=Coast",v);
+            UiText_Format(buf,sizeof(buf),"%s %s Set %s",speed_tag,v,applied);
+        } else if (hso && *run_target(true)==0) UiText_Format(buf,sizeof(buf),"Act %s 0=Coast",v);
         else if (six || s_run_mode!=JERRYFOC_MODE_TORQUE) {
             char aux[16]; fmt_run_aux(aux,actual);
-            snprintf(buf,sizeof(buf),"%s %s %s",speed_tag,v,aux);
-        } else snprintf(buf,sizeof(buf),"Act %s Max %ld",v,(long)s_speed_limit);
+            UiText_Format(buf,sizeof(buf),"%s %s %s",speed_tag,v,aux);
+        } else UiText_Format(buf,sizeof(buf),"Act %s Max %ld",v,(long)s_speed_limit);
     }
     OLED_DrawUTF8((int16_t)(4+x_offset),38,buf);
     if (independent) {
         /* Read both actual output requests; a failed/unviewed axis must not
          * remain labelled RUN merely because its UI view was cached. */
         for (unsigned a=0;a<2;++a) {
-            snprintf(buf,sizeof(buf),"M%u:%s%s",a+1U,
+            UiText_Format(buf,sizeof(buf),"M%u:%s%s",a+1U,
                 MotorSampling_IsAxisOutputRequested((MotorAxis)a) ? "RUN" : "STOP",
                 a==(unsigned)s_view_axis && changed ? "*" : "");
             int16_t x=(int16_t)(4+78*a+x_offset);
@@ -1660,22 +1669,22 @@ void KK_UI_CustomOnDraw(KK_UI_PageId page, int16_t x_offset,
         OLED_DrawUTF8((int16_t)(4+x_offset),51,ss.status);
     } else if (hso) {
         StHsoSnapshot snapshot; StHso_GetSnapshot(&snapshot);
-        snprintf(buf,sizeof(buf),"%s HSO %s",state,StHso_StateText(snapshot.state));
+        UiText_Format(buf,sizeof(buf),"%s HSO %s",state,StHso_StateText(snapshot.state));
         OLED_DrawUTF8((int16_t)(4+x_offset),51,buf);
     } else if (!fault) {
         if (MotorControl_IsCoupled()) {
             MotorAxisSnapshot other; MotorControl_GetAxis((MotorAxis)(1U-s_view_axis),&other);
             fmt_fixed(v,sizeof(v),to_x10(other.velocity),10);
-            snprintf(buf,sizeof(buf),"%s M%u %s",state,(unsigned)(2U-s_view_axis),v);
+            UiText_Format(buf,sizeof(buf),"%s M%u %s",state,(unsigned)(2U-s_view_axis),v);
         } else {
             fmt_fixed(v,sizeof(v),to_x100(motor_state.iq),100);
-            snprintf(buf,sizeof(buf),"%s Iq %s A",state,v);
+            UiText_Format(buf,sizeof(buf),"%s Iq %s A",state,v);
         }
         if (!MotorControl_IsCoupled() && s_run_mode!=JERRYFOC_MODE_TORQUE) {
             fmt_run_aux(v,*run_target(true));
         } else {
             char step[10]; fmt_fixed(step,sizeof(step),s_run_steps[s_run_mode],scale);
-            snprintf(v,sizeof(v),"Step %s",step);
+            UiText_Format(v,sizeof(v),"Step %s",step);
         }
         int16_t right=(int16_t)(W-4-OLED_GetUTF8Width(v)+x_offset);
         if (4+x_offset+OLED_GetUTF8Width(buf)+4>right) strcpy(buf,state);
@@ -1685,7 +1694,7 @@ void KK_UI_CustomOnDraw(KK_UI_PageId page, int16_t x_offset,
     OLED_DrawHLine(x_offset,65,(uint16_t)W);
     const char *action=(hso || six) && *run_target(true)==0 ? "Stop" :
         s_run_active ? (changed ? "Apply" : "Stop") : "Start";
-    snprintf(buf,sizeof(buf),independent ? "OK:%s LR hold K2:Back" : "OK:%s K2:Back",action);
+    UiText_Format(buf,sizeof(buf),independent ? "OK:%s LR hold K2:Back" : "OK:%s K2:Back",action);
     OLED_DrawUTF8((int16_t)(4+x_offset),67,buf);
     OLED_ResetClipWindow();
 }

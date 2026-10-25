@@ -23,6 +23,8 @@ enum {
     UI_PAGE_HSO,
     UI_PAGE_DIAGNOSTICS,
     UI_PAGE_PROTECTION,
+    UI_PAGE_SENSORLESS,
+    UI_PAGE_SIXSTEP,
 };
 
 const KK_UI_App *ui_app_get(void);

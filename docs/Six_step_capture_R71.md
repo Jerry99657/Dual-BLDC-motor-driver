@@ -1,5 +1,7 @@
 # R71：统一预设与 ESC 的六步起转资格
 
+本文保留 R71 的控制修改与验证记录。R72 沿用本页控制算法，设置入口改为 `Settings → System → Sensorless`，六步诊断独立为 `Status → Six Step`，详见 [R72 UI](UI_R72_sensorless_menu.md)。
+
 2026-10-25，固件 **UI-R71-ESC**。用户确认：同一 2804，预设 Throttle 20% 报 NO ZC，ESC Auto 20% 可以运行。预设失败记录：
 
 ```text
