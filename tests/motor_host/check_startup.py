@@ -96,7 +96,7 @@ for mode in ("Debug", "Release"):
     raw_resources=resources();packed_resources=pack(raw_resources)
     assert packed_resources in image and unpack(packed_resources,len(raw_resources))==raw_resources,mode
     text_image=image+raw_resources
-    assert b"UI-R88-PC" in text_image and b"UI-R87-PC" not in text_image, mode
+    assert b"UI-R89-ESC" in text_image and b"UI-R88-PC" not in text_image, mode
     assert "App_FloatToDoubleBits" in symbols and "__aeabi_f2d" in symbols,mode
     for unused in ("__aeabi_dadd","__aeabi_dsub","__adddf3","__subdf3"):
         assert not re.search(r"^\w+ [tT] "+unused+r"$",symbols,re.M),(mode,unused)

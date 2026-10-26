@@ -1,4 +1,6 @@
-# M1 六步无感：UI-R79-ID
+# M1 六步无感：UI-R89-ESC
+
+R89 为 ESC Auto 加入 0.25～0.5 A 的有界启动电流自适应，以及电流跟踪／电压余量约束下的升频暂停；保留完整 500 ms 捕获资格、12 次真实过零接管及原保护。Status → Six Step 新增 `6S Start I`／`6S Ramp Hz/s`；预设 Speed／Throttle 保留。旧版对照复现、参数含义、Flash 和实板复测见 [R89 自适应启动](Six_step_adaptive_R89.md)。无需修改 CubeMX。
 
 R77 新增单 M1 编码器模式下的[极对数／电阻检测](Motor_detect_R77.md)，与六步互斥；本页六步算法继续沿用。结果单独保存，完整固件占用与校验值见文末。
 

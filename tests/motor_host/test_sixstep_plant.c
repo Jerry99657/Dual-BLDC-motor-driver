@@ -9,8 +9,9 @@
 static double amps[3], capv[3], rotor, speed;
 static double inertia=0.00002, friction=0.00003;
 static double flux=0.0075, max_current;
-static bool locked,tolerance;
+static bool locked,tolerance,quantized_current;
 static const MotorParams *plant_motor;
+static MotorParams measured_motor;
 
 static void plant_tick(void)
 {
@@ -58,11 +59,23 @@ static float plant_adc(double volts)
     const double lsb=3.26*11.0/4095.0;
     return (float)(fmax(0,fmin(4095,round(volts/lsb)))*lsb);
 }
+static float plant_current(double amps)
+{
+    if(!quantized_current) return (float)amps;
+    /* INA240A2 + 10mOhm: 0.5V/A, 3.26V ADC, measured zero code 2048.
+     * This stays solely in the independent plant, never the controller. */
+    double code=fmax(0,fmin(4095,round((1.63+0.5*amps)*4095/3.26)));
+    return (float)((code-2048)*3.26/(4095*0.5));
+}
 int main(int argc,char **argv)
 {
     setvbuf(stdout,NULL,_IONBF,0);
     MotorProfile physical=argc>7 && !strcmp(argv[7],"2804") ? MOTOR_PROFILE_2804 : MOTOR_PROFILE_4015;
-    plant_motor=MotorParams_GetProfile(physical);
+    measured_motor=*MotorParams_GetProfile(physical);
+    if(argc>10) measured_motor.Rs=(float)atof(argv[10]);
+    if(argc>11) measured_motor.Ls=(float)atof(argv[11]);
+    quantized_current=argc>10;
+    plant_motor=&measured_motor;
     MotorParams_Select(physical); bus=argc>1 ? (float)atof(argv[1]) : 12;
     idle();
     SixStep_SetGeneric(argc>8 && !strcmp(argv[8],"generic"));
@@ -85,6 +98,10 @@ int main(int argc,char **argv)
     unsigned reversals=0,averages=0;
     double speed_sum=0,estimate_sum=0;
     bool trace=getenv("SIXSTEP_TRACE")!=NULL;
+#ifndef SIXSTEP_BASELINE
+    float max_start_target=0;
+    unsigned paused_ramp=0;
+#endif
     const uint64_t began=us;
     for(unsigned n=0;n<9000000 && state().state!=SIX_FAULT;++n) {
         if(deadline && us>=deadline) { deadline=0; SixStep_OnTimer(); }
@@ -103,10 +120,10 @@ int main(int argc,char **argv)
         memcpy(old_caps,capv,sizeof(capv)); memcpy(old_amps,amps,sizeof(amps));
         plant_tick();
         if(sample_age==0) for(unsigned k=0;k<2;++k)
-            frame.m1_current[k]=no_current ? 0 : (float)(old_amps[k]+0.294117647*(amps[k]-old_amps[k]));
+            frame.m1_current[k]=no_current ? 0 : plant_current(old_amps[k]+0.294117647*(amps[k]-old_amps[k]));
         if(sample_age==1) {
             frame.m1_voltage[1]=plant_adc(old_caps[1]+0.705882353*(capv[1]-old_caps[1]));
-            frame.m1_current[2]=no_current ? 0 : (float)(old_amps[2]+0.705882353*(amps[2]-old_amps[2]));
+            frame.m1_current[2]=no_current ? 0 : plant_current(old_amps[2]+0.705882353*(amps[2]-old_amps[2]));
         }
         if(sample_age==3) {
             for(unsigned k=0;k<3;k+=2)
@@ -124,6 +141,14 @@ int main(int argc,char **argv)
             }
         }
         SixStepSnapshot ss=state();
+#ifndef SIXSTEP_BASELINE
+        if(SixStep_IsGeneric()) {
+            assert(ss.startup_current>=0.25f && ss.startup_current<=0.5f);
+            assert(ss.ramp_hz_s>=0 && ss.ramp_hz_s<=20);
+            if(ss.startup_current>max_start_target) max_start_target=ss.startup_current;
+            if(ss.state==SIX_RAMP && ss.ramp_hz_s<1) ++paused_ramp;
+        }
+#endif
         if(ss.state==SIX_SYNC) entered_sync=true;
         if(ss.state==SIX_RUN) entered_run=true;
         float reference=SixStep_IsGeneric() ? ss.reference*6.283185307f/plant_motor->pole_pairs : ss.reference;
@@ -134,8 +159,8 @@ int main(int argc,char **argv)
             ++averages;
         }
         if(trace && (ss.state!=old || us%100000==0)) {
-            printf("t=%.3f %s q%u zc%lu sector%u actual=%.3f estimate=%.3f ref=%.3f duty=%.3f I=%.3f E=%.3f gate=%c timing=%u/%u\n",
-                us*1e-6,ss.status,ss.quality,(unsigned long)ss.crossings,sector,speed,ss.velocity,ss.reference,duty,max_current,ss.bemf,ss.gate,ss.phase_pct,ss.period_pct);
+            printf("t=%.3f %s q%u zc%lu sector%u actual=%.3f estimate=%.3f ref=%.3f duty=%.3f I=%.3f E=%.3f gate=%c timing=%u/%u hold=%u startE=%.3f\n",
+                us*1e-6,ss.status,ss.quality,(unsigned long)ss.crossings,sector,speed,ss.velocity,ss.reference,sine_drive ? ss.duty : duty,max_current,ss.bemf,ss.gate,ss.phase_pct,ss.period_pct,ss.startup_ms,ss.startup_emf);
         }
         old=ss.state;
         if(key && stopped && !requested) break;
@@ -145,6 +170,7 @@ int main(int argc,char **argv)
         bus,direction,inertia,scenario,ss.status,averages ? speed_sum/averages : speed,
         averages ? estimate_sum/averages : ss.velocity,reversals,max_current,(us-began)*1e-6);
 #ifndef SIXSTEP_BASELINE
+    if(SixStep_IsGeneric()) printf("adaptive: max current target %.3f A, ramp paused %u plant ticks, hold %u ms\n",max_start_target,paused_ramp,ss.startup_ms);
     if(locked || no_current) {
         assert(!entered_sync && !entered_run && !requested && !deadline && ss.state==SIX_FAULT);
         assert(!strcmp(ss.status,no_current ? "6STEP CURRENT" : "6STEP START TIME"));
@@ -164,7 +190,10 @@ int main(int argc,char **argv)
             assert(speed_sum/averages>5);
         } else assert(fabs(speed_sum/averages-direction*target)<1.5);
         assert(fabs((speed_sum-estimate_sum)/averages)<1.0);
-        assert(max_current<(SixStep_IsGeneric() ? 0.5 : 0.7*plant_motor->rated_current));
+        /* 0.5 A is the generic current-vector/filtered limiter, not an
+         * instantaneous PWM-ripple trip. The independent 2 A phase trip
+         * and 0.8 A overload budget are exercised in the sampling suite. */
+        assert(max_current<(SixStep_IsGeneric() ? 0.8 : 0.7*plant_motor->rated_current));
     }
 #else
     (void)entered_sync; (void)entered_run; (void)reduced;

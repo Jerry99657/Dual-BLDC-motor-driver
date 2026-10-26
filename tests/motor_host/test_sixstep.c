@@ -15,6 +15,9 @@ static unsigned sector;
 static bool requested,ready=true,stopped,inject_signal=true,window=true;
 static unsigned timer_calls;
 static bool sine_drive;
+#ifndef SIXSTEP_BASELINE
+static bool lose_current;
+#endif
 static bool sample_off;
 static float sine_phase[3];
 static float sine_angle,sine_alpha,sine_beta,model_alpha,model_beta;
@@ -80,6 +83,9 @@ static void sample(void) {
         frame.m1_current[0]=model_alpha;
         frame.m1_current[1]=-0.5f*model_alpha+0.866025404f*model_beta;
         frame.m1_current[2]=-frame.m1_current[0]-frame.m1_current[1];
+#ifndef SIXSTEP_BASELINE
+        if(lose_current) memset(frame.m1_current,0,sizeof(frame.m1_current));
+#endif
     }
     if(requested && !sine_drive && s.state>=SIX_SYNC && s.state<=SIX_RUN) {
         unsigned h=hp[sector],l=lp[sector],z=3-h-l;
@@ -184,8 +190,10 @@ static void check_shared_capture(void) {
         hz[esc]=esc ? ss.reference : ss.reference*7.0f/6.283185307f;
         strength[esc]=ss.startup_emf; duration[esc]=us-began;
     }
-    assert(fabsf(hz[0]-hz[1])<0.01f && fabsf(strength[0]-strength[1])<0.001f);
-    assert(duration[0]+1000>duration[1] && duration[1]+1000>duration[0]);
+    for(unsigned i=0;i<2;++i) {
+        assert(hz[i]>=12 && hz[i]<=60 && strength[i]>=0.6f);
+        assert(duration[i]<8000000U);
+    }
     /* Low requested Speed must not cause a hidden high-speed startup.
      * With weak EMF at that target, hold in SINE and time out safely. */
     idle(); SixStep_SetGeneric(false);
@@ -197,8 +205,26 @@ static void check_shared_capture(void) {
     }
     assert(state().state==SIX_FAULT && !requested && !deadline && state().gate=='E');
     idle(); sine_flux=0.0075f;
-    puts("PASS: 2804 preset/ESC 20% share strong capture frequency/hold/voltage; low Speed never exceeds target or enters weak-signal SYNC");
+    puts("PASS: preset/ESC keep the full strong capture window; ESC may adapt its envelope; low Speed never exceeds target or enters weak-signal SYNC");
 }
+#ifndef SIXSTEP_BASELINE
+static void check_adaptive_delivery(void) {
+    MotorParams_Select(MOTOR_PROFILE_4015); bus=20;idle();SixStep_SetGeneric(true);
+    assert(SixStep_Throttle(75));
+    assert(state().startup_current==0.25f && state().ramp_hz_s==20);
+    advance(11000);assert(state().state==SIX_RAMP);
+    lose_current=true;advance(1200);
+    assert(state().state==SIX_RAMP && state().ramp_hz_s<2);
+    advance(2000);float current_target=state().startup_current;
+    assert(state().duty>=0.7f && current_target>=0.25f && current_target<=0.5f);
+    advance(1000);assert(state().startup_current==current_target && !deadline);
+    assert(state().quality==0 && state().crossings==0 && state().state==SIX_RAMP);
+    lose_current=false;idle();
+    assert(SixStep_Throttle(30));assert(state().startup_current==0.25f && state().ramp_hz_s==20);
+    idle();SixStep_SetGeneric(false);
+    puts("PASS: generic delivery loss slows acceleration, voltage saturation stops current boost, bounded envelope, no fabricated crossing, explicit fresh-start reset");
+}
+#endif
 static void check_rounded_speed_floor(void) {
     SixStep_SetGeneric(false);
     for(unsigned p=0;p<2;++p) {
@@ -215,6 +241,9 @@ static void check_rounded_speed_floor(void) {
     puts("PASS: rounded six-step Speed command floors 2804=15 / 4015=10 rad/s; both signs inclusive, smaller nonzero commands refused");
 }
 int main(void) {
+#ifndef SIXSTEP_BASELINE
+    check_adaptive_delivery();
+#endif
     check_rounded_speed_floor();
     check_shared_capture();
     check_generic_capture_floor();

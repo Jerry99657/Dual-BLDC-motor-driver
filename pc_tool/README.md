@@ -1,10 +1,10 @@
-# 双电机控制台 R88（单文件 HTML）
+# 双电机控制台 R89（单文件 HTML）
 
 `index.html` 是完整的离线上位机。界面、Web Serial 通信、协议解析、曲线、CSV 记录／回放和配置查询都内嵌在文件中，无需 Python、安装依赖或运行后台。
 
 ## 使用
 
-1. 板子使用本项目 `UI-R88-PC` 固件；构建产物位于 `build/Debug/`、`build/Release/`。R87 仅兼容原有优先控制／读回功能。
+1. 板子使用本项目 `UI-R89-ESC` 固件；构建产物位于 `build/Debug/`、`build/Release/`。R88 兼容完整设置／诊断，R87 仅兼容原有优先控制／读回功能。
 2. 用桌面 Chrome／Edge 打开 `pc_tool/index.html`。也可以把这一个文件复制到其他位置打开。
 3. 点击“选择串口并连接”，在浏览器对话框中选择 USB CDC 或 USB 转 USART 的串口。USART1 保持 **115200、8N1**。
 4. 工具首先发送 `Get` 读取板端配置。连接不会自动运行电机，也不会用网页残留值覆盖板端设置。
@@ -15,6 +15,8 @@
 “离线演示”保留模拟曲线预览，不打开串口或控制电机；`start.ps1 -Demo` 直接进入该模式。模拟记录使用 epoch -1，与实板连接分段区分。
 
 ## 本批已经提供
+
+R89 兼容 ESC Auto 自适应启动及新增的 `6S Start I`／`6S Ramp Hz/s` 诊断行，仍通过按需信息行查询，不增加常态遥测通道。定义与验证见 [R89 启动说明](../docs/Six_step_adaptive_R89.md)。
 
 - 七种工作模式；两轴 2804／4015 型号；Single M1 的 Encoder／HSO／SixStep；六步的 ESC 通用选项。
 - Speed、Angle、Torque、Throttle、Follow、单轴 Stop、全局 Stop、板端 View 选择，以及原始命令输入。

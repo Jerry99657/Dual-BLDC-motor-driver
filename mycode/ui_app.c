@@ -46,6 +46,8 @@
     X(text_6step_speed,"6Step Speed") \
     X(text_6s_hold,"6S Hold") \
     X(text_6s_start_emf,"6S Start EMF") \
+    X(text_6s_start_i,"6S Start I") \
+    X(text_6s_ramp,"6S Ramp Hz/s") \
     X(text_6s_cause,"6S Cause") \
     X(text_6s_sample,"6S Sample") \
     X(text_input,"Input") \
@@ -116,7 +118,7 @@
     X(text_keyrpt,"KeyRpt") \
     X(text_disperr,"DispErr") \
     X(text_fw,"FW") \
-    X(text_firmware,"UI-R88-PC") \
+    X(text_firmware,"UI-R89-ESC") \
     X(text_mcu,"MCU") \
     X(text_stm32g431,"STM32G431") \
     X(text_control,"Control") \
@@ -446,6 +448,7 @@ typedef struct {
     char ia[24];
     char ib[24];
     char hso_flux_actual[24];
+    char six_start_i[24],six_ramp[24];
 } UiTexts;
 static UiTexts texts;
 
@@ -751,9 +754,7 @@ static const char *mode_name(JerryFOC_ControlMode mode)
 
 static void refresh_save_state(void)
 {
-    AppSaveState state=AppStorage_GetSaveState();
-    if (s_settings_dirty && AppStorage_IsReady() && state!=APP_SAVE_WRITING)
-        state=AppStorage_IsDeferred() ? APP_SAVE_DEFERRED : APP_SAVE_PENDING;
+    unsigned state=App_SaveState();
     static const char *const names[]={ui_strings.text_defaults,ui_strings.text_pending,ui_strings.text_saving,ui_strings.text_wait_bus,ui_strings.text_saved,ui_strings.text_failed};
     UiText_Format(texts.save_state,sizeof(texts.save_state),ui_strings.fmt_save_s,names[state]);
 }
@@ -875,6 +876,8 @@ static void refresh_texts(void)
         VALUE_ROW(SixStepSnapshot,bemf,six_bemf,VALUE_VOLT),
         VALUE_ROW(SixStepSnapshot,velocity,six_speed,VALUE_SIX_SPEED),
         VALUE_ROW(SixStepSnapshot,startup_emf,six_start_emf,VALUE_VOLT),
+        VALUE_ROW(SixStepSnapshot,startup_current,six_start_i,VALUE_AMP),
+        VALUE_ROW(SixStepSnapshot,ramp_hz_s,six_ramp,VALUE_TENTH),
     };
     refresh_values(&six,six_values,sizeof(six_values)/sizeof(six_values[0]));
     UiText_Format(texts.six_start,sizeof(texts.six_start),ui_strings.fmt_u_500_ms,six.startup_ms);
@@ -1018,7 +1021,7 @@ _Static_assert(sizeof(UiTexts)<4096 && sizeof(UiStrings)<4096 && sizeof(s_enc_la
 #define INFO_WORK(index) (16384U+sizeof(s_txt_work_items[0])*(index))
 enum {
     drive_rows_START=0, drive_rows_COUNT=15,
-    sixstep_rows_START=drive_rows_START+drive_rows_COUNT, sixstep_rows_COUNT=8,
+    sixstep_rows_START=drive_rows_START+drive_rows_COUNT, sixstep_rows_COUNT=10,
     motion_rows_START=sixstep_rows_START+sixstep_rows_COUNT, motion_rows_COUNT=13,
     encoder_rows_START=motion_rows_START+motion_rows_COUNT, encoder_rows_COUNT=16,
     adc_rows_START=encoder_rows_START+encoder_rows_COUNT, adc_rows_COUNT=19,
@@ -1057,6 +1060,8 @@ static const InfoRowRef info_refs[]={
     INFO_ROW(INFO_LITERAL(text_6step_speed),INFO_TEXT(six_speed)),
     INFO_ROW(INFO_LITERAL(text_6s_hold),INFO_TEXT(six_start)),
     INFO_ROW(INFO_LITERAL(text_6s_start_emf),INFO_TEXT(six_start_emf)),
+    INFO_ROW(INFO_LITERAL(text_6s_start_i),INFO_TEXT(six_start_i)),
+    INFO_ROW(INFO_LITERAL(text_6s_ramp),INFO_TEXT(six_ramp)),
     INFO_ROW(INFO_LITERAL(text_6s_cause),INFO_TEXT(six_reject)),
     INFO_ROW(INFO_LITERAL(text_6s_sample),INFO_TEXT(six_sample)),
     /* motion_rows */
@@ -1187,10 +1192,14 @@ static const KK_UI_InfoPage info_pages[] = {
     {ui_strings.text_m1_six_step,&info_rows[sixstep_rows_START],sixstep_rows_COUNT},
 };
 
-/* Four-byte source records expand once into the public menu item type. */
-typedef struct { uint16_t label; uint8_t type,ref; } MenuItemRef;
-_Static_assert(sizeof(MenuItemRef)==4 && UI_PAGE_DETECT<=UINT8_MAX &&
-    EVT_WORK_BASE+MOTOR_WORK_COUNT<=UINT8_MAX,"Compact menu references");
+/* Three-byte application descriptors, expanded to the public menu type.
+ * Every source entry checks label/type/ref capacity at compile time. */
+typedef struct { uint8_t bytes[3]; } MenuItemRef;
+_Static_assert(sizeof(MenuItemRef)==3,"Compact menu references");
+#define MENU_PACK(n,t,r) ((uint32_t)(n)|((uint32_t)(t)<<15U)|((uint32_t)(r)<<18U)| \
+    (0U*sizeof(char[((n)<32768U && (t)<8U && (r)<64U) ? 1 : -1])))
+#define MENU_ROW(n,t,r) {{MENU_PACK(n,t,r)&255U,(MENU_PACK(n,t,r)>>8U)&255U,(MENU_PACK(n,t,r)>>16U)&255U}}
+
 enum {
     settings_items_START=0, settings_items_COUNT=11,
     motor_items_START=settings_items_START+settings_items_COUNT, motor_items_COUNT=4,
@@ -1203,55 +1212,55 @@ enum {
 };
 static const MenuItemRef menu_refs[]={
     /* settings_items */
-    {INFO_TEXT(system),KK_UI_MENU_PAGE,UI_PAGE_SYSTEM},
-    {INFO_LITERAL(text_curr_loop),KK_UI_MENU_BOOL,BOOL_CURRENT_LOOP},
-    {INFO_LITERAL(text_pos_speed),KK_UI_MENU_INT,INT_POSITION_SPEED},
-    {INFO_LITERAL(text_speed_limit),KK_UI_MENU_INT,INT_SPEED_LIMIT},
-    {INFO_LITERAL(text_run_steps),KK_UI_MENU_PAGE,UI_PAGE_RUN_STEPS},
-    {INFO_LITERAL(text_m1_protection),KK_UI_MENU_PAGE,UI_PAGE_PROTECTION},
-    {INFO_LITERAL(text_motor),KK_UI_MENU_PAGE,UI_PAGE_MOTOR},
-    {INFO_LITERAL(text_status_led),KK_UI_MENU_BOOL,BOOL_LED},
-    {INFO_LITERAL(text_led_bright),KK_UI_MENU_INT,INT_LED_BRIGHT},
-    {INFO_TEXT(save_state),KK_UI_MENU_ACTION,EVT_SAVE_STATUS},
-    {INFO_LITERAL(text_restore_defaults),KK_UI_MENU_CONFIRM,CONFIRM_RESET},
+    MENU_ROW(INFO_TEXT(system),KK_UI_MENU_PAGE,UI_PAGE_SYSTEM),
+    MENU_ROW(INFO_LITERAL(text_curr_loop),KK_UI_MENU_BOOL,BOOL_CURRENT_LOOP),
+    MENU_ROW(INFO_LITERAL(text_pos_speed),KK_UI_MENU_INT,INT_POSITION_SPEED),
+    MENU_ROW(INFO_LITERAL(text_speed_limit),KK_UI_MENU_INT,INT_SPEED_LIMIT),
+    MENU_ROW(INFO_LITERAL(text_run_steps),KK_UI_MENU_PAGE,UI_PAGE_RUN_STEPS),
+    MENU_ROW(INFO_LITERAL(text_m1_protection),KK_UI_MENU_PAGE,UI_PAGE_PROTECTION),
+    MENU_ROW(INFO_LITERAL(text_motor),KK_UI_MENU_PAGE,UI_PAGE_MOTOR),
+    MENU_ROW(INFO_LITERAL(text_status_led),KK_UI_MENU_BOOL,BOOL_LED),
+    MENU_ROW(INFO_LITERAL(text_led_bright),KK_UI_MENU_INT,INT_LED_BRIGHT),
+    MENU_ROW(INFO_TEXT(save_state),KK_UI_MENU_ACTION,EVT_SAVE_STATUS),
+    MENU_ROW(INFO_LITERAL(text_restore_defaults),KK_UI_MENU_CONFIRM,CONFIRM_RESET),
     /* motor_items */
-    {INFO_LITERAL(text_2804),KK_UI_MENU_CONFIRM,CONFIRM_MOTOR_2804},
-    {INFO_LITERAL(text_4015),KK_UI_MENU_CONFIRM,CONFIRM_MOTOR_4015},
-    {INFO_LITERAL(text_esc_auto),KK_UI_MENU_CONFIRM,CONFIRM_MOTOR_ESC},
-    {INFO_LITERAL(text_m1_detect),KK_UI_MENU_PAGE,UI_PAGE_DETECT},
+    MENU_ROW(INFO_LITERAL(text_2804),KK_UI_MENU_CONFIRM,CONFIRM_MOTOR_2804),
+    MENU_ROW(INFO_LITERAL(text_4015),KK_UI_MENU_CONFIRM,CONFIRM_MOTOR_4015),
+    MENU_ROW(INFO_LITERAL(text_esc_auto),KK_UI_MENU_CONFIRM,CONFIRM_MOTOR_ESC),
+    MENU_ROW(INFO_LITERAL(text_m1_detect),KK_UI_MENU_PAGE,UI_PAGE_DETECT),
     /* system_items */
-    {INFO_TEXT(work_menu),KK_UI_MENU_PAGE,UI_PAGE_WORK},
-    {INFO_AXIS(0),KK_UI_MENU_ACTION,EVT_FOCUS_M1},
-    {INFO_AXIS(1),KK_UI_MENU_ACTION,EVT_FOCUS_M2},
-    {INFO_LITERAL(text_sensorless),KK_UI_MENU_PAGE,UI_PAGE_SENSORLESS},
-    {INFO_LITERAL(text_gear_ratio),KK_UI_MENU_INT,INT_GEAR_RATIO},
-    {INFO_LITERAL(text_gear_offset),KK_UI_MENU_INT,INT_GEAR_OFFSET},
-    {INFO_LITERAL(text_align_retry),KK_UI_MENU_ACTION,EVT_ALIGN},
+    MENU_ROW(INFO_TEXT(work_menu),KK_UI_MENU_PAGE,UI_PAGE_WORK),
+    MENU_ROW(INFO_AXIS(0),KK_UI_MENU_ACTION,EVT_FOCUS_M1),
+    MENU_ROW(INFO_AXIS(1),KK_UI_MENU_ACTION,EVT_FOCUS_M2),
+    MENU_ROW(INFO_LITERAL(text_sensorless),KK_UI_MENU_PAGE,UI_PAGE_SENSORLESS),
+    MENU_ROW(INFO_LITERAL(text_gear_ratio),KK_UI_MENU_INT,INT_GEAR_RATIO),
+    MENU_ROW(INFO_LITERAL(text_gear_offset),KK_UI_MENU_INT,INT_GEAR_OFFSET),
+    MENU_ROW(INFO_LITERAL(text_align_retry),KK_UI_MENU_ACTION,EVT_ALIGN),
     /* sensorless_items */
-    {INFO_LITERAL(text_hso_feedback),KK_UI_MENU_BOOL,BOOL_HSO},
-    {INFO_LITERAL(text_six_step),KK_UI_MENU_BOOL,BOOL_SIXSTEP},
+    MENU_ROW(INFO_LITERAL(text_hso_feedback),KK_UI_MENU_BOOL,BOOL_HSO),
+    MENU_ROW(INFO_LITERAL(text_six_step),KK_UI_MENU_BOOL,BOOL_SIXSTEP),
     /* work_items */
-    {INFO_WORK(0),KK_UI_MENU_ACTION,EVT_WORK_BASE+MOTOR_WORK_SINGLE_M1},
-    {INFO_WORK(1),KK_UI_MENU_ACTION,EVT_WORK_BASE+MOTOR_WORK_SINGLE_M2},
-    {INFO_WORK(2),KK_UI_MENU_ACTION,EVT_WORK_BASE+MOTOR_WORK_INDEPENDENT},
-    {INFO_WORK(3),KK_UI_MENU_ACTION,EVT_WORK_BASE+MOTOR_WORK_SYNC_SPEED},
-    {INFO_WORK(4),KK_UI_MENU_ACTION,EVT_WORK_BASE+MOTOR_WORK_SYNC_POSITION},
-    {INFO_WORK(5),KK_UI_MENU_ACTION,EVT_WORK_BASE+MOTOR_WORK_MASTER_M1},
-    {INFO_WORK(6),KK_UI_MENU_ACTION,EVT_WORK_BASE+MOTOR_WORK_MASTER_M2},
+    MENU_ROW(INFO_WORK(0),KK_UI_MENU_ACTION,EVT_WORK_BASE+MOTOR_WORK_SINGLE_M1),
+    MENU_ROW(INFO_WORK(1),KK_UI_MENU_ACTION,EVT_WORK_BASE+MOTOR_WORK_SINGLE_M2),
+    MENU_ROW(INFO_WORK(2),KK_UI_MENU_ACTION,EVT_WORK_BASE+MOTOR_WORK_INDEPENDENT),
+    MENU_ROW(INFO_WORK(3),KK_UI_MENU_ACTION,EVT_WORK_BASE+MOTOR_WORK_SYNC_SPEED),
+    MENU_ROW(INFO_WORK(4),KK_UI_MENU_ACTION,EVT_WORK_BASE+MOTOR_WORK_SYNC_POSITION),
+    MENU_ROW(INFO_WORK(5),KK_UI_MENU_ACTION,EVT_WORK_BASE+MOTOR_WORK_MASTER_M1),
+    MENU_ROW(INFO_WORK(6),KK_UI_MENU_ACTION,EVT_WORK_BASE+MOTOR_WORK_MASTER_M2),
     /* status_items */
-    {INFO_LITERAL(text_drive),KK_UI_MENU_PAGE,UI_PAGE_DRIVE},
-    {INFO_LITERAL(text_motion),KK_UI_MENU_PAGE,UI_PAGE_MOTION},
-    {INFO_LITERAL(text_encoder),KK_UI_MENU_PAGE,UI_PAGE_ENCODER},
-    {INFO_LITERAL(text_adc),KK_UI_MENU_PAGE,UI_PAGE_ADC},
-    {INFO_LITERAL(text_hso),KK_UI_MENU_PAGE,UI_PAGE_HSO},
-    {INFO_LITERAL(text_six_step),KK_UI_MENU_PAGE,UI_PAGE_SIXSTEP},
-    {INFO_LITERAL(text_system),KK_UI_MENU_PAGE,UI_PAGE_DIAGNOSTICS},
-    {INFO_AXIS(0),KK_UI_MENU_ACTION,EVT_FOCUS_M1},
-    {INFO_AXIS(1),KK_UI_MENU_ACTION,EVT_FOCUS_M2},
+    MENU_ROW(INFO_LITERAL(text_drive),KK_UI_MENU_PAGE,UI_PAGE_DRIVE),
+    MENU_ROW(INFO_LITERAL(text_motion),KK_UI_MENU_PAGE,UI_PAGE_MOTION),
+    MENU_ROW(INFO_LITERAL(text_encoder),KK_UI_MENU_PAGE,UI_PAGE_ENCODER),
+    MENU_ROW(INFO_LITERAL(text_adc),KK_UI_MENU_PAGE,UI_PAGE_ADC),
+    MENU_ROW(INFO_LITERAL(text_hso),KK_UI_MENU_PAGE,UI_PAGE_HSO),
+    MENU_ROW(INFO_LITERAL(text_six_step),KK_UI_MENU_PAGE,UI_PAGE_SIXSTEP),
+    MENU_ROW(INFO_LITERAL(text_system),KK_UI_MENU_PAGE,UI_PAGE_DIAGNOSTICS),
+    MENU_ROW(INFO_AXIS(0),KK_UI_MENU_ACTION,EVT_FOCUS_M1),
+    MENU_ROW(INFO_AXIS(1),KK_UI_MENU_ACTION,EVT_FOCUS_M2),
     /* protection_items */
-    {INFO_LITERAL(text_ibus_trip),KK_UI_MENU_INT,INT_IBUS_LIMIT},
-    {INFO_LITERAL(text_clear_ibus_trip),KK_UI_MENU_CONFIRM,CONFIRM_IBUS_CLEAR},
-    {INFO_TEXT(ibus_state),KK_UI_MENU_ACTION,EVT_IBUS_STATUS},
+    MENU_ROW(INFO_LITERAL(text_ibus_trip),KK_UI_MENU_INT,INT_IBUS_LIMIT),
+    MENU_ROW(INFO_LITERAL(text_clear_ibus_trip),KK_UI_MENU_CONFIRM,CONFIRM_IBUS_CLEAR),
+    MENU_ROW(INFO_TEXT(ibus_state),KK_UI_MENU_ACTION,EVT_IBUS_STATUS),
 };
 _Static_assert(sizeof(menu_refs)/sizeof(menu_refs[0])==MENU_ITEM_COUNT,"Resource row counts");
 static KK_UI_MenuItem menu_items[MENU_ITEM_COUNT];
@@ -1262,9 +1271,11 @@ static KK_UI_MenuItem menu_items[MENU_ITEM_COUNT];
 __attribute__((noinline,noclone)) static void init_menu_items(void)
 {
     for (unsigned i=0;i<MENU_ITEM_COUNT;++i) {
-        menu_items[i].label=info_pointer(menu_refs[i].label);
-        menu_items[i].type=(KK_UI_MenuItemType)menu_refs[i].type;
-        menu_items[i].ref=menu_refs[i].ref;
+        const uint8_t *b=menu_refs[i].bytes;
+        unsigned packed=b[0]|((unsigned)b[1]<<8U)|((unsigned)b[2]<<16U);
+        menu_items[i].label=info_pointer(packed&32767U);
+        menu_items[i].type=(KK_UI_MenuItemType)((packed>>15U)&7U);
+        menu_items[i].ref=(uint16_t)(packed>>18U);
     }
 }
 static const KK_UI_MenuPage menu_pages[] = {
@@ -1945,7 +1956,7 @@ bool App_SelectMotor(MotorAxis axis,MotorProfile profile)
 unsigned App_SaveState(void)
 {
     unsigned state=AppStorage_GetSaveState();
-    if (s_settings_dirty && state!=APP_SAVE_WRITING)
+    if (s_settings_dirty && AppStorage_IsReady() && state!=APP_SAVE_WRITING)
         state=AppStorage_IsDeferred() ? APP_SAVE_DEFERRED : APP_SAVE_PENDING;
     return state;
 }

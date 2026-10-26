@@ -42,7 +42,7 @@ async function main(){
  for(let i=0;i<reference.length;i++){const bad=Uint8Array.from(reference);bad[i]^=64;context.bad=bad;context.good=reference;assert.equal(evaluate('(()=>{const p=new WireParser();return p.feed(bad).length+p.feed(good).length})()'),1)}
  evaluate('parser=new WireParser();parser.feed(new Uint8Array(100000))');assert(evaluate('parser.buffer.length')<12);
  await evaluate('connect()');assert.equal(serialOptions.baudRate,115200);assert.deepEqual(writes,['@1:Get']);
- assert.equal(evaluate('boardConfig.firmware'),88);assert.equal(elements.get('motorModel').value,'2804');
+ assert.equal(evaluate('boardConfig.firmware'),89);assert.equal(elements.get('motorModel').value,'2804');
  // Settings editor units, real row-frame layout, import validation and Stop cancellation.
  evaluate(`$('speedLimit').value=240;$('posSpeed').value=150;$('speedStep').value=1.7`);
  const startSettings=writes.length;await evaluate('applyEditorSettings()');

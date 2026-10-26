@@ -150,16 +150,31 @@ __attribute__((noinline,noclone)) bool Protocol_RequestCurrent(void)
 enum { CONFIG_WORK,CONFIG_MOTOR1,CONFIG_MOTOR2,CONFIG_FEEDBACK,
        CONFIG_GEAR,CONFIG_ALIGN,CONFIG_FOCUS,CONFIG_COUNT,
        CMD_SPEED=CONFIG_COUNT,CMD_ANGLE,CMD_TORQUE,CMD_THROTTLE,CMD_OPEN,CMD_HSO,CMD_STREAM,CMD_APP,CMD_ROW,CMD_COUNT };
-/* Inline short names avoid a pointer and three padding bytes per command. */
-static const struct { char prefix[10]; uint8_t length; } command_prefixes[] = {
-    {"Work:",5},{"Motor1:",7},{"Motor2:",7},{"Feedback:",9},
-    {"Gear:",5},{"Align:",6},{"Focus:",6},
-    {"Speed:",6},{"Angle:",6},{"Torque:",7},{"Throttle:",9},{"OpenLoop:",9},{"HSO:",4},{"Stream:",7},{"App:",4},{"GetRow:",7}
-};
-static uint8_t command_kind(const char *s)
+/* One source for names and lengths; no per-name NUL/padding in Flash. */
+#define COMMAND_PREFIXES(X) \
+    X("Work:",5) X("Motor1:",7) X("Motor2:",7) X("Feedback:",9) \
+    X("Gear:",5) X("Align:",6) X("Focus:",6) X("Speed:",6) \
+    X("Angle:",6) X("Torque:",7) X("Throttle:",9) X("OpenLoop:",9) \
+    X("HSO:",4) X("Stream:",7) X("App:",4) X("GetRow:",7)
+#define PREFIX_NAME(name,length) name
+static const char command_names[]=COMMAND_PREFIXES(PREFIX_NAME);
+#undef PREFIX_NAME
+#define PREFIX_LENGTH(name,length) length,
+static const uint8_t command_lengths[]= { COMMAND_PREFIXES(PREFIX_LENGTH) };
+#undef PREFIX_LENGTH
+#define PREFIX_CHECK(name,length) _Static_assert(sizeof(name)-1==length,"Command prefix length");
+COMMAND_PREFIXES(PREFIX_CHECK)
+#undef PREFIX_CHECK
+#undef COMMAND_PREFIXES
+_Static_assert(sizeof(command_lengths)==CMD_COUNT,"Command order/count");
+static unsigned command_kind(const char *s)
 {
-    for(uint8_t i=0;i<CMD_COUNT;++i)
-        if(!strncmp(s,command_prefixes[i].prefix,command_prefixes[i].length)) return i;
+    const char *name=command_names;
+    for(unsigned i=0;i<CMD_COUNT;++i) {
+        unsigned length=command_lengths[i];
+        if(!strncmp(s,name,length)) return i;
+        name+=length;
+    }
     return CMD_COUNT;
 }
 static bool apply_configuration(uint8_t kind,const char *value)
@@ -272,10 +287,10 @@ __attribute__((noinline,noclone)) static int8_t handle_line(char *line,MotorInpu
     if (!strncmp(line,"M1:",3) || !strncmp(line,"M2:",3)) {
         axis=line[1]=='1' ? MOTOR_AXIS_1 : MOTOR_AXIS_2; line+=3; explicit_axis=true;
     }
-    uint8_t kind=command_kind(line);
+    unsigned kind=command_kind(line);
     if (kind==CMD_APP || kind==CMD_ROW) {
         float v[3];
-        if (explicit_axis || !parse_hso_values(line+command_prefixes[kind].length,v,3)) return -2;
+        if (explicit_axis || !parse_hso_values(line+command_lengths[kind],v,3)) return -2;
         for (unsigned i=0;i<3;++i) if (v[i]<-100000 || v[i]>100000 || v[i]!=(float)(int32_t)v[i]) return -2;
         if (kind==CMD_APP) {
             if(!Protocol_RequestCurrent()) return -4;
@@ -288,7 +303,7 @@ __attribute__((noinline,noclone)) static int8_t handle_line(char *line,MotorInpu
     if (kind<CONFIG_COUNT) {
         if (!App_CanConfigure()) return -3;
         if(kind==CONFIG_ALIGN && command_was_stopped && HAL_GetTick()-command_at>10U) return -4;
-        result=!explicit_axis && apply_configuration(kind,line+command_prefixes[kind].length) ? 1 : -1;
+        result=!explicit_axis && apply_configuration(kind,line+command_lengths[kind]) ? 1 : -1;
         if(result==1 && kind!=CONFIG_ALIGN) App_ConfigChanged();
         return result;
     }
@@ -323,7 +338,7 @@ __attribute__((noinline,noclone)) static int8_t handle_line(char *line,MotorInpu
     if (work>=MOTOR_WORK_INDEPENDENT && !explicit_axis &&
         (speed_cmd || angle_cmd || torque_cmd || throttle_cmd || open_cmd)) { result=-2; return result; }
     if ((speed_cmd || angle_cmd || torque_cmd || throttle_cmd) &&
-        !parse_hso_values(line+command_prefixes[kind].length,command_values,1U)) { result=-2; return result; }
+        !parse_hso_values(line+command_lengths[kind],command_values,1U)) { result=-2; return result; }
     if ((throttle_cmd && (axis!=MOTOR_AXIS_1 || !MotorControl_SixStepAllowed())) ||
         (torque_cmd && MotorControl_SixStepAllowed())) { result=-1; return result; }
     if (open_cmd && !parse_hso_values(line + 9, command_values,
@@ -500,7 +515,7 @@ static void telemetry_reply(void)
             TelemetryReply *r=&telemetry_packet.payload.reply;
             _Static_assert(sizeof(TelemetryReply)==92 && offsetof(AppSettings,crc)-offsetof(AppSettings,speed_x10)==84,"RPC settings layout");
             r->id=reply_id; r->result=reply_result; r->source=reply_source;
-            r->schema=2; r->firmware=88; r->save=(uint8_t)App_SaveState(); r->focus=(uint8_t)MotorControl_GetFocus();
+            r->schema=2; r->firmware=89; r->save=(uint8_t)App_SaveState(); r->focus=(uint8_t)MotorControl_GetFocus();
             memcpy(r->settings,&AppStorage_Get()->speed_x10,sizeof(r->settings));
         }
         (void)telemetry_frame(reply_kind,reply_kind==33 ? sizeof(TelemetryRow) : sizeof(TelemetryReply),HAL_GetTick());

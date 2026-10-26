@@ -1,5 +1,7 @@
 # 电机驱动板 UI 操作与验证
 
+当前固件 **UI-R89-ESC**：ESC Auto 启动电流和允许升频速度随电流跟踪／电压余量调整，保留真实过零接管和保护。Status → Six Step 新增 `6S Start I`／`6S Ramp Hz/s`；单文件上位机兼容 R89。CubeMX 无需调整，Debug／Release Flash 余 **0 B**，实现、模型对照及复测见 [R89 自适应启动](Six_step_adaptive_R89.md)。
+
 当前固件 **UI-R88-PC**：完成上位机第 4～6 批：可编辑 Settings 共用校验／保存、远程 Run 页面和目标同步、参数辨识／校准／专题诊断、带差异确认的配置导入。原有板端功能、字号和字模保留，ST 官方源码与编译命令保持，CubeMX 无需调整。详见 [R88 实施记录](PC_console_R88.md) 和 [上位机使用](../pc_tool/README.md)。
 
 当前固件 **UI-R87-PC**：完成上位机计划第 1～3 批。`pc_tool/index.html` 单文件通过 Web Serial 连接 USB／USART，提供工作模式、电机与驱动、Run 控制、配置快照及逐条命令回执；其他 Settings 写入、LCD 自动进入 Run 和草稿同步仍按第 4／5 批接入。用户代码先节省 696 B，再集成接口，最终 Debug／Release Flash 剩 **64 B**。原有板端功能及 ST 官方实现保持，CubeMX 无需调整。使用见 [电脑端工具](../pc_tool/README.md)，协议和验证见 [R87 实施记录](PC_console_R87.md)。

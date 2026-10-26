@@ -12,7 +12,6 @@ static uint32_t started,stepped,previous_stamp,cross_stamp,last_cross;
 static uint16_t quiet;
 static float period_us,frequency,integral,voltage,previous_bemf,current;
 static float forced_angle, id_sum, iq_sum, emf_voltage,tracking_error;
-static uint16_t settled;
 static bool negative,opposite,cross_pending,seen,commute_due;
 static bool generic;
 bool SixStep_IsGeneric(void) { return generic; }
@@ -39,6 +38,9 @@ bool SixStep_AtRest(void) { return !active() && quiet>=2000U; }
 void SixStep_GetSnapshot(SixStepSnapshot *out)
 {
     uint32_t mask=__get_PRIMASK(); __disable_irq(); *out=s; __set_PRIMASK(mask);
+    /* Private state counts 10kHz samples; convert only the public snapshot.
+     * Avoid a division and a duplicate counter/store in every fast IRQ. */
+    out->startup_ms/=10U;
 }
 
 void SixStep_Stop(void)
@@ -92,10 +94,12 @@ static bool command(float target,bool speed)
     }
     if (!SixStep_AtRest()) return false;
     negative=target<0;
-    s=(SixStepSnapshot){.state=SIX_ALIGN,.target=target,.sector=0,.duty=0.01f,.gate='A',.speed_control=speed,.status="6STEP ALIGN"};
+    s=(SixStepSnapshot){.state=SIX_ALIGN,.target=target,.sector=0,.duty=0.01f,.gate='A',.speed_control=speed,
+        .status="6STEP ALIGN",.startup_current=0.25f,.ramp_hz_s=20};
+    if(!generic) s.startup_current=0.5f*MotorParams_GetActive()->rated_current;
     started=stepped=DWT->CYCCNT;
     last_cross=previous_stamp=0; s.quality=outer_divider=0;
-    frequency=0; forced_angle=0; id_sum=iq_sum=emf_voltage=tracking_error=0; settled=0;
+    frequency=0; forced_angle=0; id_sum=iq_sum=emf_voltage=tracking_error=0;
     voltage=integral=current=0; commute_due=opposite=cross_pending=seen=false;
     if (!MotorSampling_SixStepPattern(6U,0.5f) || !MotorSampling_SetOutputEnabled(true)) {
         fail("6STEP OUTPUT"); return false;
@@ -193,7 +197,8 @@ __attribute__((noinline)) static void sine_start(const MotorSampleFrame *f,float
      * merely to obtain stronger BEMF. Throttle needs no pole count here. */
     float capture=emf_voltage>=0.7f && frequency>=12.0f ? frequency : 60.0f;
     if(s.speed_control) capture=fminf(capture,fabsf(s.target)*m->pole_pairs/6.283185307f);
-    if(s.state==SIX_RAMP) frequency+=clamp(capture-frequency,-0.002f,0.002f);
+    float step=s.ramp_hz_s*0.0001f;
+    if(s.state==SIX_RAMP) frequency+=clamp(capture-frequency,-step,step);
     float omega=(negative ? -6.283185307f : 6.283185307f)*frequency;
     forced_angle+=omega*0.0001f;
     if(forced_angle>=6.283185307f) forced_angle-=6.283185307f;
@@ -203,7 +208,7 @@ __attribute__((noinline)) static void sine_start(const MotorSampleFrame *f,float
     MotorMath_SinCos(forced_angle,&sn,&cs);
     float ia=f->m1_current[0], ib=(ia+2*f->m1_current[1])*0.577350269f;
     float id=ia*cs+ib*sn, iq=ib*cs-ia*sn;
-    float reference=(generic ? 0.25f : 0.5f*m->rated_current)*fminf(1.0f,(float)elapsed/400000.0f);
+    float reference=s.startup_current*fminf(1.0f,(float)elapsed/400000.0f);
     float ed=reference-id, eq=-iq;
     float limit=s.state==SIX_ALIGN ? fminf(bus*0.15f,3.0f) : fminf(bus*0.5f,12.0f);
     float ki=0.012f, kp=0.2f;
@@ -228,11 +233,23 @@ __attribute__((noinline)) static void sine_start(const MotorSampleFrame *f,float
         s.state=SIX_RAMP; s.status="6STEP SINE";
     }
     bool strength=emf_voltage>=fmaxf(0.6f,bus*0.01f);
-    if(frequency<12.0f || frequency>capture+0.001f || !tracking || !strength) settled=0;
-    else if(settled<5000U) ++settled;
-    s.startup_ms=settled/10U; s.startup_emf=emf_voltage;
+    if(frequency<12.0f || frequency>capture+0.001f || !tracking || !strength) s.startup_ms=0;
+    else if(s.startup_ms<5000U) ++s.startup_ms;
+    s.startup_emf=emf_voltage;
     s.gate=!tracking ? 'C' : !strength ? 'E' : 'S';
-    if(settled>=5000U && fabsf(forced_angle-boundary)<0.013f) {
+    if(generic && s.state==SIX_RAMP) {
+        /* Current error is a delivery/ripple metric, NOT a rotor observer.
+         * Stop accelerating when delivery becomes poor or voltage runs out.
+         * With voltage headroom, a repeatedly interrupted capture window
+         * searches gradually for a stronger bounded current vector. Freeze
+         * its amplitude once 100ms has qualified; retain the full 500ms gate
+         * and the following twelve REAL floating-phase zero crossings. */
+        bool room=s.duty<0.7f;
+        s.ramp_hz_s=tracking && room ? 20.0f : 0;
+        if(room && s.startup_ms<1000U)
+            s.startup_current=fminf(0.5f,s.startup_current+0.000005f);
+    }
+    if(s.startup_ms>=5000U && fabsf(forced_angle-boundary)<0.013f) {
         s.state=SIX_SYNC; s.status="6STEP SYNC";
         period_us=1000000.0f/(6.0f*frequency);
         /* A modest resistive seed measured from Ud, independent of Rs.
@@ -296,7 +313,8 @@ void SixStep_Process(const MotorSampleFrame *f)
             voltage=(generic ? bus*0.85f : fminf(bus*0.85f,m->bus_voltage))*requested*0.01f;
             s.reference=fabsf(s.velocity);
         }
-        float cap=(generic ? 0.5f : m->rated_current)*(s.state==SIX_RUN ? 1.0f : 0.6f);
+        float cap=generic ? (s.state==SIX_RUN ? 0.5f : fminf(0.5f,1.2f*s.startup_current)) :
+            m->rated_current*(s.state==SIX_RUN ? 1.0f : 0.6f);
         float desired=clamp(voltage/bus,0.01f,0.85f);
         if (current>cap) desired=fminf(desired,s.duty*cap/current);
         s.duty+=clamp(desired-s.duty,-0.02f,0.002f);

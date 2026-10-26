@@ -19,6 +19,7 @@ typedef struct {
     uint16_t period_10us[6]; /* Oldest first; includes the rejected candidate. */
     bool sampling_off;
     const char *status;
+    float startup_current, ramp_hz_s; /* Actual I/F envelope target A; electrical Hz/s. */
 } SixStepSnapshot;
 /* Physical M1 only; no encoder dependency. Called from the paired ADC ISR. */
 void SixStep_Process(const MotorSampleFrame *frame);

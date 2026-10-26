@@ -75,6 +75,15 @@ for name, sources in suites.items():
             for direction in ((-1,1) if scenario=="normal" else (1,)):
                 subprocess.run([str(out/"sixstep_plant.exe"),"12",str(direction),"0.000005",scenario,target,"0.0032","2804"],cwd=repo,check=True)
         subprocess.run([str(out/"sixstep_plant.exe"),"12","1","0.000005","throttle","20","0.0032","2804","generic","2804"],cwd=repo,check=True)
+        # Board-measured equivalent 4015 R/L/flux; current ADC quantization,
+        # PWM ripple and rotor inertia stay independent of the controller.
+        # R88 repeatedly reset its capture window at 20V in this model.
+        for bus in (12,20):
+            for inertia in (0.00002,0.00004,0.00008):
+                for throttle in (30,75):
+                    subprocess.run([str(out/"sixstep_plant.exe"),str(bus),"1",str(inertia),"throttle",str(throttle),"0.00929","4015","generic","4015","1.92","0.00044"],cwd=repo,check=True)
+        for scenario in ("stall","no-current","key"):
+            subprocess.run([str(out/"sixstep_plant.exe"),"20","1","0.00004",scenario,"75","0.00929","4015","generic","4015","1.92","0.00044"],cwd=repo,check=True)
     if name=="sampling":
         for scenario in ("ibus", "ibus-wrap", "ibus-shared", "ibus-dac-set", "ibus-dac-start", "ibus-comp-start", "ibus-runtime", "ibus-high-start", "ibus-startup-pulse", "global", "global-wrap", "six-outputs"):
             subprocess.run([str(out / "sampling.exe"),scenario],cwd=repo,check=True)

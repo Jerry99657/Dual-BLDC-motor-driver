@@ -864,10 +864,11 @@ static void check_r72(void) {
     MotorControl_SelectWork(MOTOR_WORK_INDEPENDENT); MotorControl_SetFocus(MOTOR_AXIS_2); settle();
     six_ui=(SixStepSnapshot){.quality=2,.gate='P',.phase_pct=52,.period_pct=105,.period_fraction=1,
         .duty=0.091f,.bemf=-0.34f,.velocity=12,.startup_ms=500,.startup_emf=0.45f,
+        .startup_current=0.35f,.ramp_hz_s=8,
         .sampling_off=true,.status="6STEP NO ZC"};
     const char *names[]={"6S ZC","6Step Duty","6Step EMF","6Step Speed",
-        "6S Hold","6S Start EMF","6S Cause","6S Sample"};
-    for(unsigned i=0;i<8;++i) {
+        "6S Hold","6S Start EMF","6S Start I","6S Ramp Hz/s","6S Cause","6S Sample"};
+    for(unsigned i=0;i<sizeof(names)/sizeof(*names);++i) {
         assert(!strcmp(app->info_pages[7].rows[i].name,names[i]));
         for(unsigned j=0;j<app->info_pages[0].row_count;++j)
             assert(strcmp(app->info_pages[0].rows[j].name,names[i]));
@@ -877,8 +878,9 @@ static void check_r72(void) {
     press(KK_UI_KEY_OK); settle(); assert(KK_UI_GetCurrentPage()==UI_PAGE_SIXSTEP);
     step(0,3000); probe_frame(); assert(drew("M1 Six Step") && drew("2/12 P 52/105.1"));
     assert(!strcmp(status_value("6Step Duty"),"9.1 %") && !strcmp(status_value("6Step EMF"),"-0.34 V"));
+    assert(!strcmp(status_value("6S Start I"),"0.35 A") && !strcmp(status_value("6S Ramp Hz/s"),"8.0"));
     snapshot("r72-sixstep");
-    for(unsigned i=0;i<8;++i) press(KK_UI_KEY_DOWN);
+    for(unsigned i=0;i<10;++i) press(KK_UI_KEY_DOWN);
     probe_frame(); snapshot("r72-sixstep-tail");
     assert(drew("6S Sample") && drew("OFF"));
     back(); assert(KK_UI_GetCurrentPage()==UI_PAGE_STATUS && kk_ui.current.selected==5);
