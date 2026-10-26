@@ -3,6 +3,10 @@
 #include "motor_sixstep.h"
 #include "MT6701.h"
 #include "st_hso.h"
+#include "app_storage.h"
+AppSaveState AppStorage_GetSaveState(void) { return APP_SAVE_IDLE; }
+bool telemetry_host_stopped;
+bool MotorSampling_IsGlobalStopped(void) { return telemetry_host_stopped; }
 uint32_t telemetry_host_tick;
 uint32_t HAL_GetTick(void) { return telemetry_host_tick; }
 bool MotorSampling_IsBusFresh(void) { return true; }

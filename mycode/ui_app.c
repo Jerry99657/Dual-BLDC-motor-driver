@@ -20,6 +20,7 @@
 #include "protocol.h"
 #include "motor_sixstep.h"
 #include "motor_detect.h"
+#include "motor_math.h"
 
 /* Shared application literals also serve menus, dialogs and custom pages. */
 #define UI_STRINGS(X) \
@@ -114,7 +115,7 @@
     X(text_keyrpt,"KeyRpt") \
     X(text_disperr,"DispErr") \
     X(text_fw,"FW") \
-    X(text_firmware,"UI-R86-PC") \
+    X(text_firmware,"UI-R87-PC") \
     X(text_mcu,"MCU") \
     X(text_stm32g431,"STM32G431") \
     X(text_control,"Control") \
@@ -157,28 +158,28 @@ typedef struct {
     UI_STRINGS(INFO_STRING_FIELD)
 #undef INFO_STRING_FIELD
 } UiStrings;
-static const UiStrings ui_strings={
-#define INFO_STRING_INIT(name,text) .name=text,
-    UI_STRINGS(INFO_STRING_INIT)
-#undef INFO_STRING_INIT
-};
 #undef UI_STRINGS
-static uint8_t home_icons[4][128];
-_Static_assert(sizeof(home_icons)==UI_RESOURCE_BYTES,"Regenerate the packed home icons");
+static struct { uint8_t icons[4][128]; UiStrings strings; char axes[2][10],work[7][21],encoder[14][9]; } ui_resources;
+#define home_icons ui_resources.icons
+#define ui_strings ui_resources.strings
+#define s_txt_axes ui_resources.axes
+#define s_txt_work_items ui_resources.work
+#define s_enc_labels ui_resources.encoder
+_Static_assert(sizeof(ui_resources)==UI_RESOURCE_BYTES,"Regenerate the packed UI resources");
 
 /* Trusted, generated Flash data expands once per UI reset, before KK_UI_Init.
  * Back references may overlap; all storage and final pointers are static. */
 __attribute__((noinline,noclone)) static void init_ui_resources(void)
 {
     const uint8_t *source=ui_resources_packed;
-    uint8_t *out=(uint8_t *)home_icons,*end=out+sizeof(home_icons);
+    uint8_t *out=(uint8_t *)&ui_resources,*end=out+sizeof(ui_resources);
     unsigned flags=1U;
     while (out<end) {
         if (flags==1U) flags=*source++ | 256U;
         if (flags&1U) {
-            unsigned token=*source++;
-            unsigned distance=(token&15U)+1U;
-            unsigned length=(token>>4U)+3U;
+            unsigned token=source[0]|((unsigned)source[1]<<8U); source+=2;
+            unsigned distance=(token&4095U)+1U;
+            unsigned length=(token>>12U)+3U;
             const uint8_t *match=out-distance;
             do { *out++=*match++; } while (--length);
         } else *out++=*source++;
@@ -302,9 +303,8 @@ typedef struct {
     char hso_flux_actual[24];
 } UiTexts;
 static UiTexts texts;
-static char s_txt_axes[2][10]={"Axis M1  ","Axis M2  "};
-static char s_txt_work_items[MOTOR_WORK_COUNT][21]={"  Single M1","  Single M2","  Dual Independent",
-    "  Dual Sync Speed","  Dual Sync Position","  Dual Master M1","  Dual Master M2"};
+
+
 
 enum {
     EVT_CURRENT_LOOP_CHANGED = 1,
@@ -362,9 +362,7 @@ static MotorProfile s_profiles[2];
 static const char *const group_names[]={ui_strings.text_drive,ui_strings.text_motion,ui_strings.text_encoder,ui_strings.text_adc};
 /* ui_app_reset always seeds these before KK_UI_Init; no Flash zero padding. */
 /* Stable application-owned labels; update only their axis digit. */
-static char s_enc_labels[][9]={"E1 State","E1 CRC","E1 Field","E1 Track",
-    "E1 SPI","E1 Frame","E1 Age","E1 Last","E1 Raw","E1 Err",
-    "E1 Zero","E1 ZPre","E1 ZPost","E1 ZTime"};
+
 static uint32_t s_input_repeats;
 static uint32_t s_display_errors;
 
@@ -581,8 +579,7 @@ __attribute__((noinline)) static void refresh_values(const void *snapshot,const 
 static void fmt_degrees(char *buf,float radians)
 {
     if (!isfinite(radians)) { strcpy(buf,"--"); return; }
-    float turn=fmodf(radians,6.283185307f);
-    if (turn<0.0f) turn+=6.283185307f;
+    float turn=MotorMath_Wrap(radians);
     int32_t deg=to_x10(turn*57.2957795f);
     fmt_unit(buf,deg==3600 ? 0 : deg,10,"deg");
 }
@@ -862,8 +859,8 @@ static const KK_UI_HomePage home_pages[] = {
  * Regions: 0 UiTexts, 1 literals, 2 encoder names, 3 axis labels, 4 work labels.
  * These are fixed application resources, with no heap or widget tree. */
 
-typedef struct { uint16_t name,value; } InfoRowRef;
-_Static_assert(sizeof(InfoRowRef)==4,"Compact information row");
+typedef struct { uint8_t bytes[3]; } InfoRowRef;
+_Static_assert(sizeof(InfoRowRef)==3,"Compact information row");
 _Static_assert(sizeof(UiTexts)<4096 && sizeof(UiStrings)<4096 && sizeof(s_enc_labels)<4096 &&
     sizeof(s_txt_axes)<4096 && sizeof(s_txt_work_items)<4096,"UI resource reference offsets");
 #define INFO_TEXT(field) offsetof(UiTexts,field)
@@ -882,127 +879,133 @@ enum {
     about_rows_START=diagnostics_rows_START+diagnostics_rows_COUNT, about_rows_COUNT=9,
     INFO_ROW_COUNT=about_rows_START+about_rows_COUNT
 };
+/* Names use literal offsets or an encoder-label range. Value offsets are
+ * four-byte aligned UiTexts buffers, or literals tagged above 1024. */
+#define INFO_NAME(n) (((n)>>12U)==2U ? 1792U+((n)&4095U) : ((n)>>12U)==1U ? ((n)&4095U) : 1536U+(n)/4U)
+#define INFO_VALUE(v) (((v)>>12U)==1U ? 1024U+((v)&4095U) : (v)/4U)
+#define INFO_PACK(n,v) ((INFO_NAME(n)|(INFO_VALUE(v)<<11U))+0U*sizeof(char[((n)>>12U==1U ? (n&4095U)<1536U : (n)>>12U==2U ? (n&4095U)<256U : (n)%4U==0U && (n)/4U<256U) && ((v)>>12U==1U ? (v&4095U)<3072U : (v)%4U==0U && (v)/4U<1024U) ? 1 : -1]))
+#define INFO_ROW(n,v) {{INFO_PACK(n,v)&255U,(INFO_PACK(n,v)>>8U)&255U,(INFO_PACK(n,v)>>16U)&255U}}
 static const InfoRowRef info_refs[]={
     /* drive_rows */
-    {INFO_LITERAL(text_drive),INFO_TEXT(drive)},
-    {INFO_LITERAL(text_output),INFO_TEXT(output)},
-    {INFO_LITERAL(text_feedback),INFO_TEXT(feedback)},
-    {INFO_LITERAL(text_bus),INFO_TEXT(bus)},
-    {INFO_LITERAL(text_motor),INFO_TEXT(motor)},
-    {INFO_LITERAL(text_mode),INFO_TEXT(mode)},
-    {INFO_LITERAL(text_vref),INFO_TEXT(reference)},
-    {INFO_LITERAL(text_refstate),INFO_TEXT(ref_state)},
-    {INFO_LITERAL(text_work),INFO_TEXT(work)},
-    {INFO_LITERAL(text_axis),INFO_TEXT(axis)},
-    {INFO_LITERAL(text_aligned),INFO_TEXT(align)},
-    {INFO_LITERAL(text_run_stop),INFO_TEXT(run_stop)},
-    {INFO_LITERAL(text_stop_age),INFO_TEXT(stop_age)},
-    {INFO_LITERAL(text_stop_err),INFO_TEXT(stop_errors)},
-    {INFO_LITERAL(text_sync_err),INFO_TEXT(sync)},
+    INFO_ROW(INFO_LITERAL(text_drive),INFO_TEXT(drive)),
+    INFO_ROW(INFO_LITERAL(text_output),INFO_TEXT(output)),
+    INFO_ROW(INFO_LITERAL(text_feedback),INFO_TEXT(feedback)),
+    INFO_ROW(INFO_LITERAL(text_bus),INFO_TEXT(bus)),
+    INFO_ROW(INFO_LITERAL(text_motor),INFO_TEXT(motor)),
+    INFO_ROW(INFO_LITERAL(text_mode),INFO_TEXT(mode)),
+    INFO_ROW(INFO_LITERAL(text_vref),INFO_TEXT(reference)),
+    INFO_ROW(INFO_LITERAL(text_refstate),INFO_TEXT(ref_state)),
+    INFO_ROW(INFO_LITERAL(text_work),INFO_TEXT(work)),
+    INFO_ROW(INFO_LITERAL(text_axis),INFO_TEXT(axis)),
+    INFO_ROW(INFO_LITERAL(text_aligned),INFO_TEXT(align)),
+    INFO_ROW(INFO_LITERAL(text_run_stop),INFO_TEXT(run_stop)),
+    INFO_ROW(INFO_LITERAL(text_stop_age),INFO_TEXT(stop_age)),
+    INFO_ROW(INFO_LITERAL(text_stop_err),INFO_TEXT(stop_errors)),
+    INFO_ROW(INFO_LITERAL(text_sync_err),INFO_TEXT(sync)),
     /* sixstep_rows */
-    {INFO_LITERAL(text_6s_zc),INFO_TEXT(six_quality)},
-    {INFO_LITERAL(text_6step_duty),INFO_TEXT(six_duty)},
-    {INFO_LITERAL(text_6step_emf),INFO_TEXT(six_bemf)},
-    {INFO_LITERAL(text_6step_speed),INFO_TEXT(six_speed)},
-    {INFO_LITERAL(text_6s_hold),INFO_TEXT(six_start)},
-    {INFO_LITERAL(text_6s_start_emf),INFO_TEXT(six_start_emf)},
-    {INFO_LITERAL(text_6s_cause),INFO_TEXT(six_reject)},
-    {INFO_LITERAL(text_6s_sample),INFO_TEXT(six_sample)},
+    INFO_ROW(INFO_LITERAL(text_6s_zc),INFO_TEXT(six_quality)),
+    INFO_ROW(INFO_LITERAL(text_6step_duty),INFO_TEXT(six_duty)),
+    INFO_ROW(INFO_LITERAL(text_6step_emf),INFO_TEXT(six_bemf)),
+    INFO_ROW(INFO_LITERAL(text_6step_speed),INFO_TEXT(six_speed)),
+    INFO_ROW(INFO_LITERAL(text_6s_hold),INFO_TEXT(six_start)),
+    INFO_ROW(INFO_LITERAL(text_6s_start_emf),INFO_TEXT(six_start_emf)),
+    INFO_ROW(INFO_LITERAL(text_6s_cause),INFO_TEXT(six_reject)),
+    INFO_ROW(INFO_LITERAL(text_6s_sample),INFO_TEXT(six_sample)),
     /* motion_rows */
-    {INFO_LITERAL(text_input),INFO_TEXT(input)},
-    {INFO_LITERAL(text_target),INFO_TEXT(target)},
-    {INFO_TEXT(target_unit),INFO_TEXT(target_aux)},
-    {INFO_LITERAL(text_speed),INFO_TEXT(speed)},
-    {INFO_LITERAL(text_speed_rpm),INFO_TEXT(rpm)},
-    {INFO_LITERAL(text_iq),INFO_TEXT(iq)},
-    {INFO_LITERAL(text_id),INFO_TEXT(id)},
-    {INFO_LITERAL(text_phase_a),INFO_TEXT(ia)},
-    {INFO_LITERAL(text_phase_b),INFO_TEXT(ib)},
-    {INFO_LITERAL(text_elec),INFO_TEXT(elec)},
-    {INFO_LITERAL(text_mech),INFO_TEXT(mech)},
-    {INFO_LITERAL(text_elec_0_360),INFO_TEXT(elec_deg)},
-    {INFO_LITERAL(text_mech_0_360),INFO_TEXT(mech_deg)},
+    INFO_ROW(INFO_LITERAL(text_input),INFO_TEXT(input)),
+    INFO_ROW(INFO_LITERAL(text_target),INFO_TEXT(target)),
+    INFO_ROW(INFO_TEXT(target_unit),INFO_TEXT(target_aux)),
+    INFO_ROW(INFO_LITERAL(text_speed),INFO_TEXT(speed)),
+    INFO_ROW(INFO_LITERAL(text_speed_rpm),INFO_TEXT(rpm)),
+    INFO_ROW(INFO_LITERAL(text_iq),INFO_TEXT(iq)),
+    INFO_ROW(INFO_LITERAL(text_id),INFO_TEXT(id)),
+    INFO_ROW(INFO_LITERAL(text_phase_a),INFO_TEXT(ia)),
+    INFO_ROW(INFO_LITERAL(text_phase_b),INFO_TEXT(ib)),
+    INFO_ROW(INFO_LITERAL(text_elec),INFO_TEXT(elec)),
+    INFO_ROW(INFO_LITERAL(text_mech),INFO_TEXT(mech)),
+    INFO_ROW(INFO_LITERAL(text_elec_0_360),INFO_TEXT(elec_deg)),
+    INFO_ROW(INFO_LITERAL(text_mech_0_360),INFO_TEXT(mech_deg)),
     /* encoder_rows */
-    {INFO_ENCODER(0),INFO_TEXT(enc)},
-    {INFO_ENCODER(1),INFO_TEXT(enc_crc)},
-    {INFO_ENCODER(2),INFO_TEXT(enc_field)},
-    {INFO_ENCODER(3),INFO_TEXT(enc_track)},
-    {INFO_ENCODER(4),INFO_TEXT(enc_spi)},
-    {INFO_ENCODER(5),INFO_TEXT(enc_frame)},
-    {INFO_ENCODER(6),INFO_TEXT(enc_age)},
-    {INFO_ENCODER(7),INFO_TEXT(enc_last)},
-    {INFO_ENCODER(8),INFO_TEXT(raw)},
-    {INFO_ENCODER(9),INFO_TEXT(err)},
-    {INFO_ENCODER(10),INFO_TEXT(enc_zero)},
-    {INFO_ENCODER(11),INFO_TEXT(enc_zpre)},
-    {INFO_ENCODER(12),INFO_TEXT(enc_zpost)},
-    {INFO_ENCODER(13),INFO_TEXT(enc_ztime)},
-    {INFO_LITERAL(text_e2_probe),INFO_TEXT(enc2)},
-    {INFO_LITERAL(text_e2_total),INFO_TEXT(enc2_err)},
+    INFO_ROW(INFO_ENCODER(0),INFO_TEXT(enc)),
+    INFO_ROW(INFO_ENCODER(1),INFO_TEXT(enc_crc)),
+    INFO_ROW(INFO_ENCODER(2),INFO_TEXT(enc_field)),
+    INFO_ROW(INFO_ENCODER(3),INFO_TEXT(enc_track)),
+    INFO_ROW(INFO_ENCODER(4),INFO_TEXT(enc_spi)),
+    INFO_ROW(INFO_ENCODER(5),INFO_TEXT(enc_frame)),
+    INFO_ROW(INFO_ENCODER(6),INFO_TEXT(enc_age)),
+    INFO_ROW(INFO_ENCODER(7),INFO_TEXT(enc_last)),
+    INFO_ROW(INFO_ENCODER(8),INFO_TEXT(raw)),
+    INFO_ROW(INFO_ENCODER(9),INFO_TEXT(err)),
+    INFO_ROW(INFO_ENCODER(10),INFO_TEXT(enc_zero)),
+    INFO_ROW(INFO_ENCODER(11),INFO_TEXT(enc_zpre)),
+    INFO_ROW(INFO_ENCODER(12),INFO_TEXT(enc_zpost)),
+    INFO_ROW(INFO_ENCODER(13),INFO_TEXT(enc_ztime)),
+    INFO_ROW(INFO_LITERAL(text_e2_probe),INFO_TEXT(enc2)),
+    INFO_ROW(INFO_LITERAL(text_e2_total),INFO_TEXT(enc2_err)),
     /* adc_rows */
-    {INFO_LITERAL(text_m1_ibus),INFO_TEXT(ibus_state)},
-    {INFO_LITERAL(text_ibus_limit),INFO_TEXT(ibus_limit)},
-    {INFO_LITERAL(text_ibus_dac),INFO_TEXT(ibus_code)},
-    {INFO_LITERAL(text_ibus_thresh),INFO_TEXT(ibus_voltage)},
-    {INFO_LITERAL(text_ibus_trips),INFO_TEXT(ibus_trips)},
-    {INFO_LITERAL(text_comp4),INFO_TEXT(ibus_pin)},
-    {INFO_LITERAL(text_i_trip),INFO_TEXT(current_trip)},
-    {INFO_LITERAL(text_iu_r_z),INFO_TEXT(current_adc[0])},
-    {INFO_LITERAL(text_iv_r_z),INFO_TEXT(current_adc[1])},
-    {INFO_LITERAL(text_iw_r_z),INFO_TEXT(current_adc[2])},
-    {INFO_LITERAL(text_chiprev),INFO_TEXT(adc_revision)},
-    {INFO_LITERAL(text_busraw),INFO_TEXT(bus_raw)},
-    {INFO_LITERAL(text_buscnt),INFO_TEXT(bus_count)},
-    {INFO_LITERAL(text_framecnt),INFO_TEXT(frame_count)},
-    {INFO_LITERAL(text_adc1err),INFO_TEXT(adc1_error)},
-    {INFO_LITERAL(text_adc2err),INFO_TEXT(adc2_error)},
-    {INFO_LITERAL(text_ref_r_c),INFO_TEXT(ref_raw)},
-    {INFO_LITERAL(text_refcnt),INFO_TEXT(ref_count)},
-    {INFO_LITERAL(text_referr),INFO_TEXT(ref_errors)},
+    INFO_ROW(INFO_LITERAL(text_m1_ibus),INFO_TEXT(ibus_state)),
+    INFO_ROW(INFO_LITERAL(text_ibus_limit),INFO_TEXT(ibus_limit)),
+    INFO_ROW(INFO_LITERAL(text_ibus_dac),INFO_TEXT(ibus_code)),
+    INFO_ROW(INFO_LITERAL(text_ibus_thresh),INFO_TEXT(ibus_voltage)),
+    INFO_ROW(INFO_LITERAL(text_ibus_trips),INFO_TEXT(ibus_trips)),
+    INFO_ROW(INFO_LITERAL(text_comp4),INFO_TEXT(ibus_pin)),
+    INFO_ROW(INFO_LITERAL(text_i_trip),INFO_TEXT(current_trip)),
+    INFO_ROW(INFO_LITERAL(text_iu_r_z),INFO_TEXT(current_adc[0])),
+    INFO_ROW(INFO_LITERAL(text_iv_r_z),INFO_TEXT(current_adc[1])),
+    INFO_ROW(INFO_LITERAL(text_iw_r_z),INFO_TEXT(current_adc[2])),
+    INFO_ROW(INFO_LITERAL(text_chiprev),INFO_TEXT(adc_revision)),
+    INFO_ROW(INFO_LITERAL(text_busraw),INFO_TEXT(bus_raw)),
+    INFO_ROW(INFO_LITERAL(text_buscnt),INFO_TEXT(bus_count)),
+    INFO_ROW(INFO_LITERAL(text_framecnt),INFO_TEXT(frame_count)),
+    INFO_ROW(INFO_LITERAL(text_adc1err),INFO_TEXT(adc1_error)),
+    INFO_ROW(INFO_LITERAL(text_adc2err),INFO_TEXT(adc2_error)),
+    INFO_ROW(INFO_LITERAL(text_ref_r_c),INFO_TEXT(ref_raw)),
+    INFO_ROW(INFO_LITERAL(text_refcnt),INFO_TEXT(ref_count)),
+    INFO_ROW(INFO_LITERAL(text_referr),INFO_TEXT(ref_errors)),
     /* hso_rows */
-    {INFO_LITERAL(text_hso),INFO_TEXT(hso)},
-    {INFO_LITERAL(text_h_min),INFO_TEXT(hso_min)},
-    {INFO_LITERAL(text_h_max),INFO_TEXT(hso_max)},
-    {INFO_LITERAL(text_h_zero),INFO_LITERAL(text_stop_coast)},
-    {INFO_LITERAL(text_h_reverse),INFO_LITERAL(text_stop_first)},
-    {INFO_LITERAL(text_h_gate),INFO_TEXT(hso_gate)},
-    {INFO_LITERAL(text_h_qual),INFO_TEXT(hso_qual)},
-    {INFO_LITERAL(text_h_reject),INFO_TEXT(hso_reject)},
-    {INFO_LITERAL(text_h_reset),INFO_TEXT(hso_resets)},
-    {INFO_LITERAL(text_h_r_deg),INFO_TEXT(hso_rangle)},
-    {INFO_LITERAL(text_h_r_hz),INFO_TEXT(hso_rfreq)},
-    {INFO_LITERAL(text_h_r_emf),INFO_TEXT(hso_remf)},
-    {INFO_LITERAL(text_h_r_drift),INFO_TEXT(hso_rdrift)},
-    {INFO_LITERAL(text_h_off_mv),INFO_TEXT(hso_offset)},
-    {INFO_LITERAL(text_h_lim_mv),INFO_TEXT(hso_olimit)},
-    {INFO_LITERAL(text_h_lost),INFO_TEXT(hso_lost)},
-    {INFO_LITERAL(text_h_speed),INFO_TEXT(hso_speed)},
-    {INFO_LITERAL(text_h_error),INFO_TEXT(hso_error)},
-    {INFO_LITERAL(text_h_flux),INFO_TEXT(hso_flux)},
-    {INFO_LITERAL(text_h_actual),INFO_TEXT(hso_flux_actual)},
-    {INFO_LITERAL(text_h_time),INFO_TEXT(hso_time)},
+    INFO_ROW(INFO_LITERAL(text_hso),INFO_TEXT(hso)),
+    INFO_ROW(INFO_LITERAL(text_h_min),INFO_TEXT(hso_min)),
+    INFO_ROW(INFO_LITERAL(text_h_max),INFO_TEXT(hso_max)),
+    INFO_ROW(INFO_LITERAL(text_h_zero),INFO_LITERAL(text_stop_coast)),
+    INFO_ROW(INFO_LITERAL(text_h_reverse),INFO_LITERAL(text_stop_first)),
+    INFO_ROW(INFO_LITERAL(text_h_gate),INFO_TEXT(hso_gate)),
+    INFO_ROW(INFO_LITERAL(text_h_qual),INFO_TEXT(hso_qual)),
+    INFO_ROW(INFO_LITERAL(text_h_reject),INFO_TEXT(hso_reject)),
+    INFO_ROW(INFO_LITERAL(text_h_reset),INFO_TEXT(hso_resets)),
+    INFO_ROW(INFO_LITERAL(text_h_r_deg),INFO_TEXT(hso_rangle)),
+    INFO_ROW(INFO_LITERAL(text_h_r_hz),INFO_TEXT(hso_rfreq)),
+    INFO_ROW(INFO_LITERAL(text_h_r_emf),INFO_TEXT(hso_remf)),
+    INFO_ROW(INFO_LITERAL(text_h_r_drift),INFO_TEXT(hso_rdrift)),
+    INFO_ROW(INFO_LITERAL(text_h_off_mv),INFO_TEXT(hso_offset)),
+    INFO_ROW(INFO_LITERAL(text_h_lim_mv),INFO_TEXT(hso_olimit)),
+    INFO_ROW(INFO_LITERAL(text_h_lost),INFO_TEXT(hso_lost)),
+    INFO_ROW(INFO_LITERAL(text_h_speed),INFO_TEXT(hso_speed)),
+    INFO_ROW(INFO_LITERAL(text_h_error),INFO_TEXT(hso_error)),
+    INFO_ROW(INFO_LITERAL(text_h_flux),INFO_TEXT(hso_flux)),
+    INFO_ROW(INFO_LITERAL(text_h_actual),INFO_TEXT(hso_flux_actual)),
+    INFO_ROW(INFO_LITERAL(text_h_time),INFO_TEXT(hso_time)),
     /* diagnostics_rows */
-    {INFO_LITERAL(text_cmd),INFO_TEXT(command)},
-    {INFO_LITERAL(text_m1_model),INFO_TEXT(m1)},
-    {INFO_LITERAL(text_m2_model),INFO_TEXT(m2)},
-    {INFO_LITERAL(text_ctrl_max),INFO_TEXT(control_time)},
-    {INFO_LITERAL(text_save_bus),INFO_TEXT(save)},
-    {INFO_LITERAL(text_save_last),INFO_TEXT(save_result)},
-    {INFO_LITERAL(text_flash_err),INFO_TEXT(flash_error)},
-    {INFO_LITERAL(text_spi2_fault),INFO_TEXT(spi2_fault)},
-    {INFO_LITERAL(text_spi2_reset),INFO_TEXT(spi2_resets)},
-    {INFO_LITERAL(text_keyrpt),INFO_TEXT(repeat)},
-    {INFO_LITERAL(text_disperr),INFO_TEXT(display_errors)},
+    INFO_ROW(INFO_LITERAL(text_cmd),INFO_TEXT(command)),
+    INFO_ROW(INFO_LITERAL(text_m1_model),INFO_TEXT(m1)),
+    INFO_ROW(INFO_LITERAL(text_m2_model),INFO_TEXT(m2)),
+    INFO_ROW(INFO_LITERAL(text_ctrl_max),INFO_TEXT(control_time)),
+    INFO_ROW(INFO_LITERAL(text_save_bus),INFO_TEXT(save)),
+    INFO_ROW(INFO_LITERAL(text_save_last),INFO_TEXT(save_result)),
+    INFO_ROW(INFO_LITERAL(text_flash_err),INFO_TEXT(flash_error)),
+    INFO_ROW(INFO_LITERAL(text_spi2_fault),INFO_TEXT(spi2_fault)),
+    INFO_ROW(INFO_LITERAL(text_spi2_reset),INFO_TEXT(spi2_resets)),
+    INFO_ROW(INFO_LITERAL(text_keyrpt),INFO_TEXT(repeat)),
+    INFO_ROW(INFO_LITERAL(text_disperr),INFO_TEXT(display_errors)),
     /* about_rows */
-    {INFO_LITERAL(text_fw),INFO_LITERAL(text_firmware)},
-    {INFO_LITERAL(text_mcu),INFO_LITERAL(text_stm32g431)},
-    {INFO_LITERAL(text_motor),INFO_TEXT(motor)},
-    {INFO_LITERAL(text_control),INFO_LITERAL(text_10khz_foc)},
-    {INFO_LITERAL(text_encoder),INFO_LITERAL(text_mt6701)},
-    {INFO_LITERAL(text_lcd),INFO_LITERAL(text_st7735s)},
-    {INFO_LITERAL(text_ui),INFO_LITERAL(text_kk_ui)},
-    {INFO_LITERAL(text_keys),INFO_LITERAL(text_6_keys)},
-    {INFO_LITERAL(text_flash),INFO_LITERAL(text_w25q64)},
+    INFO_ROW(INFO_LITERAL(text_fw),INFO_LITERAL(text_firmware)),
+    INFO_ROW(INFO_LITERAL(text_mcu),INFO_LITERAL(text_stm32g431)),
+    INFO_ROW(INFO_LITERAL(text_motor),INFO_TEXT(motor)),
+    INFO_ROW(INFO_LITERAL(text_control),INFO_LITERAL(text_10khz_foc)),
+    INFO_ROW(INFO_LITERAL(text_encoder),INFO_LITERAL(text_mt6701)),
+    INFO_ROW(INFO_LITERAL(text_lcd),INFO_LITERAL(text_st7735s)),
+    INFO_ROW(INFO_LITERAL(text_ui),INFO_LITERAL(text_kk_ui)),
+    INFO_ROW(INFO_LITERAL(text_keys),INFO_LITERAL(text_6_keys)),
+    INFO_ROW(INFO_LITERAL(text_flash),INFO_LITERAL(text_w25q64)),
 };
 _Static_assert(sizeof(info_refs)/sizeof(info_refs[0])==INFO_ROW_COUNT,"Resource row counts");
 #undef INFO_ENCODER
@@ -1016,8 +1019,11 @@ static void init_menu_items(void);
 __attribute__((noinline,noclone)) static void init_info_rows(void)
 {
     for (unsigned i=0;i<INFO_ROW_COUNT;++i) {
-        info_rows[i].name=info_pointer(info_refs[i].name);
-        info_rows[i].value=info_pointer(info_refs[i].value);
+        const uint8_t *b=info_refs[i].bytes;
+        unsigned packed=b[0]|((unsigned)b[1]<<8U)|((unsigned)b[2]<<16U);
+        unsigned name=packed&2047U,value=packed>>11U;
+        info_rows[i].name=name>=1792U ? (const char *)s_enc_labels+name-1792U : name>=1536U ? (const char *)&texts+(name-1536U)*4U : (const char *)&ui_strings+name;
+        info_rows[i].value=value>=1024U ? (const char *)&ui_strings+value-1024U : (const char *)&texts+value*4U;
     }
     init_menu_items();
 }

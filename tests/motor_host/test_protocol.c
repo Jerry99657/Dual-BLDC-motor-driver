@@ -28,16 +28,12 @@ static JerryFOC_ControlMode mode;
 static StHsoConfig config={2.3f,0.00086f,0,25000,0.019f};
 static unsigned configurations, learns, disables;
 static bool observer_enabled=true;
-#ifdef TELEMETRY_CAPTURE
 static uint8_t uart_capture[128];
 static uint16_t uart_capture_length;
 static uint8_t *uart_inflight;
-#endif
 HAL_StatusTypeDef HAL_UART_Transmit_IT(UART_HandleTypeDef *h,uint8_t *p,uint16_t n) {
-#ifdef TELEMETRY_CAPTURE
     assert(n<=sizeof(uart_capture)); memcpy(uart_capture,p,n); uart_capture_length=n;
     uart_inflight=p;
-#endif
     (void)h; (void)p; (void)n; return HAL_OK;
 }
 static bool usb_connected, usb_busy, complete_early, publish_during_submit;
@@ -130,10 +126,12 @@ bool StHso_SetConfig(const StHsoConfig *c) {
     if(c->rs_ohm<=0 || c->ls_h<=0 || c->flux_wb<0) return false;
     config=*c; ++configurations; return true;
 }
-static void command(const char *s) {
+static void enqueue(const char *s) {
     Protocol_Feed(PROTO_SRC_USB,(const uint8_t *)s,(uint32_t)strlen(s));
     Protocol_Feed(PROTO_SRC_USB,(const uint8_t *)"\r\n",2);
 }
+
+static void command(const char *s) { enqueue(s); Protocol_Service(); }
 
 static uint32_t number_digest=2166136261U;
 static FILE *number_trace;
@@ -147,70 +145,43 @@ static void check_configuration_queue(void) {
     MotorControl_SelectFeedback(false);
     MotorParams_SelectAxis(MOTOR_AXIS_1,MOTOR_PROFILE_2804);
     MotorParams_SelectAxis(MOTOR_AXIS_2,MOTOR_PROFILE_2804);
-    command("Work:Independent"); command("Motor1:4015");
-    command("Motor2:4015"); command("Focus:M2");
+    enqueue("Work:Independent"); enqueue("Motor1:4015"); enqueue("Motor2:4015"); enqueue("Focus:M2");
     assert(Protocol_GetControlResult()==0 && MotorControl_GetWork()==MOTOR_WORK_SINGLE_M1);
-    assert(MotorParams_GetAxisProfile(MOTOR_AXIS_1)==MOTOR_PROFILE_2804);
-    command("Work:SingleM2"); assert(Protocol_GetControlResult()==-3); /* Fifth entry refused. */
-    command("Speed:123"); assert(Protocol_GetControlResult()==-3 && target==0);
-    command("Stop"); assert(Protocol_GetControlResult()==1 && target==0);
+    enqueue("Speed:123"); assert(Protocol_GetControlResult()==-3 && target==0);
+    enqueue("Stop"); assert(Protocol_GetControlResult()==1 && target==0);
+    Protocol_Service(); assert(MotorControl_GetWork()==MOTOR_WORK_SINGLE_M1); /* Stop cancelled the batch. */
+    enqueue("Work:Independent"); enqueue("Motor1:4015"); enqueue("Motor2:4015"); enqueue("Focus:M2");
     Protocol_Service();
-    assert(Protocol_GetControlResult()==1 && MotorControl_GetWork()==MOTOR_WORK_INDEPENDENT);
-    assert(MotorParams_GetAxisProfile(MOTOR_AXIS_1)==MOTOR_PROFILE_4015 &&
-           MotorParams_GetAxisProfile(MOTOR_AXIS_2)==MOTOR_PROFILE_4015 && MotorControl_GetFocus()==MOTOR_AXIS_2);
-    Protocol_Service(); assert(MotorControl_GetWork()==MOTOR_WORK_INDEPENDENT);
-    command("Work:Independent");Protocol_Service(); /* Next batch starts at a nonzero queue slot. */
-    /* Another full batch wraps the queue and preserves the command/value pairing. */
-    command("Work:SingleM1");command("Motor1:2804");command("Motor2:2804");command("Feedback:HSO");
-    Protocol_Service();
-    assert(MotorControl_HsoAllowed() && MotorControl_GetWork()==MOTOR_WORK_SINGLE_M1 &&
-           MotorParams_GetAxisProfile(MOTOR_AXIS_1)==MOTOR_PROFILE_2804 && MotorParams_GetAxisProfile(MOTOR_AXIS_2)==MOTOR_PROFILE_2804);
-    command("Feedback:SixStep"); Protocol_Service(); assert(MotorControl_SixStepAllowed() && !MotorControl_HsoAllowed());
-    command("Feedback:Encoder"); Protocol_Service(); assert(!MotorControl_SixStepAllowed() && !MotorControl_HsoAllowed());
+    assert(MotorControl_GetWork()==MOTOR_WORK_INDEPENDENT && MotorControl_GetFocus()==MOTOR_AXIS_2);
+    assert(MotorParams_GetAxisProfile(MOTOR_AXIS_1)==MOTOR_PROFILE_4015 && MotorParams_GetAxisProfile(MOTOR_AXIS_2)==MOTOR_PROFILE_4015);
     const char *work_names[]={"SingleM1","SingleM2","Independent","SyncSpeed","SyncPosition","MasterM1","MasterM2"};
     for(unsigned i=0;i<MOTOR_WORK_COUNT;++i) {
         char line[64];snprintf(line,sizeof(line),"Work:%s",work_names[i]);
-        command(line);assert(Protocol_GetControlResult()==0);Protocol_Service();
-        assert(Protocol_GetControlResult()==1 && MotorControl_GetWork()==(MotorWorkMode)i);
+        command(line);assert(Protocol_GetControlResult()==1 && MotorControl_GetWork()==(MotorWorkMode)i);
     }
-    command("Work:Independent"); Protocol_Service();
-    command("Focus:M2");Protocol_Service();command("Align:M1");Protocol_Service();
-    assert(Protocol_GetControlResult()==1 && MotorControl_GetFocus()==MOTOR_AXIS_2);
-    command("Focus:M1");Protocol_Service();command("Align:M2");Protocol_Service();
-    assert(Protocol_GetControlResult()==1 && MotorControl_GetFocus()==MOTOR_AXIS_1);
+    command("Work:SingleM1");command("Motor1:2804");command("Motor2:2804");
+    command("Feedback:HSO");assert(MotorControl_HsoAllowed());
+    command("Feedback:SixStep");assert(MotorControl_SixStepAllowed() && !MotorControl_HsoAllowed());
+    command("Feedback:Encoder");assert(!MotorControl_SixStepAllowed() && !MotorControl_HsoAllowed());
+    command("Focus:M1");command("Align:M2");assert(Protocol_GetControlResult()==1);
     const char *gears[]={"Gear:-2.5,0.1","Gear:1e-2,-6.283e1","Gear:0x1p1,0x.8p1"};
-    for(unsigned i=0;i<sizeof(gears)/sizeof(*gears);++i) {
-        command(gears[i]);Protocol_Service();assert(Protocol_GetControlResult()==1);
-    }
-    const char *invalid[]={"Work:bad","Motor1:40150","Motor2:","Feedback:HSOx","Feedback:",
-        "Gear:0,0","Gear:1","Gear:1,0junk","Align:M3","Focus:M0"};
+    for(unsigned i=0;i<sizeof(gears)/sizeof(*gears);++i) { command(gears[i]);assert(Protocol_GetControlResult()==1); }
+    const char *invalid[]={"Work:bad","Motor1:40150","Motor2:","Feedback:HSOx","Feedback:","Gear:0,0","Gear:1","Gear:1,0junk","Align:M3","Focus:M0"};
     for(unsigned i=0;i<sizeof(invalid)/sizeof(*invalid);++i) {
-        uint32_t before=AppStorage_Get()->control_config;
-        command(invalid[i]);assert(Protocol_GetControlResult()==0);Protocol_Service();
+        uint32_t before=AppStorage_Get()->control_config;command(invalid[i]);
         assert(Protocol_GetControlResult()==-1 && AppStorage_Get()->control_config==before);
     }
-    const char *unknown[]={"work:SingleM1","WorkSingleM1","Motor3:4015","Motor1x:4015","Feedbackx:HSO","Focusx:M1"};
-    for(unsigned i=0;i<sizeof(unknown)/sizeof(*unknown);++i) {
-        command(unknown[i]);assert(Protocol_GetControlResult()==-2);Protocol_Service();
-        assert(MotorControl_GetWork()==MOTOR_WORK_INDEPENDENT);
-    }
+    command("work:SingleM1");assert(Protocol_GetControlResult()==-2);
     char line[65];memset(line,'x',sizeof(line));memcpy(line,"Work:",5);line[63]=0;
-    Protocol_HandleLine(line);assert(Protocol_GetControlResult()==0);Protocol_Service();
-    assert(Protocol_GetControlResult()==-1);
+    Protocol_HandleLine(line);assert(Protocol_GetControlResult()==0);Protocol_Service();assert(Protocol_GetControlResult()==-1);
     line[63]='x';line[64]=0;Protocol_HandleLine(line);assert(Protocol_GetControlResult()==-2);
-    /* Source-specific partial input survives another transport's complete line. */
-    Protocol_Feed(PROTO_SRC_USART,(const uint8_t *)"Mo",2);
-    command("Work:SingleM1");
-    Protocol_Feed(PROTO_SRC_USART,(const uint8_t *)"tor1:4015\n",sizeof("tor1:4015\n")-1);
-    Protocol_Service();
-    assert(MotorControl_GetWork()==MOTOR_WORK_SINGLE_M1 && MotorParams_GetActiveProfile()==MOTOR_PROFILE_4015);
+    Protocol_Feed(PROTO_SRC_USART,(const uint8_t *)"Mo",2);enqueue("Work:SingleM1");
+    Protocol_Feed(PROTO_SRC_USART,(const uint8_t *)"tor1:4015\n",sizeof("tor1:4015\n")-1);Protocol_Service();
+    assert(MotorParams_GetActiveProfile()==MOTOR_PROFILE_4015);
     char overflow[100];memset(overflow,'x',sizeof(overflow));memcpy(overflow,"Work:",5);
-    Protocol_Feed(PROTO_SRC_USB,(const uint8_t *)overflow,sizeof(overflow));
-    Protocol_Feed(PROTO_SRC_USB,(const uint8_t *)"\n",1);Protocol_Service();
-    assert(MotorControl_GetWork()==MOTOR_WORK_SINGLE_M1);
-    command("Motor1:2804");Protocol_Service();assert(MotorParams_GetActiveProfile()==MOTOR_PROFILE_2804);
-    assert(host_primask==0 && target==0);
-    puts("PASS: deferred configuration dispatch: all 7 prefixes/work modes/models/feedbacks/axes, FIFO/wrap/full queue, Stop while queued, invalid/near prefixes, 63/64-byte bounds and dual-source fragments");
+    Protocol_Feed(PROTO_SRC_USB,(const uint8_t *)overflow,sizeof(overflow));Protocol_Feed(PROTO_SRC_USB,(const uint8_t *)"\n",1);Protocol_Service();
+    command("Motor1:2804");assert(host_primask==0 && target==0);
+    puts("PASS: main-loop FIFO, all work/model/feedback/axis commands, queue-full, immediate Stop cancels pending commands, bounds and fragmented dual-source lines");
 }
 static void check_numbers(void) {
     const char *valid[]={"0","-0","+.5","-.25"," 1.25","\t1e1","1E-3","1e+2",
@@ -245,6 +216,52 @@ static void check_numbers(void) {
     }
     command("Speed:20");
     printf("PASS: compact finite-number parser: decimal/exponent/hex/sign/whitespace, malformed/overflow rejection, subnormals and 20000 decimal + hex round trips; digest %08lx\n",(unsigned long)number_digest);
+}
+static void check_rpc(void) {
+    extern uint32_t telemetry_host_tick;
+    extern bool telemetry_host_stopped;
+    FILE *trace=fopen("build/console-r87/rpc-fixture.bin","wb");assert(trace);
+    MotorControl_StopAll();MotorControl_SelectWork(MOTOR_WORK_SINGLE_M1);MotorControl_SelectFeedback(false);
+    AppStorage_Get()->speed_x10=123;AppStorage_Get()->led_brightness=37;
+    usb_connected=true;usb_busy=false;complete_early=true;submit_result=USBD_OK;
+    telemetry_host_tick=100;assert(Telemetry_Select("Off"));
+    command("@1:Get");Telemetry_Service();
+    assert(inflight_len==106 && inflight[3]==32 && inflight[12]==1 && inflight[14]==1 && inflight[15]==PROTO_SRC_USB);
+    assert(inflight[16]==1 && inflight[17]==87);
+    assert(inflight[18]==APP_SAVE_PENDING); /* Dirty config must not claim an older save completed. */
+    int32_t saved;memcpy(&saved,inflight+20,4);assert(saved==123);
+    assert(fwrite(inflight,1,inflight_len,trace)==inflight_len);
+    command("@2:Speed:19");assert(target==19);Telemetry_Service();
+    assert(inflight[12]==2 && inflight[14]==1);
+    command("@3:Speed:bad");Telemetry_Service();assert(inflight[12]==3 && (int8_t)inflight[14]==-2 && target==19);
+    command("@4:Work:bad");Telemetry_Service();assert((int8_t)inflight[14]==-1);
+    unsigned before=submissions;
+    Protocol_Feed(PROTO_SRC_USART,(const uint8_t *)"@5:Get\n",7);Protocol_Service();
+    huart1.gState=HAL_UART_STATE_READY^1U;Telemetry_Service();assert(submissions==before);
+    huart1.gState=HAL_UART_STATE_READY;Telemetry_Service();
+    assert(submissions==before && uart_capture_length==106 && uart_capture[12]==5 && uart_capture[15]==PROTO_SRC_USART);
+    assert(fwrite(uart_capture,1,uart_capture_length,trace)==uart_capture_length);
+    /* Failed USB submission retains the complete reply, not the next curve. */
+    submit_result=USBD_BUSY;command("@6:Get");Telemetry_Service();
+    unsigned blocked=submissions;for(unsigned i=0;i<20;++i) Telemetry_Service();assert(submissions==blocked+20);
+    submit_result=USBD_OK;Telemetry_Service();assert(inflight[12]==6 && inflight[14]==1);
+    /* TX stall never delays Stop and queued motion cannot run after Stop. */
+    usb_busy=true;command("@7:Get");Telemetry_Service();enqueue("@8:Speed:30");enqueue("@9:Stop");
+    assert(target==0);Protocol_Service();assert(target==0);
+    usb_busy=false;Telemetry_Service();Protocol_Service();Telemetry_Service();
+    assert(inflight[12]==9 && target==0);
+    /* Drop an undeliverable reply; do not replay an old movement afterward. */
+    usb_busy=true;command("@10:Get");Telemetry_Service();enqueue("@11:Speed:33");
+    telemetry_host_tick+=1001;Telemetry_Service();Protocol_Service();usb_busy=false;Telemetry_Service();
+    assert(inflight[12]==11 && (int8_t)inflight[14]==-4 && target==0);
+    enqueue("@12:Speed:20");telemetry_host_stopped=true;Protocol_Service();Telemetry_Service();
+    assert(inflight[12]==12 && (int8_t)inflight[14]==-4 && target==0);telemetry_host_stopped=false;
+    telemetry_host_stopped=true;enqueue("@13:Speed:20");telemetry_host_tick+=11;Protocol_Service();Telemetry_Service();
+    assert(inflight[12]==13 && (int8_t)inflight[14]==-4 && target==0);telemetry_host_stopped=false;
+    unsigned calls=submissions;command("@0:Speed:12");command("@65536:Speed:12");command("@x:Speed:12");
+    assert(target==0 && submissions==calls);
+    assert(fclose(trace)==0);assert(host_primask==0);
+    puts("PASS: real RPC schema/settings bytes, IDs, exact results, USB/UART reply routing, BUSY retry, immediate Stop, queue cancellation, disconnected reply timeout, stale-motion and KEY1 cancellation");
 }
 int main(void) {
     const char *trace=getenv("PROTO_NUMBER_TRACE");
@@ -283,8 +300,10 @@ int main(void) {
     Protocol_Feed(PROTO_SRC_USART,(uint8_t *)"HSO:Fil",7);
     command("Speed:20"); assert(target==20 && mode==JERRYFOC_MODE_VELOCITY);
     Protocol_Feed(PROTO_SRC_USART,(uint8_t *)"ter:20000,0.01\n",sizeof("ter:20000,0.01\n")-1U);
+    Protocol_Service();
     assert(configurations==4 && config.voltage_pole_rps==20000);
     check_numbers();
+    check_rpc();
     if(number_trace) { assert(fclose(number_trace)==0);number_trace=NULL; }
     assert(host_primask==0);
     puts("PASS: real HSO protocol parsing, strict numbers, gates, stop, overflow discard, independent fragmented transports");

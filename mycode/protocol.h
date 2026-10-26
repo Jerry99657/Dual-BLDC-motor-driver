@@ -14,8 +14,10 @@ void Protocol_Feed(uint8_t source, const uint8_t *data, uint32_t len);
 void Protocol_HandleLine(char *line);
 /* Last HSO command: 1=accepted, -1=unknown, -2=invalid parameter, -3=not ready. */
 int8_t Protocol_GetHsoResult(void);
-/* Configuration executes in main context; motor commands remain bounded ISR
- * operations. Result: 1 accepted, 0 queued, -1 rejected, -2 syntax, -3 busy. */
+/* Complete commands execute in main context; Stop bypasses and clears the
+ * pending FIFO. Result: 1 accepted, 0 queued, -1 rejected, -2 syntax, -3 busy,
+ * -4 cancelled/expired. Numbered @ID:command replies use binary kind 32.
+ * Get reads current numeric settings. Ordinary legacy text remains accepted. */
 void Protocol_Service(void);
 int8_t Protocol_GetControlResult(void);
 

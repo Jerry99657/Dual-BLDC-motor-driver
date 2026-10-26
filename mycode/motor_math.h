@@ -2,6 +2,8 @@
 #define MOTOR_MATH_H
 #include "main.h"
 #include <math.h>
+/* Positive-turn normalization with the same binary32 remainder as fmodf. */
+float MotorMath_Wrap(float angle);
 #if defined(CORDIC)
 void MotorMath_SinCos(float angle,float *sine,float *cosine);
 #else

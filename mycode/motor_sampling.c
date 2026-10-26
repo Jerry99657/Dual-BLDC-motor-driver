@@ -876,7 +876,7 @@ void MotorSampling_Service(void)
     __set_PRIMASK(primask);
 }
 
-bool MotorSampling_Capture(void)
+__attribute__((noinline,noclone)) bool MotorSampling_Capture(void)
 {
     (void)MotorSampling_IsGlobalStopped();
     ibus_poll();

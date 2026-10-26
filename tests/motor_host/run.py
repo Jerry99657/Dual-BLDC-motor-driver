@@ -6,6 +6,8 @@ import sys
 repo = Path(__file__).resolve().parents[2]
 out = repo / "build/motor-validation"
 out.mkdir(parents=True, exist_ok=True)
+(repo / "build/console-r87").mkdir(parents=True, exist_ok=True)
+(repo / "build/telemetry-r86").mkdir(parents=True, exist_ok=True)
 compiler = shutil.which("gcc") or "gcc"
 subprocess.run([sys.executable, "tests/motor_host/check_spi_clock.py"],
                cwd=repo, check=True)
@@ -36,6 +38,8 @@ for name, sources in suites.items():
     if name in ("foc","protocol","telemetry"):
         sources += ["tests/motor_host/control_stub.c"]
     if name in ("protocol","telemetry"): sources += ["tests/motor_host/telemetry_stubs.c"]
+    if name in ("foc","control","sensorless","detect"):
+        sources += ["mycode/motor_math.c"]
     command = [compiler, "-std=c11", "-Wall", "-Wextra", "-Werror", "-O1",
                "-Itests/motor_host", "-Imycode", "-IThirdParty/ST_HSO", *sources, "-lm", "-o", str(out / (name + ".exe"))]
     if name=="sampling": command.insert(1,"-DMOTOR_SAMPLING_HOST_HOOKS")

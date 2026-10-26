@@ -12,6 +12,8 @@
 #include "motor_sixstep.h"
 #include "usart.h"
 #include "usb_device.h"
+#include "app_storage.h"
+AppSaveState AppStorage_GetSaveState(void) { return APP_SAVE_IDLE; }
 
 UART_HandleTypeDef huart1;
 USBD_HandleTypeDef hUsbDeviceFS;
@@ -33,6 +35,7 @@ bool StHso_SetConfig(const StHsoConfig *c) { (void)c; return true; }
 static void command(const char *s) {
     Protocol_Feed(PROTO_SRC_USB,(const uint8_t *)s,(uint32_t)strlen(s));
     Protocol_Feed(PROTO_SRC_USB,(const uint8_t *)"\n",1);
+    Protocol_Service();
 }
 
 HostDwt host_dwt;

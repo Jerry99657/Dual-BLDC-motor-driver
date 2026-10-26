@@ -12,6 +12,7 @@ subprocess.run([str(output / "test_ui_text.exe")], cwd=repo, check=True)
 sources = list((repo / "mycode/kk_ui/src").glob("*.c"))
 sources += list((repo / "mycode/kk_oled/graphics").glob("*.c"))
 sources += [repo / p for p in ("mycode/ui_app.c", "mycode/ui_text.c", "mycode/ui_input.c", "mycode/ui_fonts.c", "mycode/motor_params.c", "tests/ui_host/test_ui.c", "tests/motor_host/control_stub.c")]
+sources += [repo / "mycode/motor_math.c"]
 includes = ["tests/ui_host", "mycode", "mycode/kk_ui/include", "mycode/kk_ui/src", "mycode/kk_oled/include", "mycode/kk_oled/graphics", "mycode/kk_oled/driver"]
 command = [shutil.which("gcc") or "gcc", "-std=c11", "-Wall", "-Wextra", "-Werror", "-O1", "-DKK_OLED_TEST", "-DCONTROL_STUB_UI"]
 command += ["-I" + str(repo / p) for p in includes]

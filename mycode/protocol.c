@@ -1,3 +1,7 @@
+#if defined(__GNUC__) && !defined(_WIN32)
+/* User protocol handlers stay shared; official compilation is unchanged. */
+#pragma GCC optimize ("Os,no-ipa-cp-clone")
+#endif
 #include "protocol.h"
 #include "number_parse.h"
 #include "main.h"
@@ -95,7 +99,8 @@ static uint8_t usb_tx_pending[USB_TX_BUF_SIZE];
 static uint8_t usb_tx_active[USB_TX_BUF_SIZE];
 static volatile uint16_t usb_tx_pending_len;
 
-static void handle_line(char *line,MotorInput input);
+static int8_t handle_line(char *line,MotorInput input);
+static void receive_line(char *line,MotorInput input);
 void Protocol_Feed(uint8_t source, const uint8_t *data, uint32_t len)
 {
     if (source > PROTO_SRC_USB) {
@@ -107,7 +112,7 @@ void Protocol_Feed(uint8_t source, const uint8_t *data, uint32_t len)
         char ch = (char)data[i];
         if (ch == '\n') {
             c->buf[c->len] = '\0';
-            if (!c->overflow) handle_line(c->buf,source==PROTO_SRC_USB ? MOTOR_INPUT_USB : MOTOR_INPUT_UART);
+            if (!c->overflow) receive_line(c->buf,source==PROTO_SRC_USB ? MOTOR_INPUT_USB : MOTOR_INPUT_UART);
             c->len = 0U;
             c->overflow = false;
         } else if (ch != '\r') {
@@ -117,16 +122,23 @@ void Protocol_Feed(uint8_t source, const uint8_t *data, uint32_t len)
     }
 }
 
-/* Every recognized prefix contains at least one byte. Replacing that prefix
- * with its kind leaves room for the complete payload at the old 64B size. */
-typedef struct { uint8_t kind; char value[PROTO_LINE_MAX-1]; } ConfigLine;
-_Static_assert(sizeof(ConfigLine)==PROTO_LINE_MAX,"Configuration queue record size");
-static ConfigLine config_queue[4];
+/* Both transports publish complete bounded requests. Main owns parsing and
+ * configuration; only Stop bypasses the queue and cancels pending commands. */
+typedef struct { uint32_t at; uint16_t id; uint8_t input; bool stopped; char text[PROTO_LINE_MAX]; } CommandLine;
+static CommandLine config_queue[4];
 static volatile uint8_t config_head,config_count;
-static volatile bool config_applying;
+static volatile uint32_t stop_generation;
+static uint32_t command_generation;
+static uint32_t command_at;
+static bool command_was_stopped;
 static volatile int8_t control_result;
-static bool config_save;
+static bool config_save,reply_pending,reply_built;
+static uint16_t reply_id;
+static uint8_t reply_source;
+static int8_t reply_result;
+static uint32_t reply_at;
 int8_t Protocol_GetControlResult(void) { return control_result; }
+
 enum { CONFIG_WORK,CONFIG_MOTOR1,CONFIG_MOTOR2,CONFIG_FEEDBACK,
        CONFIG_GEAR,CONFIG_ALIGN,CONFIG_FOCUS,CONFIG_COUNT,
        CMD_SPEED=CONFIG_COUNT,CMD_ANGLE,CMD_TORQUE,CMD_THROTTLE,CMD_OPEN,CMD_HSO,CMD_STREAM,CMD_COUNT };
@@ -155,6 +167,7 @@ static bool apply_configuration(uint8_t kind,const char *value)
         MotorAxis a=kind==CONFIG_MOTOR1 ? MOTOR_AXIS_1 : MOTOR_AXIS_2;
         if (!strcmp(value,"2804")) return MotorControl_SelectProfile(a,MOTOR_PROFILE_2804);
         if (!strcmp(value,"4015")) return MotorControl_SelectProfile(a,MOTOR_PROFILE_4015);
+        if (a==MOTOR_AXIS_1 && !strcmp(value,"ESC")) return MotorControl_SelectGeneric();
         break;
     }
     case CONFIG_FEEDBACK:
@@ -179,31 +192,70 @@ static bool apply_configuration(uint8_t kind,const char *value)
     }
     return false;
 }
+static void receive_line(char *line,MotorInput input)
+{
+    uint32_t id=0;
+    if (*line=='@') {
+        ++line;
+        const char *first=line;
+        while (*line>='0' && *line<='9') {
+            id=id*10U+(unsigned)(*line++-'0');
+            if(id>65535U) return;
+        }
+        if(line==first || !id || *line++!=':') return;
+    }
+    if(strlen(line)>=PROTO_LINE_MAX) { control_result=-2; return; }
+    const char *action=line;
+    if(!strncmp(action,"M1:",3) || !strncmp(action,"M2:",3)) action+=3;
+    uint32_t mask=__get_PRIMASK(); __disable_irq();
+    if(!strcmp(action,"Stop")) {
+        ++stop_generation; config_count=0;
+        control_result=handle_line(line,input); /* Immediate power stop, even if TX is stalled. */
+        if(!id) { __set_PRIMASK(mask); return; }
+    }
+    if(config_count>=4U) control_result=-3;
+    else {
+        CommandLine *request=&config_queue[(config_head+config_count)%4U];
+        request->at=HAL_GetTick();
+        request->stopped=MotorSampling_IsGlobalStopped();
+        request->id=(uint16_t)id; request->input=(uint8_t)input;
+        strcpy(request->text,line); ++config_count; control_result=0;
+    }
+    __set_PRIMASK(mask);
+}
 void Protocol_Service(void)
 {
-    /* Drain the bounded batch before main services automatic alignment. */
-    for (unsigned i=0;i<4;++i) {
-        ConfigLine request;
+    if(reply_pending) return;
+    for(unsigned i=0;i<4;++i) {
+        CommandLine request;
         uint32_t mask=__get_PRIMASK(); __disable_irq();
-        if (!config_count) { __set_PRIMASK(mask); break; }
-        config_applying=true;
-        memcpy(&request,&config_queue[config_head],sizeof(request));
+        if(!config_count) { __set_PRIMASK(mask); break; }
+        request=config_queue[config_head];
         config_head=(config_head+1U)%4U; --config_count;
+        command_generation=stop_generation;
+        command_at=request.at;
+        command_was_stopped=request.stopped;
         __set_PRIMASK(mask);
-        bool ok=apply_configuration(request.kind,request.value);
-        control_result=ok ? 1 : -1;
-        if (ok && request.kind!=CONFIG_FOCUS && request.kind!=CONFIG_ALIGN) config_save=true;
+        int8_t result=1;
+        if(HAL_GetTick()-request.at>500U || (!request.stopped && MotorSampling_IsGlobalStopped())) result=-4;
+        else if(strcmp(request.text,"Get")) result=handle_line(request.text,(MotorInput)request.input);
+        control_result=result;
+        if(request.id) {
+            reply_id=request.id; reply_source=request.input==MOTOR_INPUT_USB ? PROTO_SRC_USB : PROTO_SRC_USART;
+            reply_result=result;
+            reply_at=HAL_GetTick(); reply_built=false; reply_pending=true;
+            break;
+        }
     }
-    config_applying=false;
-    if (config_save && AppStorage_RequestSave()) config_save=false;
+    if(config_save && AppStorage_RequestSave()) config_save=false;
 }
-
 void Protocol_HandleLine(char *line)
 {
-    handle_line(line,MOTOR_INPUT_UART);
+    receive_line(line,MOTOR_INPUT_UART);
 }
-static void handle_line(char *line,MotorInput input)
+__attribute__((noinline,noclone)) static int8_t handle_line(char *line,MotorInput input)
 {
+    int8_t result=1;
     MotorWorkMode work=MotorControl_GetWork();
     MotorAxis axis=work==MOTOR_WORK_SINGLE_M2 ? MOTOR_AXIS_2 : MOTOR_AXIS_1;
     bool explicit_axis=false;
@@ -212,37 +264,29 @@ static void handle_line(char *line,MotorInput input)
     }
     uint8_t kind=command_kind(line);
     if (kind<CONFIG_COUNT) {
-        if (explicit_axis) { control_result=-2; return; }
-        if (strlen(line)>=PROTO_LINE_MAX) { control_result=-2; return; }
-        uint32_t mask=__get_PRIMASK(); __disable_irq();
-        if (config_count>=4U) control_result=-3;
-        else {
-            unsigned tail=(config_head+config_count)%4U;
-            config_queue[tail].kind=kind;
-            strcpy(config_queue[tail].value,line+command_prefixes[kind].length);
-            /* Publish the complete request before the count. */
-            ++config_count; control_result=0;
-        }
-        __set_PRIMASK(mask); return;
+        if(kind==CONFIG_ALIGN && command_was_stopped && HAL_GetTick()-command_at>10U) return -4;
+        result=!explicit_axis && apply_configuration(kind,line+command_prefixes[kind].length) ? 1 : -1;
+        if(result==1 && kind!=CONFIG_ALIGN) config_save=true;
+        return result;
     }
     if (kind==CMD_STREAM) {
-        control_result=!explicit_axis && Telemetry_Select(line+7) ? 1 : -2;
-        return;
+        result=!explicit_axis && Telemetry_Select(line+7) ? 1 : -2;
+        return result;
     }
     /* Stop is transport-independent and remains available during configuration. */
     if (!strcmp(line,"Stop")) {
         uint32_t mask=__get_PRIMASK(); __disable_irq();
         if ((!explicit_axis || axis==MOTOR_AXIS_1) && (JerryFOC_isHSOActive() || JerryFOC_hasHSOFault())) (void)JerryFOC_useHSO(0U);
         if (explicit_axis) MotorControl_Stop(axis); else MotorControl_StopAll();
-        control_result=1; __set_PRIMASK(mask); return;
+        result=1; __set_PRIMASK(mask); return result;
     }
-    if (config_count || config_applying) { control_result=-3; return; }
     if (kind==CMD_HSO) {
         /* Parse outside the existing control critical section. The adapter
          * queues configuration for ADC1; never call ST library code here. */
-        if (axis!=MOTOR_AXIS_1) { hso_result=-3; return; }
+        if (axis!=MOTOR_AXIS_1) { hso_result=-3; return result; }
         handle_hso(line + 4,input);
-        return;
+        result=hso_result;
+        return result;
     }
     /* Invalid input must not change mode or release an HSO recovery stop. */
     float command_values[2] = {0.0f, 4.0f};
@@ -252,18 +296,22 @@ static void handle_line(char *line,MotorInput input)
     bool throttle_cmd=kind==CMD_THROTTLE;
     bool open_cmd=kind==CMD_OPEN;
     if (work>=MOTOR_WORK_INDEPENDENT && !explicit_axis &&
-        (speed_cmd || angle_cmd || torque_cmd || throttle_cmd || open_cmd)) { control_result=-2; return; }
+        (speed_cmd || angle_cmd || torque_cmd || throttle_cmd || open_cmd)) { result=-2; return result; }
     if ((speed_cmd || angle_cmd || torque_cmd || throttle_cmd) &&
-        !parse_hso_values(line+command_prefixes[kind].length,command_values,1U)) { control_result=-2; return; }
+        !parse_hso_values(line+command_prefixes[kind].length,command_values,1U)) { result=-2; return result; }
     if ((throttle_cmd && (axis!=MOTOR_AXIS_1 || !MotorControl_SixStepAllowed())) ||
-        (torque_cmd && MotorControl_SixStepAllowed())) { control_result=-1; return; }
+        (torque_cmd && MotorControl_SixStepAllowed())) { result=-1; return result; }
     if (open_cmd && !parse_hso_values(line + 9, command_values,
-                                     strchr(line + 9, ',') ? 2U : 1U)) { control_result=-2; return; }
+                                     strchr(line + 9, ',') ? 2U : 1U)) { result=-2; return result; }
     uint32_t primask = __get_PRIMASK();
     __disable_irq();
+    /* A command received with the stop latch set must not wait through the
+     * physical key's 30 ms release guard and then start without a new click. */
+    if(command_generation!=stop_generation || (!command_was_stopped && MotorSampling_IsGlobalStopped()) ||
+       (command_was_stopped && HAL_GetTick()-command_at>10U)) { result=-4; __set_PRIMASK(primask); return result; }
 
     if (!strcmp(line,"Follow")) {
-        control_result=MotorControl_StartFollow() ? 1 : -1;
+        result=MotorControl_StartFollow() ? 1 : -1;
     } else if (speed_cmd || angle_cmd || torque_cmd || throttle_cmd) {
         JerryFOC_ControlMode mode=speed_cmd ? JERRYFOC_MODE_VELOCITY :
                                   angle_cmd ? JERRYFOC_MODE_POSITION : JERRYFOC_MODE_TORQUE;
@@ -273,11 +321,11 @@ static void handle_line(char *line,MotorInput input)
             MotorAxisSnapshot state; MotorControl_GetAxis(axis,&state);
             value+=floorf(state.position/(2.0f*PI))*(2.0f*PI);
         }
-        control_result=MotorControl_CommandFrom(axis,mode,value,0,(flags & APP_FLAG_CURRENT_LOOP)!=0U,input) ? 1 : -1;
+        result=MotorControl_CommandFrom(axis,mode,value,0,(flags & APP_FLAG_CURRENT_LOOP)!=0U,input) ? 1 : -1;
     } else if (open_cmd) {
         if (MotorDetect_Active() || MotorControl_GetWork()!=MOTOR_WORK_SINGLE_M1 || MotorControl_HsoAllowed() || MotorControl_SixStepAllowed() || axis!=MOTOR_AXIS_1 ||
             !JerryFOC_isDriveReady() || !MotorSampling_ResumeGlobalStop() || !MotorControl_ClaimInput(axis,input)) {
-            control_result=-1; __set_PRIMASK(primask); return;
+            result=-1; __set_PRIMASK(primask); return result;
         }
         if (JerryFOC_isHSOActive() || JerryFOC_hasHSOFault()) (void)JerryFOC_useHSO(0U);
         /* 纯开环诊断：OpenLoop:速度,电压，例如 OpenLoop:30,6 */
@@ -301,13 +349,14 @@ static void handle_line(char *line,MotorInput input)
         g_openloop_debug = 1U;
         g_openloop_angle = 0.0f;
     } else {
-        control_result=-2;
+        result=-2;
     }
-    if (open_cmd) control_result=JerryFOC_startOutput() ? 1 : -1;
+    if (open_cmd) result=JerryFOC_startOutput() ? 1 : -1;
 
     if (!primask) {
         __enable_irq();
     }
+    return result;
 }
 
 void Telemetry_Send(const uint8_t *data, uint16_t len)
@@ -329,8 +378,10 @@ void Telemetry_Send(const uint8_t *data, uint16_t len)
 }
 
 static void telemetry_produce(void);
+static void telemetry_reply(void);
 void Telemetry_Service(void)
 {
+    if(reply_pending) { telemetry_reply(); return; }
     telemetry_produce();
     if (usb_tx_pending_len == 0U || !CDC_TxReady_FS()) {
         return;
@@ -354,9 +405,12 @@ typedef struct { uint8_t meta[16]; uint32_t values[4]; char text[4][16]; } Telem
 typedef struct { uint32_t counts[8]; uint16_t values[7]; uint8_t status,error; } TelemetryEncoder;
 typedef struct { float data[7]; uint32_t counts[3]; uint8_t flags[4]; } TelemetryHso;
 typedef struct { float startup_emf; uint32_t crossings; uint16_t values[13]; uint8_t flags[4]; } TelemetrySix;
+/* Explicit schema 1, not an AppSettings memory-write protocol. Only the
+ * contiguous numeric settings fields are copied; no metadata/CRC/pointers. */
+typedef struct { uint16_t id; int8_t result; uint8_t source,schema,firmware,save,focus; uint32_t settings[21]; } TelemetryReply;
 typedef struct {
     TelemetryHeader header;
-    union { TelemetryStatus status; TelemetryEncoder encoder; TelemetryHso hso;
+    union { TelemetryStatus status; TelemetryReply reply; TelemetryEncoder encoder; TelemetryHso hso;
         TelemetrySix six; float curves[12]; uint8_t bytes[114]; } payload;
 } TelemetryPacket;
 /* Main-loop producer only. Transports copy into their own immutable active
@@ -382,7 +436,7 @@ bool Telemetry_Select(const char *name)
     }
     return false;
 }
-static void telemetry_emit(uint8_t kind,unsigned length,uint32_t now)
+static unsigned telemetry_frame(uint8_t kind,unsigned length,uint32_t now)
 {
     uint8_t *bytes=(uint8_t *)&telemetry_packet;
     telemetry_packet.header=(TelemetryHeader){0x5AA5,1,kind,telemetry_sequence++,(uint16_t)length,now};
@@ -395,7 +449,36 @@ static void telemetry_emit(uint8_t kind,unsigned length,uint32_t now)
         crc=(uint16_t)((crc<<8)^(x<<12)^(x<<5)^x);
     }
     bytes[total++]=(uint8_t)crc; bytes[total++]=(uint8_t)(crc>>8);
-    Telemetry_Send(bytes,(uint16_t)total);
+    return total;
+}
+static void telemetry_emit(uint8_t kind,unsigned length,uint32_t now)
+{
+    unsigned total=telemetry_frame(kind,length,now);
+    Telemetry_Send((const uint8_t *)&telemetry_packet,(uint16_t)total);
+}
+static void telemetry_reply(void)
+{
+    /* A disconnected host cannot freeze command service. Pending commands
+     * also expire before execution; the PC never retries motion on timeout. */
+    if(HAL_GetTick()-reply_at>1000U) { reply_pending=false; return; }
+    if(!reply_built) {
+        TelemetryReply *r=&telemetry_packet.payload.reply;
+        _Static_assert(sizeof(TelemetryReply)==92 && offsetof(AppSettings,crc)-offsetof(AppSettings,speed_x10)==84,"RPC schema 1");
+        r->id=reply_id; r->result=reply_result; r->source=reply_source;
+        r->schema=1; r->firmware=87; r->save=(uint8_t)(config_save ? APP_SAVE_PENDING : AppStorage_GetSaveState()); r->focus=(uint8_t)MotorControl_GetFocus();
+        memcpy(r->settings,&AppStorage_Get()->speed_x10,sizeof(r->settings));
+        (void)telemetry_frame(32,sizeof(*r),HAL_GetTick());
+        usb_tx_pending_len=0; reply_built=true;
+    }
+    const unsigned len=sizeof(TelemetryHeader)+sizeof(TelemetryReply)+2U;
+    if(reply_source==PROTO_SRC_USB) {
+        if(!CDC_TxReady_FS()) return;
+        memcpy(usb_tx_active,&telemetry_packet,len);
+        if(CDC_Transmit_FS(usb_tx_active,len)==USBD_OK) reply_pending=false;
+    } else if(huart1.gState==HAL_UART_STATE_READY) {
+        memcpy(usart_tx_buf,&telemetry_packet,len);
+        if(HAL_UART_Transmit_IT(&huart1,usart_tx_buf,len)==HAL_OK) reply_pending=false;
+    }
 }
 static uint8_t axis_flags(MotorAxis axis,const MotorAxisSnapshot *s)
 {

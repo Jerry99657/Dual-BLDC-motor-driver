@@ -1,5 +1,7 @@
 # 电机驱动板 UI 操作与验证
 
+当前固件 **UI-R87-PC**：完成上位机计划第 1～3 批。`pc_tool/index.html` 单文件通过 Web Serial 连接 USB／USART，提供工作模式、电机与驱动、Run 控制、配置快照及逐条命令回执；其他 Settings 写入、LCD 自动进入 Run 和草稿同步仍按第 4／5 批接入。用户代码先节省 696 B，再集成接口，最终 Debug／Release Flash 剩 **64 B**。原有板端功能及 ST 官方实现保持，CubeMX 无需调整。使用见 [电脑端工具](../pc_tool/README.md)，协议和验证见 [R87 实施记录](PC_console_R87.md)。
+
 当前固件 **UI-R86-PC**：常用遥测改为单轴 6／双轴 12／HSO 9／六步 6 路，USB CDC／USART1 使用有版本、时间戳、序号及 CRC 的统一格式；参数辨识期间保留通信。HSO 的机械位置改为独立于编码器的连续锁定相对位移，未锁定或失锁时显示 `--`，不开放无感位置闭环。新增 [电脑端工具](../pc_tool/README.md)，协议、资源和验证边界见 [R86 实施说明](PC_tool_R86.md)。无需修改 CubeMX，Flash 余量 **68 B**。
 
 当前固件 **UI-R85-SZ**：继续合并数值显示、复用文字常量和自定义页脚，并无损压缩首页图标。保留现有功能与显示效果，Debug／Release 再节省 **412 B**，Flash 剩余 **1908 B**；静态 RAM 增加 **512 B**。无需修改 CubeMX，详见 [R85 UI 体积优化及验证](UI_size_R85.md)。

@@ -170,31 +170,17 @@ LowPassFilter M0_Vel_Flt = { .Tf = 0.005f, .y_prev = 0.0f };
 /* 电流低通滤波器（0.1 ms） */
 LowPassFilter M0_Curr_Flt = { .Tf = 0.0001f, .y_prev = 0.0f };
 
+/* Selected profile initializes every PID before ADC/output startup. Keep
+ * these in BSS instead of storing a second, immediately overwritten preset. */
 /* 位置外环 P */
-PIDController pos_loop_M0 = {
-    .P = 6.0f, .I = 0.0f, .D = 0.0f,
-    .output_ramp = 0.0f, .limit = 30.0f,
-    .error_prev = 0.0f, .output_prev = 0.0f, .integral_prev = 0.0f
-};
+PIDController pos_loop_M0;
 
 /* 速度外环 PI（电压模式时直接输出 Uq） */
-PIDController vel_loop_M0 = {
-    .P = 0.05f, .I = 0.5f, .D = 0.0f,
-    .output_ramp = 0.0f, .limit = 6.93f,
-    .error_prev = 0.0f, .output_prev = 0.0f, .integral_prev = 0.0f
-};
+PIDController vel_loop_M0;
 
 /* 电流最内环 PI */
-PIDController id_loop_M0 = {
-    .P = 0.215f, .I = 575.0f, .D = 0.0f,
-    .output_ramp = 100000.0f, .limit = 12.0f,
-    .error_prev = 0.0f, .output_prev = 0.0f, .integral_prev = 0.0f
-};
-PIDController iq_loop_M0 = {
-    .P = 0.215f, .I = 575.0f, .D = 0.0f,
-    .output_ramp = 100000.0f, .limit = 12.0f,
-    .error_prev = 0.0f, .output_prev = 0.0f, .integral_prev = 0.0f
-};
+PIDController id_loop_M0;
+PIDController iq_loop_M0;
 
 /* ================= 工具函数 ================= */
 uint8_t JerryFOC_needsAlignment(void) { return !MotorControl_SixStepAllowed() && !MotorControl_HsoAllowed() && foc.motor_alignment_pending; }
@@ -476,7 +462,8 @@ static uint8_t sensored_control_ready(void)
 __attribute__((noinline,noclone))
 void JerryFOC_InitPID(PIDController *pid,float p,float i,float limit,float ramp)
 {
-    *pid=(PIDController){.P=p,.I=i,.limit=limit,.output_ramp=ramp};
+    pid->P=p; pid->I=i; pid->limit=limit; pid->output_ramp=ramp;
+    pid->D=pid->integral_prev=pid->error_prev=pid->output_prev=0;
 }
 
 __attribute__((noinline)) void JerryFOC_ResetPID(PIDController *pid)

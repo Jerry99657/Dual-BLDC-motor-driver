@@ -1,4 +1,27 @@
 #include "motor_math.h"
+
+/* Fixed divisor 2*pi: retain exact binary32 remainder, including very large
+ * multi-turn positions. Integer mantissa division avoids retaining the
+ * general two-argument libm fmod/errno implementation for these three users. */
+float MotorMath_Wrap(float angle)
+{
+    union { float f; uint32_t u; } value={.f=angle};
+    unsigned sign=value.u>>31U;
+    value.u&=0x7FFFFFFFU;
+    if(value.u>=0x7F800000U) return NAN;
+    if(value.u>=0x40C90FDBU) {
+        int shift=(int)(value.u>>23U)-129;
+        uint32_t mantissa=(value.u&0x7FFFFFU)|0x800000U;
+        while(shift-->0) {
+            if(mantissa>=0xC90FDBU) mantissa-=0xC90FDBU;
+            mantissa<<=1U;
+        }
+        if(mantissa>=0xC90FDBU) mantissa-=0xC90FDBU;
+        value.f=(float)mantissa*0x1p-21f;
+    }
+    if(sign) value.f=-value.f;
+    return value.f<0 ? value.f+0x1.921fb6p+2f : value.f;
+}
 #if defined(CORDIC)
 #include "stm32g4xx_ll_cordic.h"
 

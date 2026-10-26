@@ -565,7 +565,7 @@ static void check_six_control(void)
     if(JerryFOC_needsAlignment()) { JerryFOC_alignStart(); JerryFOC_alignFinish(); }
     command("Throttle:20"); assert(Protocol_GetControlResult()==-1 && !output_requested);
     settings.control_config|=APP_CONFIG_FOCUS_M2|(27UL<<APP_CONFIG_IBUS_SHIFT)|(37UL<<APP_CONFIG_THROTTLE_SHIFT);
-    command("Feedback:SixStep"); assert(Protocol_GetControlResult()==0);
+    command("Feedback:SixStep"); assert(Protocol_GetControlResult()==1);
     Protocol_Service();
     assert(MotorControl_SixStepAllowed() && !MotorControl_HsoAllowed());
     assert(settings.control_config & APP_CONFIG_SIXSTEP);
@@ -621,6 +621,7 @@ static void transport_command(uint8_t source,const char *line)
 {
     Protocol_Feed(source,(const uint8_t *)line,(uint32_t)strlen(line));
     Protocol_Feed(source,(const uint8_t *)"\n",1);
+    Protocol_Service();
 }
 static void framework_contracts(void)
 {
@@ -632,6 +633,7 @@ static void framework_contracts(void)
     Protocol_Feed(PROTO_SRC_USART,(const uint8_t *)"M2:Sp",5);
     Protocol_Feed(PROTO_SRC_USB,(const uint8_t *)"eed:11\n",7);
     Protocol_Feed(PROTO_SRC_USART,(const uint8_t *)"eed:22\n",7);
+    Protocol_Service();
     assert(MotorControl_GetInput(MOTOR_AXIS_1)==MOTOR_INPUT_USB &&
            MotorControl_GetInput(MOTOR_AXIS_2)==MOTOR_INPUT_UART);
     assert(JerryFOC_Target_Velocity==11 && state(MOTOR_AXIS_2).target_velocity==22);
@@ -965,8 +967,8 @@ int main(int argc,char **argv)
     follow_current_models(true);
 
     boot(MOTOR_WORK_SINGLE_M1);
-    command("Work:SingleM2"); assert(MotorControl_GetWork()==MOTOR_WORK_SINGLE_M1);
-    command("Speed:10"); assert(!output_requested && Protocol_GetControlResult()==-3);
+    command("Work:SingleM2"); assert(MotorControl_GetWork()==MOTOR_WORK_SINGLE_M2);
+    assert(!output_requested && !output2);
     command("Motor2:4015");
     Protocol_Service(); assert(MotorControl_GetWork()==MOTOR_WORK_SINGLE_M2);
     assert(MotorParams_GetAxis(MOTOR_AXIS_2)==&MOTOR_4015);

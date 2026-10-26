@@ -40,6 +40,22 @@ static void check(float angle,unsigned masked)
 }
 int main(void)
 {
+    uint32_t random=1;
+    for(unsigned i=0;i<1000000;++i) {
+        random=random*1664525U+1013904223U;
+        union { uint32_t u; float f; } input={.u=random},actual,expected;
+        actual.f=MotorMath_Wrap(input.f);
+        expected.f=fmodf(input.f,0x1.921fb6p+2f);
+        if(expected.f<0) expected.f+=0x1.921fb6p+2f;
+        assert(isnan(expected.f) ? isnan(actual.f) : actual.u==expected.u);
+    }
+    const float boundary[]={0.0f,-0.0f,0x1p-149f,-0x1p-149f,0x1.921fb6p+2f,-0x1.921fb6p+2f,INFINITY,-INFINITY,NAN};
+    for(unsigned i=0;i<sizeof(boundary)/sizeof(*boundary);++i) {
+        float expected=fmodf(boundary[i],0x1.921fb6p+2f);if(expected<0)expected+=0x1.921fb6p+2f;
+        float actual=MotorMath_Wrap(boundary[i]);
+        assert(isnan(expected) ? isnan(actual) : actual==expected && !!signbit(actual)==!!signbit(expected));
+    }
+    puts("PASS: fixed-turn normalization vs independent libm: 1000000 binary32 bit patterns, subnormals, large turns, signed zero and nonfinite values");
     for(int k=-10000;k<=10000;++k) check((float)k*0.001f,(unsigned)k&1U);
     const float pi=3.14159265358979323846f;
     for(int k=-3;k<=3;++k) {

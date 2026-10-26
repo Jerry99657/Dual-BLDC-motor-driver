@@ -7,6 +7,7 @@
 #include "motor_sixstep.h"
 #include "motor_detect.h"
 #include <string.h>
+#include "motor_math.h"
 
 /* M1 retains its proven encoder/HSO controller. M2 owns all estimator, PI,
  * calibration and run state below; only math/modulation and sampling are shared. */
@@ -59,7 +60,7 @@ static bool resume_global_stop(void)
 }
 
 static float clamp(float x,float lo,float hi) { return fminf(hi,fmaxf(lo,x)); }
-static float norm(float a) { a=fmodf(a,2.0f*PI); return a<0 ? a+2.0f*PI : a; }
+static float norm(float a) { return MotorMath_Wrap(a); }
 static float slew(float actual,float target,float accel,float decel)
 {
     bool braking=actual*target<0.0f || fabsf(target)<fabsf(actual);
@@ -394,20 +395,32 @@ void MotorControl_Init(void)
     StHso_Enable(MotorControl_HsoAllowed());
     save_config();
 }
-void MotorControl_GetAxis(MotorAxis axis,MotorAxisSnapshot *out)
+__attribute__((noinline,noclone)) void MotorControl_GetAxis(MotorAxis axis,MotorAxisSnapshot *out)
 {
     if (!out || (unsigned)axis>=MOTOR_AXIS_COUNT) return;
     uint32_t mask=__get_PRIMASK(); __disable_irq();
     const char *sampling=MotorSampling_GetAxisStatusText(axis);
     if (axis==MOTOR_AXIS_1) {
         extern volatile uint8_t flag_use_current_loop;
-        *out=(MotorAxisSnapshot){.mode=JerryFOC_getMode(),.velocity=JerryFOC_getVelocity(),
-            .position=JerryFOC_getAngle(),.electrical_angle=JerryFOC_getElectricalAngle(),
-            .iq=JerryFOC_getIq(),.id=JerryFOC_getId(),.ia=JerryFOC_getPhaseCurrent_A(),.ib=JerryFOC_getPhaseCurrent_B(),
-            .target_velocity=JerryFOC_getTargetVelocity(),.target_position=JerryFOC_getTargetPosition(),
-            .target_iq=JerryFOC_Target_Iq,.healthy=MT6701_IsHealthy()!=0,.aligned=AngleSrc_Encoder_IsAligned()!=0,
-            .active=MotorSampling_IsOutputRequested(),.aligning=JerryFOC_isAligning()!=0,
-            .current_loop=flag_use_current_loop!=0,.ready=JerryFOC_isDriveReady()!=0,.status=sampling};
+
+        out->mode=JerryFOC_getMode();
+        out->velocity=JerryFOC_getVelocity();
+        out->position=JerryFOC_getAngle();
+        out->electrical_angle=JerryFOC_getElectricalAngle();
+        out->iq=JerryFOC_getIq();
+        out->id=JerryFOC_getId();
+        out->ia=JerryFOC_getPhaseCurrent_A();
+        out->ib=JerryFOC_getPhaseCurrent_B();
+        out->target_velocity=JerryFOC_getTargetVelocity();
+        out->target_position=JerryFOC_getTargetPosition();
+        out->target_iq=JerryFOC_Target_Iq;
+        out->healthy=MT6701_IsHealthy()!=0;
+        out->aligned=AngleSrc_Encoder_IsAligned()!=0;
+        out->active=MotorSampling_IsOutputRequested();
+        out->aligning=JerryFOC_isAligning()!=0;
+        out->current_loop=flag_use_current_loop!=0;
+        out->ready=JerryFOC_isDriveReady()!=0;
+        out->status=sampling;
         if (JerryFOC_hasHSOFault() && MotorSampling_IsAxisReady(axis)) out->status="HSO STOPPED";
         else if (control.m1_stop_reason && out->ready) out->status=control.m1_stop_reason;
         if (MotorControl_HsoAllowed()) {
@@ -416,12 +429,25 @@ void MotorControl_GetAxis(MotorAxis axis,MotorAxisSnapshot *out)
         }
     } else {
         MT6701_2_Snapshot enc; MT6701_2_GetSnapshot(&enc);
-        *out=(MotorAxisSnapshot){.mode=control.m2.mode,.velocity=control.m2.velocity,.position=control.m2.position,
-            .electrical_angle=norm(MotorParams_GetAxis(axis)->pole_pairs*enc.angle-control.m2.electrical_zero),
-            .iq=control.m2.iq,.id=control.m2.id,.ia=control.m2.ia,.ib=control.m2.ib,.target_velocity=control.m2.target_speed,
-            .target_position=control.m2.target_position,.target_iq=control.m2.target_q,.healthy=enc.healthy!=0,
-            .aligned=control.m2.aligned,.active=MotorSampling_IsAxisOutputRequested(axis),.aligning=control.m2.aligning,
-            .current_loop=control.m2.loop,.ready=MotorSampling_IsAxisReady(axis),.status=sampling};
+
+        out->mode=control.m2.mode;
+        out->velocity=control.m2.velocity;
+        out->position=control.m2.position;
+        out->electrical_angle=norm(MotorParams_GetAxis(axis)->pole_pairs*enc.angle-control.m2.electrical_zero);
+        out->iq=control.m2.iq;
+        out->id=control.m2.id;
+        out->ia=control.m2.ia;
+        out->ib=control.m2.ib;
+        out->target_velocity=control.m2.target_speed;
+        out->target_position=control.m2.target_position;
+        out->target_iq=control.m2.target_q;
+        out->healthy=enc.healthy!=0;
+        out->aligned=control.m2.aligned;
+        out->active=MotorSampling_IsAxisOutputRequested(axis);
+        out->aligning=control.m2.aligning;
+        out->current_loop=control.m2.loop;
+        out->ready=MotorSampling_IsAxisReady(axis);
+        out->status=sampling;
         if (control.m2.stop_reason && out->ready) out->status=control.m2.stop_reason;
     }
     if (MotorControl_IsPassive(axis)) {

@@ -1,6 +1,7 @@
 #include "angle_src_encoder.h"
 #include "MT6701.h"
 #include <math.h>
+#include "motor_math.h"
 
 #ifndef PI
 #define PI 3.14159265358979323846f
@@ -37,8 +38,7 @@ static void reset_velocity_estimator(void)
 
 static float _normalizeAngle(float angle)
 {
-    float a = fmodf(angle, 2.0f * PI);
-    return a >= 0.0f ? a : (a + 2.0f * PI);
+    return MotorMath_Wrap(angle);
 }
 
 static float angle_meas_electrical(void)

@@ -90,21 +90,27 @@ for mode in ("Debug", "Release"):
     assert any(c.startswith("MotorSampling_GlobalStopIRQ") for c in exti_calls), (mode,exti_calls)
 
     image = (root / "FOC_two.bin").read_bytes()
-    assert b"UI-R86-PC" in image and b"UI-R85-SZ" not in image, mode
+    import sys
+    sys.path.insert(0,str(repo / "scripts"))
+    from pack_ui_resources import resources,pack,unpack
+    raw_resources=resources();packed_resources=pack(raw_resources)
+    assert packed_resources in image and unpack(packed_resources,len(raw_resources))==raw_resources,mode
+    text_image=image+raw_resources
+    assert b"UI-R87-PC" in text_image and b"UI-R86-PC" not in text_image, mode
     assert "__aeabi_ddiv" not in symbols and "__divdf3" not in symbols,mode
     for removed in ("snprintf","sniprintf","_printf_i","_svfprintf_r","_svfiprintf_r"):
         assert not re.search(r"^\w+ [tT] "+removed+r"$",symbols,re.M), (mode,removed)
     assert "UiText_Format" in symbols,mode
-    assert b"M1 Sensorless" in image and b"M1 Six Step" in image, mode
-    assert b"M1 Detect" in image and b"RS NOT STEADY" in image and b"POLES / REPEAT" in image, mode
-    assert b"ESC Auto" in image and b"Throttle only" in image,mode
+    assert b"M1 Sensorless" in text_image and b"M1 Six Step" in text_image, mode
+    assert b"M1 Detect" in text_image and b"RS NOT STEADY" in text_image and b"POLES / REPEAT" in text_image, mode
+    assert b"ESC Auto" in text_image and b"Throttle only" in text_image,mode
     assert "__udivmoddi4" in symbols,mode
-    assert b"PERIOD HIGH" in image and b"6S Sample" in image, mode
-    assert b"6STEP SINE" in image and b"6STEP CURRENT" in image, mode
+    assert b"PERIOD HIGH" in text_image and b"6S Sample" in text_image, mode
+    assert b"6STEP SINE" in text_image and b"6STEP CURRENT" in text_image, mode
     assert "sinTable_f32" not in symbols and "arm_sin_f32" not in symbols, mode
     assert "MotorMath_SinCos" in symbols, mode
-    assert b"6STEP NO ZC" in image and b"6STEP RUN" in image, mode
-    assert b"Throttle:" in image and b"6STEP FAST" in image, mode
+    assert b"6STEP NO ZC" in text_image and b"6STEP RUN" in text_image, mode
+    assert b"Throttle:" in text_image and b"6STEP FAST" in text_image, mode
     with tempfile.TemporaryDirectory(prefix="startup-", dir=repo / "build") as scratch:
         output = Path(scratch) / "verified.bin"
         tool("objcopy", "-O", "binary", elf, output)
