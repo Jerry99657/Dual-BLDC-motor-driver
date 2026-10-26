@@ -7,6 +7,7 @@ repo = Path(__file__).resolve().parents[2]
 out = repo / "build/motor-validation"
 out.mkdir(parents=True, exist_ok=True)
 (repo / "build/console-r87").mkdir(parents=True, exist_ok=True)
+(repo / "build/console-r88").mkdir(parents=True, exist_ok=True)
 (repo / "build/telemetry-r86").mkdir(parents=True, exist_ok=True)
 compiler = shutil.which("gcc") or "gcc"
 subprocess.run([sys.executable, "tests/motor_host/check_spi_clock.py"],
@@ -18,6 +19,7 @@ suites = {
     "profiles": ["mycode/motor_params.c", "tests/motor_host/test_profiles.c"],
     "motor_math": ["mycode/motor_math.c", "tests/motor_host/test_motor_math.c"],
     "div64": ["mycode/compact_div64.c", "tests/motor_host/test_div64.c"],
+    "float_widen": ["mycode/compact_div64.c", "tests/motor_host/test_float_widen.c"],
     "sixstep": ["mycode/motor_sixstep.c", "mycode/motor_params.c", "tests/motor_host/test_sixstep.c"],
     "sixstep_wave": ["mycode/motor_sixstep.c", "mycode/motor_params.c", "tests/motor_host/test_sixstep_wave.c"],
     "sixstep_plant": ["mycode/motor_sixstep.c", "mycode/motor_params.c", "tests/motor_host/test_sixstep_plant.c"],
@@ -34,6 +36,7 @@ if selected-set(suites):
     raise SystemExit("Unknown suites: "+", ".join(sorted(selected-set(suites))))
 for name, sources in suites.items():
     if selected and name not in selected: continue
+    if "mycode/protocol.c" in sources: sources += ["tests/motor_host/app_stub.c"]
     if name in ("detect","control","sensorless"): sources += ["mycode/motor_sixstep.c","mycode/motor_detect.c"]
     if name in ("foc","protocol","telemetry"):
         sources += ["tests/motor_host/control_stub.c"]

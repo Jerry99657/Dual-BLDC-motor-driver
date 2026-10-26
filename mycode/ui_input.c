@@ -1,6 +1,7 @@
 #include "ui_input.h"
 #include "kk_ui.h"
 #include "main.h"
+#include "app_control.h"
 
 /* 上拉输入、按下接地；开机按住按键不会改变极性。
  * 高有效硬件可在构建中定义对应的 KK_UI_KEY_* 位。 */
@@ -50,6 +51,6 @@ uint8_t ui_input_poll(void)
         if (high == active_high) keys |= s_pins[i].key;
     }
     s_raw_keys=keys;
-    return keys;
+    return keys | App_NavigationKeys(HAL_GetTick());
 }
 

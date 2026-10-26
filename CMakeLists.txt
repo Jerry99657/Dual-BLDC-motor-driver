@@ -161,13 +161,15 @@ set_source_files_properties(${FOC_UI_SOURCES}
 # Cold UI application code uses Oz to retain six-step diagnostics in 128KiB.
 # Existing control/HSO optimization levels and all UI content stay intact.
 set_source_files_properties(mycode/ui_app.c PROPERTIES COMPILE_OPTIONS "-Oz;-flto;-fno-inline-functions-called-once")
+set_source_files_properties(mycode/app_storage.c mycode/w25q64.c mycode/ws2812.c mycode/number_parse.c
+    PROPERTIES COMPILE_OPTIONS "-Oz;-flto")
 # Share the two-axis/UI code at link time while retaining Debug symbols.
 # Size-optimize LTO's generated glue. The observer's hot entry explicitly
 # retains O2 so this does not silently switch its arithmetic to size mode.
-# Co-locate LTO-generated functions/data to share literal pools and padding.
+# Discard unused LTO sections and reduce padding by sorting their alignment.
 # Per-source HAL/ST compilation flags and protected sources stay unchanged.
 # Real vector/MSP/Break/control paths are checked in both linked images.
-target_link_options(${CMAKE_PROJECT_NAME} PRIVATE -Os -fno-function-sections -fno-data-sections -flto=1 -flto-partition=one)
+target_link_options(${CMAKE_PROJECT_NAME} PRIVATE -Os -ffunction-sections -fdata-sections -flto=1 -flto-partition=one -Wl,--sort-section=alignment)
 set_source_files_properties(mycode/motor_params.c PROPERTIES COMPILE_OPTIONS "-Os;-flto")
 set_source_files_properties(mycode/motor_detect.c PROPERTIES COMPILE_OPTIONS "-Os;-flto")
 set_source_files_properties(mycode/motor_sixstep.c PROPERTIES COMPILE_OPTIONS "-Os;-flto")

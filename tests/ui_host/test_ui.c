@@ -4,6 +4,7 @@
 #include <string.h>
 #include "main.h"
 #include "ui_app.h"
+#include "app_control.h"
 #include "ui_input.h"
 #include "kk_ui_internal.h"
 #include "kk_oled_internal.h"
@@ -70,6 +71,7 @@ static unsigned stop_calls;
 static bool aligning;
 static bool global_stopped;
 bool MotorSampling_IsGlobalStopped(void) { return global_stopped; }
+void MotorSampling_GlobalStopIRQ(void) { global_stopped=true;output_requested=false; }
 static uint16_t ibus_limit_ma=APP_IBUS_DEFAULT_MA;
 static bool ibus_trip,ibus_clear_allowed=true,ibus_set_failed;
 uint16_t MotorSampling_GetIbusLimit(void) { return ibus_limit_ma; }
@@ -999,7 +1001,108 @@ static void check_framework_ui(void)
     back(); assert(!output_requested); /* Explicit Back remains an unconditional stop. */
     puts("PASS: R81 UI source visibility, rejected settings restore/no-save, viewing and rejected OK preserve a USB-owned run, explicit Back stops");
 }
-int main(void) {
+static void check_app_bridge(void)
+{
+    MotorControl_SelectWork(MOTOR_WORK_SINGLE_M1);MotorControl_SetFocus(MOTOR_AXIS_1);
+    reset();MotorControl_StopAll();settle();
+    KK_UI_PageId before=KK_UI_GetCurrentPage();
+    assert(App_Control(1,2,240)==1);
+    assert(App_Control(1,1,150)==1);
+    assert(App_Control(1,8,17)==1);
+    assert(App_Control(2,2,300)==1);
+    assert(App_Control(2,1,180)==1);
+    assert(App_Control(2,9,23)==1);
+    assert(App_Control(0,0,55)==1 && settings.led_brightness==55);
+    assert(App_Control(0,7,0)==1 && !(settings.flags&APP_FLAG_LED_ENABLE));
+    assert(App_Control(0,3,-150)==1 && settings.gear_ratio_x100==-150);
+    assert(App_Control(0,4,23)==1 && settings.gear_offset_x100==23);
+    assert(App_Control(0,5,2400)==1 && ibus_limit_ma==2400);
+    assert(AppSettings_GetPositionSpeed(settings.flags)==150);
+    assert(AppSettings_GetPositionSpeed(settings.axis2_flags)==180);
+    assert(settings.speed_step_x10==17 && settings.axis2_torque_step_x100==23);
+    assert(KK_UI_GetCurrentPage()==before && MotorControl_GetFocus()==MOTOR_AXIS_1);
+    assert(App_Control(0,2,100)==-2 && App_Control(3,2,100)==-2);
+    assert(App_Control(1,1,241)==-1 && App_Control(0,3,0)==-1);
+    assert(App_Control(0,5,2450)==-1 && App_Control(1,8,101)==-1);
+    assert(App_Control(0,15,0)==-1); /* No incomplete result may be saved. */
+    ControlStub_SetOptionsAllowed(false);
+    uint32_t options=MotorControl_GetOptions(MOTOR_AXIS_2);
+    assert(App_Control(2,2,250)==-1 && MotorControl_GetOptions(MOTOR_AXIS_2)==options);
+    ControlStub_SetOptionsAllowed(true);ibus_set_failed=true;
+    assert(App_Control(0,5,2000)==-1 && ibus_limit_ma==2400);ibus_set_failed=false;
+    unsigned saves_before_stale_frame=save_requests;
+    ui_app_update(tick-1);assert(save_requests==saves_before_stale_frame);
+    assert(App_Control(0,16,0)==1);App_SaveService(tick);
+    assert(save_requests>0);settle();
+    /* Read-only diagnostics must restore both the view and its draft. */
+    char label[24],value[32];
+    assert(App_ReadRow(2,3,0,label,value)>0);
+    assert(MotorControl_GetFocus()==MOTOR_AXIS_1 && KK_UI_GetCurrentPage()==before);
+    assert(App_ReadRow(0,0,0,label,value)==-2 && App_ReadRow(1,8,0,label,value)==-2);
+    assert(App_ReadRow(1,0,255,label,value)==-2);
+    assert(KK_UI_GoTo(UI_PAGE_SETTINGS,tick)==KK_UI_OK);settle();
+    select_setting("Speed Limit");press(KK_UI_KEY_OK);settle();
+    options=MotorControl_GetOptions(MOTOR_AXIS_1);
+    assert(App_Control(1,2,200)==-3 && MotorControl_GetOptions(MOTOR_AXIS_1)==options);
+    back();back();assert(KK_UI_GetCurrentPage()==UI_PAGE_HOME);
+    assert(MotorControl_CommandFrom(MOTOR_AXIS_1,JERRYFOC_MODE_VELOCITY,23.4f,0,false,MOTOR_INPUT_USB));
+    App_RemoteMotion(MOTOR_AXIS_1,false);settle();
+    assert(KK_UI_GetCurrentPage()==UI_PAGE_RUN && output_requested && fabsf(JerryFOC_Target_Velocity-23.4f)<.001f);
+    probe_frame();assert(drew("23.4"));
+    press(KK_UI_KEY_OK);assert(!output_requested); /* Local OK explicitly stops remote ownership. */
+    back();
+    /* A remote run also cancels a local editor through public Back events. */
+    if(KK_UI_GetCurrentPage()!=UI_PAGE_SETTINGS) assert(KK_UI_GoTo(UI_PAGE_SETTINGS,tick)==KK_UI_OK);
+    settle();
+    select_setting("Speed Limit");press(KK_UI_KEY_OK);settle();
+    assert(MotorControl_CommandFrom(MOTOR_AXIS_1,JERRYFOC_MODE_VELOCITY,18,0,false,MOTOR_INPUT_UART));
+    App_RemoteMotion(MOTOR_AXIS_1,false);step(0,1800);
+    assert(KK_UI_GetCurrentPage()==UI_PAGE_RUN && output_requested && JerryFOC_Target_Velocity==18);
+    back();
+    assert(App_Control(0,13,250)==1);settle();
+    assert(KK_UI_GetCurrentPage()==UI_PAGE_DETECT && detect_active && detect_current==250);
+    detect_active=false;detect_result=11U|(1920U<<8);
+    assert(App_Control(0,15,0)==1 && settings.motor_detect==detect_result && settings.motor_detect_l_uh==1300 && settings.motor_detect_flux_uwb==7500);
+    back();
+    MotorControl_StopAll();MotorControl_SelectWork(MOTOR_WORK_INDEPENDENT);
+    ControlStub_SetSecondState((MotorAxisSnapshot){.ready=true,.healthy=true,.aligned=true,.status="READY"});
+    assert(MotorControl_CommandFrom(MOTOR_AXIS_2,JERRYFOC_MODE_VELOCITY,14,0,false,MOTOR_INPUT_USB));
+    App_RemoteMotion(MOTOR_AXIS_2,false);step(0,1800);
+    assert(MotorControl_GetFocus()==MOTOR_AXIS_2 && KK_UI_GetCurrentPage()==UI_PAGE_RUN);
+    probe_frame();assert(drew("14.0"));back();
+    MotorControl_SelectWork(MOTOR_WORK_SINGLE_M1);MotorControl_SetFocus(MOTOR_AXIS_1);
+    reset();MotorControl_StopAll();
+    assert(KK_UI_GoTo(UI_PAGE_RUN_STEPS,tick)==KK_UI_OK);settle();
+    assert(MotorControl_CommandFrom(MOTOR_AXIS_1,JERRYFOC_MODE_VELOCITY,22,0,false,MOTOR_INPUT_USB));
+    App_RemoteMotion(MOTOR_AXIS_1,false);step(0,1800);
+    assert(KK_UI_GetCurrentPage()==UI_PAGE_RUN && output_requested && JerryFOC_Target_Velocity==22);
+    back();
+    KK_UI_PageId stopped_page=KK_UI_GetCurrentPage();
+    App_RemoteMotion(MOTOR_AXIS_1,false);App_CancelNavigation();step(0,1000);
+    assert(KK_UI_GetCurrentPage()==stopped_page);
+    MotorControl_StopAll();
+    assert(App_SelectMotor(MOTOR_AXIS_1,MOTOR_PROFILE_4015));App_ConfigChanged();settle();
+    assert(!output_requested && settings.speed_x10==0 && settings.voltage_x100==0 && settings.position_x100==0);
+    assert(MotorControl_SelectSixStep(true));
+    settings.control_config|=30U<<APP_CONFIG_THROTTLE_SHIFT;
+    assert(App_SelectMotor(MOTOR_AXIS_1,MOTOR_PROFILE_COUNT));App_ConfigChanged();settle();
+    assert(!output_requested && !(settings.control_config&APP_CONFIG_THROTTLE_MASK));
+    assert(App_Control(0,14,0)==1 && global_stopped && !output_requested);
+    puts("PASS: R88 shared Settings validation/publication/save, per-axis ranges/steps, actual DAC rejection, local-editor conflict, non-invasive diagnostic rows, remote Run values/OK/Back, modal navigation and remote detection entry/result");
+}
+int main(int argc,char **argv) {
+    (void)argv;
+    if (argc>1) {
+        MotorControl_SelectWork(MOTOR_WORK_SINGLE_M1);MotorControl_SetFocus(MOTOR_AXIS_1);
+        MotorControl_StopAll();AppStorage_ResetDefaults();
+        assert(KK_UI_GetCurrentPage()==0);
+        assert(App_Control(1,2,300)==1 && App_Control(2,8,12)==1);
+        assert(settings.axis2_speed_step_x10==12);
+        App_SaveService(tick+2001);assert(save_requests>0);
+        char label[24],value[32];assert(App_ReadRow(1,4,0,label,value)>0);
+        assert(KK_UI_GetCurrentPage()==0);
+        puts("PASS: R88 headless Settings, save service and diagnostic model before any LCD/UI initialization");return 0;
+    }
     ui_input_init(); assert(ui_input_poll()==0);
     assert(!(ui_gpio_init_mask & KEY1_Pin));
     host_gpio.pins&=~KEY1_Pin; assert(ui_input_poll()==0); host_gpio.pins=0xFFFFU;
@@ -1779,6 +1882,7 @@ int main(void) {
     check_r76();
     check_r77();
     check_framework_ui();
+    check_app_bridge();
     puts("PASS: R54 applied Work marker, axis-qualified settings, HSO forced ON with retained encoder preference, Run feedback/bus/stages/actions/ranges, idle focus persistence and durable save states");
     puts("PASS: System/work routes, independent M1/M2 confirmed targets, KEY1 excluded from UI routing, long L/R view-only selection and KEY2 group stop");
     printf("PASS: GPIO, axes, bounce, repeat, Back/cancel, run modes, speed range, stop, fault, position origin, wrap, animations, async DMA (%u submissions)\n",submissions);

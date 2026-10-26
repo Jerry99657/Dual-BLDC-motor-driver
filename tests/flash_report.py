@@ -21,6 +21,8 @@ parser.add_argument("label", nargs="?", default="current")
 parser.add_argument("--directory", type=Path, default=Path("build/size-baseline"))
 parser.add_argument("--allow-irq-user-code", action="store_true",
                     help="Permit only the R82 IRQ USER CODE blocks and the exact user-module CMake addition")
+parser.add_argument("--allow-console-user-build",action="store_true",
+                    help="Permit only the exact R88 link-section and four cold user-source Oz changes")
 args = parser.parse_args()
 OUT = ROOT / args.directory
 LABEL = args.label
@@ -130,7 +132,20 @@ else:
     if baseline["protected"] != report["protected"]:
         changed = [name for name in set(baseline["protected"]) | set(report["protected"])
                    if baseline["protected"].get(name) != report["protected"].get(name)]
-        if args.allow_irq_user_code:
+        if args.allow_console_user_build:
+            assert changed==["CMakeLists.txt"],changed
+            before=(OUT/"CMakeLists.txt").read_text(encoding="utf-8")
+            expected=before.replace("-fno-function-sections -fno-data-sections -flto=1",
+                                    "-ffunction-sections -fdata-sections -flto=1")
+            expected=expected.replace("-flto-partition=one)","-flto-partition=one -Wl,--sort-section=alignment)")
+            expected=expected.replace("# Co-locate LTO-generated functions/data to share literal pools and padding.",
+                                      "# Discard unused LTO sections and reduce padding by sorting their alignment.")
+            anchor='set_source_files_properties(mycode/ui_app.c PROPERTIES COMPILE_OPTIONS "-Oz;-flto;-fno-inline-functions-called-once")\n'
+            assert expected.count(anchor)==1
+            expected=expected.replace(anchor,anchor+'set_source_files_properties(mycode/app_storage.c mycode/w25q64.c mycode/ws2812.c mycode/number_parse.c\n    PROPERTIES COMPILE_OPTIONS "-Oz;-flto")\n')
+            assert (ROOT/"CMakeLists.txt").read_text(encoding="utf-8")==expected,"Unexpected build configuration change"
+            report["permitted_user_changes"]=changed
+        elif args.allow_irq_user_code:
             verify_irq_user_changes(changed)
             report["permitted_user_changes"]=sorted(changed)
         else:

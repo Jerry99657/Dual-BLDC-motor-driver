@@ -12,6 +12,7 @@
 #include "motor_detect.h"
 #include "motor_sampling.h"
 #include "app_storage.h"
+#include "app_control.h"
 #include "MT6701.h"
 #include "motor_sixstep.h"
 #include "usbd_cdc_if.h"
@@ -65,7 +66,7 @@ static void handle_hso(const char *command,MotorInput input)
         if (!MotorControl_SelectFeedback(false)) hso_result=-3;
     } else if (strcmp(command, "Use") == 0) {
         uint32_t mask=__get_PRIMASK(); __disable_irq();
-        if (!MotorControl_ClaimInput(MOTOR_AXIS_1,input) || !JerryFOC_useHSO(1U)) hso_result = -3;
+        if (!Protocol_RequestCurrent() || !MotorControl_ClaimInput(MOTOR_AXIS_1,input) || !JerryFOC_useHSO(1U)) hso_result = -3;
         __set_PRIMASK(mask);
     } else if (strcmp(command, "Learn") == 0) {
         if (JerryFOC_isHSOActive() || JerryFOC_hasHSOFault() ||
@@ -132,21 +133,28 @@ static uint32_t command_generation;
 static uint32_t command_at;
 static bool command_was_stopped;
 static volatile int8_t control_result;
-static bool config_save,reply_pending,reply_built;
+static bool reply_pending,reply_built;
+static uint8_t reply_row[3],reply_kind;
 static uint16_t reply_id;
 static uint8_t reply_source;
 static int8_t reply_result;
 static uint32_t reply_at;
 int8_t Protocol_GetControlResult(void) { return control_result; }
+__attribute__((noinline,noclone)) bool Protocol_RequestCurrent(void)
+{
+    return command_generation==stop_generation &&
+        (command_was_stopped || !MotorSampling_IsGlobalStopped()) &&
+        (!command_was_stopped || HAL_GetTick()-command_at<=10U);
+}
 
 enum { CONFIG_WORK,CONFIG_MOTOR1,CONFIG_MOTOR2,CONFIG_FEEDBACK,
        CONFIG_GEAR,CONFIG_ALIGN,CONFIG_FOCUS,CONFIG_COUNT,
-       CMD_SPEED=CONFIG_COUNT,CMD_ANGLE,CMD_TORQUE,CMD_THROTTLE,CMD_OPEN,CMD_HSO,CMD_STREAM,CMD_COUNT };
+       CMD_SPEED=CONFIG_COUNT,CMD_ANGLE,CMD_TORQUE,CMD_THROTTLE,CMD_OPEN,CMD_HSO,CMD_STREAM,CMD_APP,CMD_ROW,CMD_COUNT };
 /* Inline short names avoid a pointer and three padding bytes per command. */
 static const struct { char prefix[10]; uint8_t length; } command_prefixes[] = {
     {"Work:",5},{"Motor1:",7},{"Motor2:",7},{"Feedback:",9},
     {"Gear:",5},{"Align:",6},{"Focus:",6},
-    {"Speed:",6},{"Angle:",6},{"Torque:",7},{"Throttle:",9},{"OpenLoop:",9},{"HSO:",4},{"Stream:",7}
+    {"Speed:",6},{"Angle:",6},{"Torque:",7},{"Throttle:",9},{"OpenLoop:",9},{"HSO:",4},{"Stream:",7},{"App:",4},{"GetRow:",7}
 };
 static uint8_t command_kind(const char *s)
 {
@@ -165,9 +173,9 @@ static bool apply_configuration(uint8_t kind,const char *value)
     }
     case CONFIG_MOTOR1: case CONFIG_MOTOR2: {
         MotorAxis a=kind==CONFIG_MOTOR1 ? MOTOR_AXIS_1 : MOTOR_AXIS_2;
-        if (!strcmp(value,"2804")) return MotorControl_SelectProfile(a,MOTOR_PROFILE_2804);
-        if (!strcmp(value,"4015")) return MotorControl_SelectProfile(a,MOTOR_PROFILE_4015);
-        if (a==MOTOR_AXIS_1 && !strcmp(value,"ESC")) return MotorControl_SelectGeneric();
+        if (!strcmp(value,"2804")) return App_SelectMotor(a,MOTOR_PROFILE_2804);
+        if (!strcmp(value,"4015")) return App_SelectMotor(a,MOTOR_PROFILE_4015);
+        if (a==MOTOR_AXIS_1 && !strcmp(value,"ESC")) return App_SelectMotor(a,MOTOR_PROFILE_COUNT);
         break;
     }
     case CONFIG_FEEDBACK:
@@ -185,7 +193,9 @@ static bool apply_configuration(uint8_t kind,const char *value)
         if (!strcmp(value,"M1") || !strcmp(value,"M2")) {
             MotorAxis a=value[1]=='1' ? MOTOR_AXIS_1 : MOTOR_AXIS_2;
             if (kind==CONFIG_FOCUS) { MotorControl_SetFocus(a); return true; }
-            return MotorControl_RequestAlign(a);
+            uint32_t mask=__get_PRIMASK(); __disable_irq();
+            bool ok=Protocol_RequestCurrent() && MotorControl_RequestAlign(a);
+            __set_PRIMASK(mask); return ok;
         }
         break;
     default: break;
@@ -225,6 +235,7 @@ static void receive_line(char *line,MotorInput input)
 }
 void Protocol_Service(void)
 {
+    App_SaveService(HAL_GetTick());
     if(reply_pending) return;
     for(unsigned i=0;i<4;++i) {
         CommandLine request;
@@ -236,7 +247,7 @@ void Protocol_Service(void)
         command_at=request.at;
         command_was_stopped=request.stopped;
         __set_PRIMASK(mask);
-        int8_t result=1;
+        int8_t result=1; reply_kind=32;
         if(HAL_GetTick()-request.at>500U || (!request.stopped && MotorSampling_IsGlobalStopped())) result=-4;
         else if(strcmp(request.text,"Get")) result=handle_line(request.text,(MotorInput)request.input);
         control_result=result;
@@ -247,7 +258,6 @@ void Protocol_Service(void)
             break;
         }
     }
-    if(config_save && AppStorage_RequestSave()) config_save=false;
 }
 void Protocol_HandleLine(char *line)
 {
@@ -263,10 +273,23 @@ __attribute__((noinline,noclone)) static int8_t handle_line(char *line,MotorInpu
         axis=line[1]=='1' ? MOTOR_AXIS_1 : MOTOR_AXIS_2; line+=3; explicit_axis=true;
     }
     uint8_t kind=command_kind(line);
+    if (kind==CMD_APP || kind==CMD_ROW) {
+        float v[3];
+        if (explicit_axis || !parse_hso_values(line+command_prefixes[kind].length,v,3)) return -2;
+        for (unsigned i=0;i<3;++i) if (v[i]<-100000 || v[i]>100000 || v[i]!=(float)(int32_t)v[i]) return -2;
+        if (kind==CMD_APP) {
+            if(!Protocol_RequestCurrent()) return -4;
+            return App_Control((unsigned)(int32_t)v[0],(unsigned)(int32_t)v[1],(int32_t)v[2]);
+        }
+        if (v[0]<1 || v[0]>2 || v[1]<0 || v[1]>7 || v[2]<0 || v[2]>255) return -2;
+        for (unsigned i=0;i<3;++i) reply_row[i]=(uint8_t)v[i];
+        reply_kind=33; return 1;
+    }
     if (kind<CONFIG_COUNT) {
+        if (!App_CanConfigure()) return -3;
         if(kind==CONFIG_ALIGN && command_was_stopped && HAL_GetTick()-command_at>10U) return -4;
         result=!explicit_axis && apply_configuration(kind,line+command_prefixes[kind].length) ? 1 : -1;
-        if(result==1 && kind!=CONFIG_ALIGN) config_save=true;
+        if(result==1 && kind!=CONFIG_ALIGN) App_ConfigChanged();
         return result;
     }
     if (kind==CMD_STREAM) {
@@ -275,6 +298,7 @@ __attribute__((noinline,noclone)) static int8_t handle_line(char *line,MotorInpu
     }
     /* Stop is transport-independent and remains available during configuration. */
     if (!strcmp(line,"Stop")) {
+        App_CancelNavigation();
         uint32_t mask=__get_PRIMASK(); __disable_irq();
         if ((!explicit_axis || axis==MOTOR_AXIS_1) && (JerryFOC_isHSOActive() || JerryFOC_hasHSOFault())) (void)JerryFOC_useHSO(0U);
         if (explicit_axis) MotorControl_Stop(axis); else MotorControl_StopAll();
@@ -283,9 +307,10 @@ __attribute__((noinline,noclone)) static int8_t handle_line(char *line,MotorInpu
     if (kind==CMD_HSO) {
         /* Parse outside the existing control critical section. The adapter
          * queues configuration for ADC1; never call ST library code here. */
-        if (axis!=MOTOR_AXIS_1) { hso_result=-3; return result; }
+        if (axis!=MOTOR_AXIS_1) { hso_result=-3; return -3; }
         handle_hso(line + 4,input);
         result=hso_result;
+        if (result==1 && line[4]=='U') App_RemoteMotion(axis,false);
         return result;
     }
     /* Invalid input must not change mode or release an HSO recovery stop. */
@@ -307,8 +332,7 @@ __attribute__((noinline,noclone)) static int8_t handle_line(char *line,MotorInpu
     __disable_irq();
     /* A command received with the stop latch set must not wait through the
      * physical key's 30 ms release guard and then start without a new click. */
-    if(command_generation!=stop_generation || (!command_was_stopped && MotorSampling_IsGlobalStopped()) ||
-       (command_was_stopped && HAL_GetTick()-command_at>10U)) { result=-4; __set_PRIMASK(primask); return result; }
+    if(!Protocol_RequestCurrent()) { result=-4; __set_PRIMASK(primask); return result; }
 
     if (!strcmp(line,"Follow")) {
         result=MotorControl_StartFollow() ? 1 : -1;
@@ -356,6 +380,7 @@ __attribute__((noinline,noclone)) static int8_t handle_line(char *line,MotorInpu
     if (!primask) {
         __enable_irq();
     }
+    if (result==1 && !open_cmd) App_RemoteMotion(axis,false);
     return result;
 }
 
@@ -405,12 +430,14 @@ typedef struct { uint8_t meta[16]; uint32_t values[4]; char text[4][16]; } Telem
 typedef struct { uint32_t counts[8]; uint16_t values[7]; uint8_t status,error; } TelemetryEncoder;
 typedef struct { float data[7]; uint32_t counts[3]; uint8_t flags[4]; } TelemetryHso;
 typedef struct { float startup_emf; uint32_t crossings; uint16_t values[13]; uint8_t flags[4]; } TelemetrySix;
-/* Explicit schema 1, not an AppSettings memory-write protocol. Only the
+/* Schema 2 retains schema 1's numeric layout. Only the
  * contiguous numeric settings fields are copied; no metadata/CRC/pointers. */
 typedef struct { uint16_t id; int8_t result; uint8_t source,schema,firmware,save,focus; uint32_t settings[21]; } TelemetryReply;
+typedef struct { uint16_t id; int8_t result; uint8_t source,axis,group,row,count; char label[24],value[32]; } TelemetryRow;
+_Static_assert(sizeof(TelemetryRow)==64,"RPC diagnostic row layout");
 typedef struct {
     TelemetryHeader header;
-    union { TelemetryStatus status; TelemetryReply reply; TelemetryEncoder encoder; TelemetryHso hso;
+    union { TelemetryStatus status; TelemetryReply reply; TelemetryRow row; TelemetryEncoder encoder; TelemetryHso hso;
         TelemetrySix six; float curves[12]; uint8_t bytes[114]; } payload;
 } TelemetryPacket;
 /* Main-loop producer only. Transports copy into their own immutable active
@@ -462,15 +489,24 @@ static void telemetry_reply(void)
      * also expire before execution; the PC never retries motion on timeout. */
     if(HAL_GetTick()-reply_at>1000U) { reply_pending=false; return; }
     if(!reply_built) {
-        TelemetryReply *r=&telemetry_packet.payload.reply;
-        _Static_assert(sizeof(TelemetryReply)==92 && offsetof(AppSettings,crc)-offsetof(AppSettings,speed_x10)==84,"RPC schema 1");
-        r->id=reply_id; r->result=reply_result; r->source=reply_source;
-        r->schema=1; r->firmware=87; r->save=(uint8_t)(config_save ? APP_SAVE_PENDING : AppStorage_GetSaveState()); r->focus=(uint8_t)MotorControl_GetFocus();
-        memcpy(r->settings,&AppStorage_Get()->speed_x10,sizeof(r->settings));
-        (void)telemetry_frame(32,sizeof(*r),HAL_GetTick());
+        if (reply_kind==33) {
+            TelemetryRow *r=&telemetry_packet.payload.row;
+            memset(r,0,sizeof(*r)); r->id=reply_id; r->source=reply_source;
+            r->axis=reply_row[0]; r->group=reply_row[1]; r->row=reply_row[2];
+            int count=App_ReadRow(r->axis,r->group,r->row,r->label,r->value);
+            r->result=count>0 ? 1 : (int8_t)count; r->count=count>0 ? (uint8_t)count : 0;
+            control_result=r->result;
+        } else {
+            TelemetryReply *r=&telemetry_packet.payload.reply;
+            _Static_assert(sizeof(TelemetryReply)==92 && offsetof(AppSettings,crc)-offsetof(AppSettings,speed_x10)==84,"RPC settings layout");
+            r->id=reply_id; r->result=reply_result; r->source=reply_source;
+            r->schema=2; r->firmware=88; r->save=(uint8_t)App_SaveState(); r->focus=(uint8_t)MotorControl_GetFocus();
+            memcpy(r->settings,&AppStorage_Get()->speed_x10,sizeof(r->settings));
+        }
+        (void)telemetry_frame(reply_kind,reply_kind==33 ? sizeof(TelemetryRow) : sizeof(TelemetryReply),HAL_GetTick());
         usb_tx_pending_len=0; reply_built=true;
     }
-    const unsigned len=sizeof(TelemetryHeader)+sizeof(TelemetryReply)+2U;
+    const unsigned len=sizeof(TelemetryHeader)+(reply_kind==33 ? sizeof(TelemetryRow) : sizeof(TelemetryReply))+2U;
     if(reply_source==PROTO_SRC_USB) {
         if(!CDC_TxReady_FS()) return;
         memcpy(usb_tx_active,&telemetry_packet,len);

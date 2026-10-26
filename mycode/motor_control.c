@@ -172,6 +172,7 @@ static MotorAxis work_focus(void)
 }
 bool MotorControl_IsGroupActive(void) { return control.group_active; }
 float MotorControl_GroupError(void) { return control.group_error; }
+float MotorControl_GroupTarget(void) { return control.group_target; }
 uint32_t MotorControl_MaxCycles(void) { return control.max_cycles; }
 const char *MotorControl_CommandText(void) { return command_text; }
 const char *MotorControl_EncoderLostText(MotorAxis axis)

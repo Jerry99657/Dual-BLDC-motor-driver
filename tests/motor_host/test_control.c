@@ -776,6 +776,7 @@ int main(int argc,char **argv)
     assert(MotorControl_SetGear(200,0));
     assert(!MotorControl_Command(MOTOR_AXIS_1,JERRYFOC_MODE_TORQUE,1,0,false));
     assert(MotorControl_Command(MOTOR_AXIS_1,JERRYFOC_MODE_VELOCITY,10,0,false));
+    assert(MotorControl_GroupTarget()==10); /* Accepted target precedes the ramp. */
     ms(500,0);
     assert(fabsf(JerryFOC_Target_Velocity-10)<0.01f && fabsf(state(MOTOR_AXIS_2).target_velocity-20)<0.01f);
     command("HSO:Use"); assert(Protocol_GetHsoResult()==-3 && output_requested && output2);
@@ -977,6 +978,17 @@ int main(int argc,char **argv)
     command("Focus:M1"); Protocol_Service(); assert(MotorControl_GetFocus()==MOTOR_AXIS_1);
     command("M1:Speed:1"); assert(Protocol_GetControlResult()==-1 && !output_requested);
     framework_contracts();
+    /* Import keeps the real controller paused while selectors would normally
+     * request encoder alignment. Neither axis may auto-arm afterward. */
+    boot(MOTOR_WORK_SINGLE_M1);
+    global_stopped=global_pending=true;global_released=false;
+    output_requested=output2=false;MotorControl_Service(now);
+    assert(MotorControl_SelectWork(MOTOR_WORK_SINGLE_M1));
+    assert(MotorControl_SelectFeedback(false));
+    assert(MotorControl_SelectProfile(MOTOR_AXIS_1,MOTOR_PROFILE_4015));
+    assert(MotorControl_SelectWork(MOTOR_WORK_INDEPENDENT));
+    ms(100,0);
+    assert(global_stopped && !output_requested && !output2 && !JerryFOC_needsAlignment());
     puts("PASS: real dual FOC: independent/sync, passive hand masters in both directions, multi-turn/reverse/anchors, feedforward, SPI2 reservation, linked encoder faults, explicit restart and deadline");
     return 0;
 }

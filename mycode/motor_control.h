@@ -78,5 +78,6 @@ void MotorControl_SetFocus(MotorAxis axis); /* View only, never starts/stops. */
 bool MotorControl_ModeAllowed(JerryFOC_ControlMode mode);
 bool MotorControl_IsGroupActive(void);
 float MotorControl_GroupError(void);
+float MotorControl_GroupTarget(void); /* Accepted master reference for Sync modes. */
 uint32_t MotorControl_MaxCycles(void);
 #endif

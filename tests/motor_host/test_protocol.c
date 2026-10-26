@@ -223,11 +223,15 @@ static void check_rpc(void) {
     FILE *trace=fopen("build/console-r87/rpc-fixture.bin","wb");assert(trace);
     MotorControl_StopAll();MotorControl_SelectWork(MOTOR_WORK_SINGLE_M1);MotorControl_SelectFeedback(false);
     AppStorage_Get()->speed_x10=123;AppStorage_Get()->led_brightness=37;
+    AppSettings *settings=AppStorage_Get();
+    settings->speed_step_x10=settings->torque_step_x100=settings->position_step_x100=5;
+    settings->axis2_speed_step_x10=settings->axis2_torque_step_x100=settings->axis2_position_step_x100=5;
+    settings->gear_ratio_x100=100;
     usb_connected=true;usb_busy=false;complete_early=true;submit_result=USBD_OK;
     telemetry_host_tick=100;assert(Telemetry_Select("Off"));
     command("@1:Get");Telemetry_Service();
     assert(inflight_len==106 && inflight[3]==32 && inflight[12]==1 && inflight[14]==1 && inflight[15]==PROTO_SRC_USB);
-    assert(inflight[16]==1 && inflight[17]==87);
+    assert(inflight[16]==2 && inflight[17]==88);
     assert(inflight[18]==APP_SAVE_PENDING); /* Dirty config must not claim an older save completed. */
     int32_t saved;memcpy(&saved,inflight+20,4);assert(saved==123);
     assert(fwrite(inflight,1,inflight_len,trace)==inflight_len);
@@ -260,6 +264,22 @@ static void check_rpc(void) {
     assert(inflight[12]==13 && (int8_t)inflight[14]==-4 && target==0);telemetry_host_stopped=false;
     unsigned calls=submissions;command("@0:Speed:12");command("@65536:Speed:12");command("@x:Speed:12");
     assert(target==0 && submissions==calls);
+    extern unsigned app_host_axis,app_host_key;
+    extern int32_t app_host_value;
+    extern bool app_host_config_allowed;
+    command("App:2,8,17");assert(Protocol_GetControlResult()==1 && app_host_axis==2 && app_host_key==8 && app_host_value==17);
+    const char *invalid_app[]={"App:1,2,2.5","App:1,2,NaN","App:1,2,1e10","App:1,2","App:1,2,3junk","GetRow:0,1,0","GetRow:1,8,0","GetRow:1,0,-1"};
+    for(unsigned i=0;i<sizeof(invalid_app)/sizeof(*invalid_app);++i) {
+        command(invalid_app[i]);assert(Protocol_GetControlResult()==-2);
+    }
+    app_host_config_allowed=false;command("Focus:M2");assert(Protocol_GetControlResult()==-3);app_host_config_allowed=true;
+    command("@21:GetRow:2,4,0");Telemetry_Service();
+    assert(inflight_len==78 && inflight[3]==33 && inflight[12]==21 && inflight[14]==1 && inflight[15]==PROTO_SRC_USB);
+    assert(inflight[16]==2 && inflight[17]==4 && inflight[18]==0 && inflight[19]==2);
+    assert(!strcmp((char *)inflight+20,"Test") && !strcmp((char *)inflight+44,"24.0 V"));
+    FILE *row_trace=fopen("build/console-r88/rpc-row-fixture.bin","wb");assert(row_trace);
+    assert(fwrite(inflight,1,inflight_len,row_trace)==inflight_len);assert(fclose(row_trace)==0);
+    command("@22:GetRow:1,0,255");Telemetry_Service();assert(inflight[3]==33 && (int8_t)inflight[14]==-2);
     assert(fclose(trace)==0);assert(host_primask==0);
     puts("PASS: real RPC schema/settings bytes, IDs, exact results, USB/UART reply routing, BUSY retry, immediate Stop, queue cancellation, disconnected reply timeout, stale-motion and KEY1 cancellation");
 }

@@ -6,6 +6,8 @@
 
 #define PROTO_SRC_USART 0U
 #define PROTO_SRC_USB   1U
+/* Main-loop remote action gate; call inside the action's critical section. */
+bool Protocol_RequestCurrent(void);
 
 /* 命令行输入：USART1 和 USB CDC 共用 */
 void Protocol_Feed(uint8_t source, const uint8_t *data, uint32_t len);

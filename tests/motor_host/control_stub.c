@@ -72,6 +72,7 @@ static bool following;
 static MotorAxisSnapshot second_ui={.healthy=true,.aligned=true,.ready=true,.status="READY"};
 void ControlStub_SetSecondState(MotorAxisSnapshot s) { second_ui=s; }
 int8_t Protocol_GetControlResult(void) { return 1; }
+bool Protocol_RequestCurrent(void) { return true; }
 #endif
 bool MotorControl_HsoAllowed(void) { return work==MOTOR_WORK_SINGLE_M1 && hso; }
 static bool sixstep;
@@ -152,6 +153,7 @@ const char *MotorControl_EncoderLostText(MotorAxis a) { return a==MOTOR_AXIS_1 ?
 bool MotorControl_IsCoupled(void) { return work>=MOTOR_WORK_SYNC_SPEED; }
 bool MotorControl_IsGroupActive(void) { return following; }
 float MotorControl_GroupError(void) { return 0; }
+float MotorControl_GroupTarget(void) { return JerryFOC_getTargetVelocity ? JerryFOC_getTargetVelocity() : 0; }
 uint32_t MotorControl_MaxCycles(void) { return 0; }
 bool MotorControl_SelectWork(MotorWorkMode m) {
     work=m;
@@ -183,7 +185,10 @@ bool MotorControl_SelectGeneric(void) {
     SixStep_SetGeneric(true);
     return true;
 }
-bool MotorControl_SetGear(int32_t r,int32_t o) { (void)o; return r!=0; }
+bool MotorControl_SetGear(int32_t r,int32_t o) {
+    if(!r || r< -1000 || r>1000 || o< -6283 || o>6283)return false;
+    AppStorage_Get()->gear_ratio_x100=r;AppStorage_Get()->gear_offset_x100=o;return true;
+}
 bool MotorControl_RequestAlign(MotorAxis a) { (void)a; return true; }
 bool MotorControl_ModeAllowed(JerryFOC_ControlMode m) {
     if(MotorControl_SixStepAllowed()) return m==JERRYFOC_MODE_TORQUE ||

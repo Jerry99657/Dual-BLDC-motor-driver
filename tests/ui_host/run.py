@@ -19,6 +19,7 @@ command += ["-I" + str(repo / p) for p in includes]
 command += [str(p) for p in sources] + ["-Wl,--wrap=OLED_DrawUTF8", "-lm", "-o", str(output / "test_ui.exe")]
 subprocess.run(command, cwd=repo, check=True)
 subprocess.run([str(output / "test_ui.exe")], cwd=repo, check=True)
+subprocess.run([str(output / "test_ui.exe"),"headless"], cwd=repo, check=True)
 
 # Exercise the real storage state machine against an asynchronous NOR model.
 subprocess.run([shutil.which("gcc") or "gcc", "-std=c11", "-Wall", "-Wextra", "-Werror", "-O1", "-Itests/ui_host", "-Imycode", "mycode/app_storage.c", "tests/ui_host/test_storage.c", "-o", str(output / "test_storage.exe")], cwd=repo, check=True)

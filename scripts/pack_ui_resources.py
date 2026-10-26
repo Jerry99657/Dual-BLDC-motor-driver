@@ -34,34 +34,41 @@ def resources():
 
 
 def pack(raw):
-    """Eight flags per group; 0=literal, 1=(length-3:4, distance-1:12).
+    """Optimal byte cost for the existing eight-flag LZSS format.
 
-    A 4096-byte window shares repeated words and padded label rows as well.
+    Include flag-byte boundaries in the dynamic program; choosing only the
+    longest current match can make the following tokens more expensive.
+    The decoder and all restored resource bytes remain unchanged.
     """
-    out = bytearray()
-    index = 0
-    while index < len(raw):
-        flag_at = len(out)
-        out.append(0)
+    size=len(raw); matches=[]
+    for index in range(size):
+        length,distance=2,0
+        for candidate in range(1,min(4096,index)+1):
+            count=0
+            while count<18 and index+count<size and raw[index+count]==raw[index+count-candidate]:
+                count+=1
+            if count>length: length,distance=count,candidate
+        matches.append((length,distance))
+    cost=[[0]*8 for _ in range(size+1)]; choice=[[1]*8 for _ in range(size)]
+    for index in range(size-1,-1,-1):
+        length,_=matches[index]
         for bit in range(8):
-            if index == len(raw):
-                break
-            length, distance = 2, 0
-            for candidate in range(1, min(4096, index) + 1):
-                count = 0
-                while count < 18 and index + count < len(raw) and raw[index + count] == raw[index + count - candidate]:
-                    count += 1
-                if count > length:
-                    length, distance = count, candidate
-            if distance:
-                offset = distance - 1
-                out[flag_at] |= 1 << bit
-                token=((length - 3) << 12) | offset
-                out.extend((token&255,token>>8))
-                index += length
-            else:
-                out.append(raw[index])
-                index += 1
+            next_bit=(bit+1)%8; flag=int(bit==0)
+            best=1+flag+cost[index+1][next_bit]
+            for count in range(3,length+1):
+                candidate=2+flag+cost[index+count][next_bit]
+                if candidate<=best: best=candidate;choice[index][bit]=count
+            cost[index][bit]=best
+    out=bytearray(); index=0;bit=0
+    while index<size:
+        if bit==0: flag_at=len(out);out.append(0)
+        count=choice[index][bit]
+        if count==1: out.append(raw[index])
+        else:
+            out[flag_at]|=1<<bit
+            token=((count-3)<<12)|(matches[index][1]-1)
+            out.extend((token&255,token>>8))
+        index+=count;bit=(bit+1)%8
     return bytes(out)
 
 
