@@ -8,6 +8,8 @@
 #include "angle_src_encoder.h"
 #include "st_hso.h"
 #include "protocol.h"
+#include "MT6701.h"
+#include "motor_sixstep.h"
 #include "usart.h"
 #include "usb_device.h"
 
@@ -70,6 +72,7 @@ bool StHso_ValidTarget(float t) { return isfinite(t) && fabsf(t)>=3; }
 float StHso_MinSpeed(void) { return 3; }
 float StHso_Angle(void) { return 0.1f; }
 float StHso_Velocity(void) { return hso_velocity; }
+float StHso_Position(void) { return NAN; }
 float StHso_ControlAngle(void) { return 0.1f; }
 float StHso_ControlVelocity(void) { return hso_velocity; }
 float StHso_CurrentD(void) { return 0; }
@@ -92,6 +95,15 @@ AngleSource *AngleSrc_Encoder_Init(int pp) { selected_pp=pp; aligned=0; return &
 void StHso_Init(const MotorParams *motor) { hso_motor=motor; hso_usable=hso_running=false; }
 #endif
 uint32_t HAL_GetTick(void) { return 0; }
+bool MotorSampling_IsBusFresh(void) { return true; }
+void MT6701_GetDiagnostics(MT6701Diagnostics *s) { *s=(MT6701Diagnostics){0}; }
+#ifdef MOTOR_HOST_REAL_CONTROL
+bool MotorSampling_IsAxisOutputEnabled(MotorAxis a) { return MotorSampling_IsAxisOutputRequested(a); }
+void MT6701_2_GetDiagnostics(MT6701Diagnostics *s) { *s=(MT6701Diagnostics){0}; }
+#else
+void MT6701_2_GetSnapshot(MT6701_2_Snapshot *s) { *s=(MT6701_2_Snapshot){0}; }
+void SixStep_GetSnapshot(SixStepSnapshot *s) { *s=(SixStepSnapshot){.status="READY"}; }
+#endif
 void HAL_Delay(uint32_t ms) { (void)ms; }
 bool MotorSampling_IsReady(void) { return ready; }
 bool MotorSampling_IsCalibrated(void) { return calibrated; }
@@ -103,6 +115,7 @@ bool MotorSampling_SetOutputEnabled(bool enable) {
 float MotorSampling_GetBusVoltage(void) { return bus; }
 bool MotorSampling_Capture(void) { ++captures; return complete; }
 const MotorSampleFrame *MotorSampling_GetFrame(void) { return &frame; }
+void MotorSampling_CopyFrame(MotorSampleFrame *out) { *out=frame; }
 uint8_t MT6701_IsContinuous(void) { return 1; }
 uint8_t MT6701_IsHealthy(void) { return healthy; }
 static uint8_t encoder_zero_gap;

@@ -8,6 +8,8 @@
 #include "motor_detect.h"
 #include "motor_sampling.h"
 #include "app_storage.h"
+#include "MT6701.h"
+#include "motor_sixstep.h"
 #include "usbd_cdc_if.h"
 #include <string.h>
 #include <math.h>
@@ -81,14 +83,14 @@ static void handle_hso(const char *command,MotorInput input)
     } else hso_result = -1;
 }
 
-/* UART double buffer; USB latest-frame mailbox plus immutable active buffer. */
+/* UART buffer is reused only after HAL reports READY. USB has a separate
+ * latest-frame mailbox and immutable active buffer. Main-loop producer only. */
 #define USB_TX_BUF_SIZE 128U
 
-static uint8_t usart_tx_buf[2][USB_TX_BUF_SIZE];
-static volatile uint8_t usart_tx_idx = 0U;
+static uint8_t usart_tx_buf[USB_TX_BUF_SIZE];
 
-/* Single ISR producer, main-loop consumer. Pending data may be replaced by a
- * newer sample, but the active buffer belongs to USB until TxState is idle. */
+/* Main-loop mailbox. Pending data may be replaced by a newer sample, but
+ * the active buffer belongs to USB until TxState is idle. */
 static uint8_t usb_tx_pending[USB_TX_BUF_SIZE];
 static uint8_t usb_tx_active[USB_TX_BUF_SIZE];
 static volatile uint16_t usb_tx_pending_len;
@@ -127,12 +129,12 @@ static bool config_save;
 int8_t Protocol_GetControlResult(void) { return control_result; }
 enum { CONFIG_WORK,CONFIG_MOTOR1,CONFIG_MOTOR2,CONFIG_FEEDBACK,
        CONFIG_GEAR,CONFIG_ALIGN,CONFIG_FOCUS,CONFIG_COUNT,
-       CMD_SPEED=CONFIG_COUNT,CMD_ANGLE,CMD_TORQUE,CMD_THROTTLE,CMD_OPEN,CMD_HSO,CMD_COUNT };
+       CMD_SPEED=CONFIG_COUNT,CMD_ANGLE,CMD_TORQUE,CMD_THROTTLE,CMD_OPEN,CMD_HSO,CMD_STREAM,CMD_COUNT };
 /* Inline short names avoid a pointer and three padding bytes per command. */
 static const struct { char prefix[10]; uint8_t length; } command_prefixes[] = {
     {"Work:",5},{"Motor1:",7},{"Motor2:",7},{"Feedback:",9},
     {"Gear:",5},{"Align:",6},{"Focus:",6},
-    {"Speed:",6},{"Angle:",6},{"Torque:",7},{"Throttle:",9},{"OpenLoop:",9},{"HSO:",4}
+    {"Speed:",6},{"Angle:",6},{"Torque:",7},{"Throttle:",9},{"OpenLoop:",9},{"HSO:",4},{"Stream:",7}
 };
 static uint8_t command_kind(const char *s)
 {
@@ -222,6 +224,10 @@ static void handle_line(char *line,MotorInput input)
             ++config_count; control_result=0;
         }
         __set_PRIMASK(mask); return;
+    }
+    if (kind==CMD_STREAM) {
+        control_result=!explicit_axis && Telemetry_Select(line+7) ? 1 : -2;
+        return;
     }
     /* Stop is transport-independent and remains available during configuration. */
     if (!strcmp(line,"Stop")) {
@@ -313,11 +319,8 @@ void Telemetry_Send(const uint8_t *data, uint16_t len)
     /* USART1：复制到静态缓冲后非阻塞发送，忙时跳过本帧。
      * 不能直接把调用者栈上的帧交给 HAL_UART_Transmit_IT。 */
     if (huart1.gState == HAL_UART_STATE_READY) {
-        uint8_t idx = usart_tx_idx;
-        memcpy(usart_tx_buf[idx], data, len);
-        if (HAL_UART_Transmit_IT(&huart1, usart_tx_buf[idx], len) == HAL_OK) {
-            usart_tx_idx ^= 1U;
-        }
+        memcpy(usart_tx_buf, data, len);
+        (void)HAL_UART_Transmit_IT(&huart1, usart_tx_buf, len);
     }
 
     /* Keep only the latest unsent telemetry frame. Never touch active data. */
@@ -325,22 +328,211 @@ void Telemetry_Send(const uint8_t *data, uint16_t len)
     usb_tx_pending_len = len;
 }
 
+static void telemetry_produce(void);
 void Telemetry_Service(void)
 {
+    telemetry_produce();
     if (usb_tx_pending_len == 0U || !CDC_TxReady_FS()) {
         return;
     }
 
-    /* Exclude the TIM2 producer only while taking its mailbox (<=128 bytes).
-     * Claim/clear BEFORE submitting: completion or a new sample may interrupt
-     * CDC_Transmit_FS before it returns. No application busy flag is needed. */
-    uint32_t primask = __get_PRIMASK();
-    __disable_irq();
+    /* Main owns both producer and mailbox; no IRQ masking is needed here.
+     * Claim/clear BEFORE submitting: a completion/new publication during the
+     * submit must not clear the next pending frame. */
     uint16_t len = usb_tx_pending_len;
     memcpy(usb_tx_active, usb_tx_pending, len);
     usb_tx_pending_len = 0U;
-    __set_PRIMASK(primask);
     /* A reset/suspend between the readiness check and submission may reject
      * this sample. Drop it; the next TIM2 frame replaces it within 10 ms. */
     (void)CDC_Transmit_FS(usb_tx_active, len);
+}
+
+/* No control ISR formatting: bounded main-loop packets, same bytes on both
+ * transports. All wire integers/floats are little endian on this target. */
+typedef struct { uint16_t sync; uint8_t version,kind; uint16_t sequence,length; uint32_t ms; } TelemetryHeader;
+typedef struct { uint8_t meta[16]; uint32_t values[4]; char text[4][16]; } TelemetryStatus;
+typedef struct { uint32_t counts[8]; uint16_t values[7]; uint8_t status,error; } TelemetryEncoder;
+typedef struct { float data[7]; uint32_t counts[3]; uint8_t flags[4]; } TelemetryHso;
+typedef struct { float startup_emf; uint32_t crossings; uint16_t values[13]; uint8_t flags[4]; } TelemetrySix;
+typedef struct {
+    TelemetryHeader header;
+    union { TelemetryStatus status; TelemetryEncoder encoder; TelemetryHso hso;
+        TelemetrySix six; float curves[12]; uint8_t bytes[114]; } payload;
+} TelemetryPacket;
+/* Main-loop producer only. Transports copy into their own immutable active
+ * buffers before this workspace is reused; no DMA references this object. */
+static TelemetryPacket telemetry_packet;
+_Static_assert(sizeof(TelemetryHeader)==12 && sizeof(TelemetryStatus)==96,"Telemetry wire layout");
+_Static_assert(sizeof(TelemetryHeader)+sizeof(TelemetryStatus)+2<=USB_TX_BUF_SIZE,"Largest telemetry packet");
+_Static_assert(sizeof(TelemetryPacket)==USB_TX_BUF_SIZE && sizeof(TelemetryEncoder)==48 &&
+    sizeof(TelemetryHso)==44 && offsetof(TelemetrySix,flags)==34,"Typed packet workspace");
+enum { STREAM_AUTO,STREAM_M1,STREAM_M2,STREAM_FOC1,STREAM_FOC2,STREAM_ENC1,
+       STREAM_ENC2,STREAM_HSO,STREAM_SIX,STREAM_OFF,STREAM_COUNT };
+static volatile uint8_t telemetry_stream;
+static uint16_t telemetry_sequence;
+static uint32_t telemetry_tick,telemetry_status_tick;
+static uint32_t telemetry_diagnostic_tick;
+static bool telemetry_have_status;
+static TelemetryStatus telemetry_previous;
+bool Telemetry_Select(const char *name)
+{
+    static const char names[][5]={"Auto","M1","M2","FOC1","FOC2","ENC1","ENC2","HSO","Six","Off"};
+    for(unsigned i=0;i<STREAM_COUNT;++i) if(!strcmp(name,names[i])) {
+        telemetry_stream=(uint8_t)i; return true;
+    }
+    return false;
+}
+static void telemetry_emit(uint8_t kind,unsigned length,uint32_t now)
+{
+    uint8_t *bytes=(uint8_t *)&telemetry_packet;
+    telemetry_packet.header=(TelemetryHeader){0x5AA5,1,kind,telemetry_sequence++,(uint16_t)length,now};
+    unsigned total=sizeof(TelemetryHeader)+length;
+    uint16_t crc=0xFFFF;
+    for(unsigned i=0;i<total;++i) {
+        /* Algebraic byte update of CRC16/CCITT-FALSE (poly 0x1021),
+         * cross-checked against the independent bitwise C and Python oracles. */
+        uint16_t x=(crc>>8)^bytes[i]; x^=x>>4;
+        crc=(uint16_t)((crc<<8)^(x<<12)^(x<<5)^x);
+    }
+    bytes[total++]=(uint8_t)crc; bytes[total++]=(uint8_t)(crc>>8);
+    Telemetry_Send(bytes,(uint16_t)total);
+}
+static uint8_t axis_flags(MotorAxis axis,const MotorAxisSnapshot *s)
+{
+    bool loop=s->current_loop;
+    if(axis==MOTOR_AXIS_1) {
+        if(MotorControl_HsoAllowed()) loop=true;
+        if(MotorControl_SixStepAllowed()) loop=false;
+    }
+    return s->ready | (s->healthy<<1) | (s->aligned<<2) | (s->active<<3) |
+        (loop<<4) | (s->aligning<<5) | (MotorSampling_IsAxisOutputEnabled(axis)<<6) |
+        (MotorControl_AxisEnabled(axis)<<7);
+}
+static void telemetry_status(TelemetryStatus *s,const MotorAxisSnapshot axis[2])
+{
+    StHsoSnapshot h; StHso_GetSnapshot(&h);
+    SixStepSnapshot six; SixStep_GetSnapshot(&six);
+    s->meta[0]=MotorControl_GetWork(); s->meta[1]=MotorControl_GetDrive(MOTOR_AXIS_1);
+    for(unsigned i=0;i<2;++i) {
+        s->meta[2+i]=axis[i].mode; s->meta[4+i]=MotorControl_GetInput((MotorAxis)i);
+        s->meta[6+i]=axis_flags((MotorAxis)i,&axis[i]);
+    }
+    s->meta[8]=h.state; s->meta[9]=h.reason; s->meta[10]=six.state; s->meta[11]=six.reject;
+    s->meta[12]=(uint8_t)((telemetry_stream<<1)|SixStep_IsGeneric()|(six.speed_control<<5)|
+        (MotorSampling_IsBusFresh()<<6)|(h.position_valid<<7));
+    /* M2's snapshot already carries the actual encoder health. M1's feedback
+     * health can instead be HSO, so E1 must still query its encoder cache. */
+    s->meta[13]=(uint8_t)((MT6701_IsHealthy()!=0)|(axis[1].healthy<<1));
+    s->meta[14]=(uint8_t)control_result; s->meta[15]=(uint8_t)hso_result;
+    s->values[0]=MotorControl_MaxCycles()/170U;
+    s->values[1]=MotorDetect_Result(); s->values[2]=MotorDetect_Inductance(); s->values[3]=MotorDetect_Flux();
+    const char *text[]={axis[0].status,axis[1].status,MotorControl_CommandText(),MotorDetect_Status()};
+    for(unsigned i=0;i<4;++i) {
+        memset(s->text[i],0,16);
+        unsigned n=0; while(n<15 && text[i][n]) { s->text[i][n]=text[i][n]; ++n; }
+    }
+}
+static void motion_values(float *out,MotorAxis axis,const MotorAxisSnapshot *s)
+{
+    bool on=MotorControl_AxisEnabled(axis) && !(axis==MOTOR_AXIS_1 && MotorControl_SixStepAllowed());
+    out[0]=on && s->mode!=JERRYFOC_MODE_TORQUE ? s->target_velocity : NAN;
+    out[1]=on && s->healthy ? s->velocity : NAN;
+    out[2]=on && s->mode==JERRYFOC_MODE_POSITION ? s->target_position : NAN;
+    out[3]=on && s->healthy ? s->position : NAN;
+    out[4]=on && s->ready && s->active && !MotorDetect_Active() ? s->iq : NAN;
+}
+static void telemetry_curves(uint8_t stream,const MotorAxisSnapshot axis[2],uint32_t now)
+{
+    float *data=telemetry_packet.payload.curves; unsigned count=6; uint8_t kind=1; uint16_t format_flags=0;
+    float bus=MotorSampling_IsBusFresh() ? MotorSampling_GetBusVoltage() : NAN;
+    if(stream==STREAM_AUTO && MotorControl_HsoAllowed()) {
+        StHsoSnapshot h; StHso_GetSnapshot(&h); kind=4; count=9;
+        bool moving=StHso_IsRunning();
+        data[0]=axis[0].target_velocity; data[1]=StHso_ControlVelocity(); data[2]=moving ? axis[0].velocity : NAN;
+        data[3]=moving && h.reference_flux_wb>0 ? h.velocity_rad_s : NAN;
+        data[4]=axis[0].ready && moving ? axis[0].iq : NAN; data[5]=bus;
+        data[6]=h.angle_error_rad; data[7]=h.flux_wb; data[8]=h.position_valid ? h.mechanical_position : NAN;
+    } else if(stream==STREAM_AUTO && MotorControl_SixStepAllowed()) {
+        SixStepSnapshot s; SixStep_GetSnapshot(&s); kind=5;
+        format_flags=(s.speed_control ? 0x8000U : 0U)|(SixStep_IsGeneric() ? 0x4000U : 0U);
+        data[0]=s.target; data[1]=s.state==SIX_RUN ? s.velocity : NAN; data[2]=s.reference;
+        data[3]=s.duty; data[4]=s.bemf; data[5]=bus;
+    } else if(stream==STREAM_FOC1 || stream==STREAM_FOC2) {
+        unsigned a=stream-STREAM_FOC1; const MotorAxisSnapshot *s=&axis[a]; kind=(uint8_t)(6+a); count=7;
+        bool valid=MotorControl_AxisEnabled((MotorAxis)a) && s->ready && s->healthy && s->active &&
+            !MotorDetect_Active() && !(a==0 && (MotorControl_SixStepAllowed() || (MotorControl_HsoAllowed() && !StHso_IsRunning())));
+        format_flags=(s->current_loop || (a==0 && MotorControl_HsoAllowed())) ? 0x8000U : 0;
+        data[0]=valid ? s->target_iq : NAN; data[1]=valid ? s->iq : NAN;
+        MotorSampleFrame sample; MotorSampling_CopyFrame(&sample);
+        const float *phase=a==0 ? sample.m1_current : sample.m2_current;
+        bool raw=MotorControl_AxisEnabled((MotorAxis)a) && s->ready;
+        data[2]=valid ? s->id : NAN; data[3]=raw ? phase[0] : NAN; data[4]=raw ? phase[1] : NAN;
+        data[5]=valid ? s->velocity : NAN; data[6]=bus;
+    } else {
+        bool dual=stream==STREAM_AUTO && MotorControl_GetWork()>=MOTOR_WORK_INDEPENDENT;
+        unsigned a=stream==STREAM_M2 || (stream==STREAM_AUTO && MotorControl_GetWork()==MOTOR_WORK_SINGLE_M2);
+        kind=dual ? 3 : (uint8_t)(1+a);
+        motion_values(data,(MotorAxis)a,&axis[a]);
+        if(dual) { motion_values(data+5,MOTOR_AXIS_2,&axis[1]); data[10]=bus;
+            data[11]=MotorControl_IsCoupled() ? MotorControl_GroupError() : NAN; count=12;
+            if(MotorControl_GetWork()==MOTOR_WORK_SYNC_SPEED) format_flags=0x8000U; }
+        else data[5]=bus;
+    }
+    uint16_t valid=format_flags;
+    for(unsigned i=0;i<count;++i) if(isfinite(data[i])) valid|=(uint16_t)(1U<<i);
+    unsigned length=count*4U;
+    memcpy(telemetry_packet.payload.bytes+length,&valid,2);
+    telemetry_emit(kind,length+2U,now);
+}
+static void telemetry_produce(void)
+{
+    uint32_t now=HAL_GetTick();
+    if(now-telemetry_tick<10U) return;
+    telemetry_tick=now;
+    MotorAxisSnapshot axis[2];
+    MotorControl_GetAxis(MOTOR_AXIS_1,&axis[0]); MotorControl_GetAxis(MOTOR_AXIS_2,&axis[1]);
+    TelemetryStatus *status=&telemetry_packet.payload.status; telemetry_status(status,axis);
+    /* Coalesce rapid state chatter so it cannot starve all curve slots. */
+    if(!telemetry_have_status || now-telemetry_status_tick>=100U ||
+        (now-telemetry_status_tick>=20U && memcmp(status,&telemetry_previous,sizeof(*status)))) {
+        telemetry_previous=*status; telemetry_have_status=true; telemetry_status_tick=now;
+        telemetry_emit(0x10,sizeof(*status),now); return;
+    }
+    uint8_t stream=telemetry_stream;
+    if(stream==STREAM_OFF) return;
+    if(stream>=STREAM_ENC1) {
+        if(now-telemetry_diagnostic_tick<100U) return;
+        telemetry_diagnostic_tick=now;
+    }
+    if(stream==STREAM_ENC1 || stream==STREAM_ENC2) {
+        MT6701Diagnostics e; unsigned a=stream-STREAM_ENC1;
+        if(a==0) MT6701_GetDiagnostics(&e); else MT6701_2_GetDiagnostics(&e);
+        MT6701_2_Snapshot e2; MT6701_2_GetSnapshot(&e2);
+        TelemetryEncoder *wire=&telemetry_packet.payload.encoder;
+        _Static_assert(offsetof(MT6701Diagnostics,age_cycles)==24 && offsetof(MT6701Diagnostics,zero_started_at)==36 &&
+            offsetof(MT6701Diagnostics,status)==44,"Review encoder diagnostic prefixes");
+        memcpy(wire->counts,&e,24); memcpy(wire->counts+6,&e.zero_started_at,8);
+        memcpy(wire->values,&e.age_cycles,12);
+        wire->values[6]=a==0 ? MT6701_GetRawAngle() : e2.raw_angle;
+        wire->status=e.status; wire->error=e.last_error;
+        telemetry_emit((uint8_t)(8+a),sizeof(*wire),now);
+    } else if(stream==STREAM_HSO) {
+        StHsoSnapshot h; StHso_GetSnapshot(&h);
+        TelemetryHso *wire=&telemetry_packet.payload.hso;
+        _Static_assert(offsetof(StHsoSnapshot,emf_offset_limit_v)==offsetof(StHsoSnapshot,capture_angle_rad)+20 &&
+            offsetof(StHsoSnapshot,capture_resets)==offsetof(StHsoSnapshot,qualified_samples)+8,"Review HSO diagnostic prefixes");
+        wire->data[0]=h.reference_flux_wb; memcpy(wire->data+1,&h.capture_angle_rad,24);
+        memcpy(wire->counts,&h.qualified_samples,12);
+        wire->flags[0]=h.entry_reason; wire->flags[1]=h.capture_reason; wire->flags[2]=h.position_valid; wire->flags[3]=h.usable;
+        telemetry_emit(10,sizeof(*wire),now);
+    } else if(stream==STREAM_SIX) {
+        SixStepSnapshot s; SixStep_GetSnapshot(&s);
+        /* Explicit fields, never pointers/padding from the native snapshot. */
+        TelemetrySix *wire=&telemetry_packet.payload.six;
+        wire->startup_emf=s.startup_emf; wire->crossings=s.crossings;
+        uint16_t values[]={s.phase_pct,s.period_pct,s.period_fraction,s.startup_ms,s.sector,s.quality,s.gate};
+        memcpy(wire->values,values,sizeof(values)); memcpy(wire->values+7,s.period_10us,sizeof(s.period_10us));
+        wire->flags[0]=s.state; wire->flags[1]=s.sampling_off; wire->flags[2]=s.speed_control; wire->flags[3]=s.reject;
+        telemetry_emit(11,38U,now);
+    } else telemetry_curves(stream,axis,now);
 }

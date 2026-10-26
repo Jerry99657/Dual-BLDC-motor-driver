@@ -15,16 +15,22 @@ static int finish(TextWriter *out,int result)
         out->buffer[out->length<out->capacity ? out->length : out->capacity-1]='\0';
     return result;
 }
+__attribute__((noinline,noclone))
+static unsigned number_digits(char *digits,uint32_t value,unsigned base,unsigned minimum)
+{
+    unsigned count=0;
+    do { digits[count++]="0123456789ABCDEF"[value%base]; value/=base; }
+    while(value || count<minimum);
+    return count;
+}
 __attribute__((noinline))
 int UiText_Fixed(char *buffer,size_t capacity,int32_t value,unsigned places,const char *unit)
 {
     TextWriter out={buffer,capacity,0};
     uint32_t magnitude=value<0 ? 0U-(uint32_t)value : (uint32_t)value;
     char digits[10];
-    unsigned count=0;
     /* Include a leading integer zero even for values below one unit. */
-    do { digits[count++]=(char)('0'+magnitude%10U); magnitude/=10U; }
-    while(magnitude || count<=places);
+    unsigned count=number_digits(digits,magnitude,10U,places+1U);
     if(value<0) put_char(&out,'-');
     while(count) {
         put_char(&out,digits[--count]);
@@ -68,8 +74,7 @@ int UiText_Format(char *buffer,size_t capacity,const char *format,...)
                 value=negative ? 0U-(uint32_t)number : (uint32_t)number;
             } else value=wide ? (uint32_t)va_arg(args,unsigned long) : va_arg(args,unsigned);
             char digits[10];
-            unsigned count=0,base=type=='X' ? 16U : 10U;
-            do { digits[count++]="0123456789ABCDEF"[value%base]; value/=base; } while(value);
+            unsigned count=number_digits(digits,value,type=='X' ? 16U : 10U,1U);
             width-=(int)count+(negative ? 1 : 0);
             if(negative && zero) put_char(&out,'-');
             while(width-->0) put_char(&out,zero ? '0' : ' ');

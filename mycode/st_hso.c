@@ -38,6 +38,9 @@ static float forced_angle, forced_speed, capture_speed, align_current, angle_off
 static int pole_pairs=1;
 static StHsoState phase;
 static StHsoSnapshot live;
+static float position_angle,position_origin;
+static int32_t position_turns;
+static bool position_started;
 
 __attribute__((optimize("O2"))) static float wrap(float a)
 {
@@ -51,6 +54,7 @@ static float from_q30(fixp30_t x) { return (float)x/Q30_SCALE; }
 __attribute__((noinline,optimize("Os"))) static void reject(StHsoReason reason)
 {
     running=live.usable=false;
+    live.position_valid=false;
     live.reason=reason;
     /* Keep the rejected measurement condition visible after a timeout. */
     if (reason!=ST_HSO_REASON_STARTUP && reason!=ST_HSO_REASON_LEARN_TIMEOUT &&
@@ -96,6 +100,7 @@ __attribute__((optimize("Os"))) void StHso_GetConfig(StHsoConfig *c)
 __attribute__((noinline,optimize("Os"))) void StHso_Stop(void)
 {
     running=live.usable=false;
+    live.position_valid=false;
     quiet=qualified=learn_count=0;
     forced_speed=0;
 }
@@ -130,6 +135,7 @@ __attribute__((optimize("Os"))) bool StHso_Start(float target)
     if (running) return target*capture_speed>0;
     if (!was_ready || quiet<2000U || config_pending) return false;
     running=true; phase=ST_HSO_ALIGN; live.state=phase;
+    live.mechanical_position=0; live.position_valid=position_started=false;
     elapsed=qualified=learn_count=blend=0;
     learn_cycle_count=learn_cycle_length=0;
     learn_d_sum=learn_q_sum=0;
@@ -405,6 +411,22 @@ __attribute__((optimize("O2"))) void StHso_Process(const MotorSampleFrame *f,boo
         live.emf_offset_limit_v=from_q30(HSO_getOffsetLimit(&observer))*VOLTAGE_SCALE;
         check_observer(emf,forced_hz);
         if (!running) return;
+        /* Unwrap the actual observer angle, never its forced I/F reference or
+         * integrated speed. At <400 electrical Hz, a 10kHz step is <pi. */
+        if (phase==ST_HSO_CONTROL && live.usable) {
+            if (!position_started) {
+                position_origin=live.angle_rad; position_turns=0;
+                live.position_valid=position_started=true;
+            } else if(live.position_valid) {
+                float delta=live.angle_rad-position_angle;
+                if(delta < -3.14159265359f) {
+                    if(position_turns==INT32_MAX) live.position_valid=false; else ++position_turns;
+                } else if(delta > 3.14159265359f) {
+                    if(position_turns==INT32_MIN) live.position_valid=false; else --position_turns;
+                }
+            }
+            position_angle=live.angle_rad;
+        }
     }
     live.state=phase; live.qualified_samples=phase==ST_HSO_LEARNING ? learn_count :
         phase==ST_HSO_CAPTURE ? (capture_samples<QUALIFY_SAMPLES ? capture_samples : QUALIFY_SAMPLES) : qualified;
@@ -414,7 +436,8 @@ __attribute__((optimize("O2"))) void StHso_Process(const MotorSampleFrame *f,boo
 }
 __attribute__((optimize("Os"))) void StHso_GetSnapshot(StHsoSnapshot *s)
 {
-    uint32_t mask=__get_PRIMASK(); __disable_irq(); *s=live; __set_PRIMASK(mask);
+    uint32_t mask=__get_PRIMASK(); __disable_irq(); *s=live;
+    s->mechanical_position=StHso_Position(); __set_PRIMASK(mask);
 }
 bool StHso_IsUsable(void) { return running && live.usable && enabled && !config_pending; }
 bool StHso_CanTakeover(void) { return StHso_IsUsable(); }
@@ -422,6 +445,12 @@ bool StHso_IsStarting(void) { return running && phase!=ST_HSO_CONTROL; }
 bool StHso_IsRunning(void) { return running; }
 float StHso_Angle(void) { return live.angle_rad; }
 float StHso_Velocity(void) { return live.velocity_rad_s; }
+__attribute__((optimize("Os"))) float StHso_Position(void)
+{
+    uint32_t mask=__get_PRIMASK(); __disable_irq();
+    float position=live.position_valid ? ((float)position_turns*TWO_PI+position_angle-position_origin)/(float)pole_pairs : NAN;
+    __set_PRIMASK(mask); return position;
+}
 float StHso_ControlAngle(void)
 {
     return phase==ST_HSO_CONTROL ? live.angle_rad-angle_offset*(1-fminf((float)blend/500,1)) : forced_angle;

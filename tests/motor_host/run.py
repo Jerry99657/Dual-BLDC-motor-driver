@@ -24,6 +24,7 @@ suites = {
     "foc": ["mycode/JerryFOC.c", "mycode/protocol.c", "mycode/number_parse.c", "mycode/motor_params.c", "tests/motor_host/test_foc.c"],
     "hso": ["mycode/st_hso.c", "mycode/motor_params.c", "tests/motor_host/test_hso.c"],
     "protocol": ["mycode/protocol.c", "mycode/number_parse.c", "mycode/motor_params.c", "tests/motor_host/test_protocol.c"],
+    "telemetry": ["mycode/protocol.c", "mycode/number_parse.c", "mycode/motor_params.c", "tests/motor_host/test_telemetry.c"],
     "number_parse": ["mycode/number_parse.c", "tests/motor_host/test_number_parse.c"],
 }
 selected=set(sys.argv[1:])
@@ -32,11 +33,13 @@ if selected-set(suites):
 for name, sources in suites.items():
     if selected and name not in selected: continue
     if name in ("detect","control","sensorless"): sources += ["mycode/motor_sixstep.c","mycode/motor_detect.c"]
-    if name in ("foc","protocol"):
+    if name in ("foc","protocol","telemetry"):
         sources += ["tests/motor_host/control_stub.c"]
+    if name in ("protocol","telemetry"): sources += ["tests/motor_host/telemetry_stubs.c"]
     command = [compiler, "-std=c11", "-Wall", "-Wextra", "-Werror", "-O1",
                "-Itests/motor_host", "-Imycode", "-IThirdParty/ST_HSO", *sources, "-lm", "-o", str(out / (name + ".exe"))]
     if name=="sampling": command.insert(1,"-DMOTOR_SAMPLING_HOST_HOOKS")
+    if name in ("detect","control","sensorless"): command.insert(1,"-DMOTOR_HOST_REAL_CONTROL")
     if name=="motor_math": command.insert(1,"-DMOTOR_MATH_CORDIC_HOST")
     subprocess.run(command, cwd=repo, check=True)
     subprocess.run([str(out / (name + ".exe"))], cwd=repo, check=True)

@@ -121,6 +121,9 @@ uint8_t JerryFOC_isHSOReturning(void);
 
 /* 10 kHz 快速环入口 */
 void JerryFOC_run(void);
+/* Application scheduling entries; HAL compatibility callbacks delegate here. */
+void JerryFOC_FastIRQ(void); /* Complete ADC1/2 injected pair, 10 kHz. */
+void JerryFOC_OuterIRQ(void); /* TIM2 update, 1 kHz. */
 
 /* 角度源 */
 void JerryFOC_setAngleSource(AngleSource *src);

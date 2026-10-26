@@ -3,11 +3,27 @@
 #include <stdint.h>
 #include <stddef.h>
 typedef enum { HAL_OK, HAL_ERROR, HAL_BUSY, HAL_TIMEOUT } HAL_StatusTypeDef;
+#ifdef MOTOR_IRQ_INTEGRATION
+typedef struct { union { uint32_t pins,IDR; }; } GPIO_TypeDef;
+#else
 typedef struct { uint32_t pins; } GPIO_TypeDef;
+#endif
 typedef enum { GPIO_PIN_RESET, GPIO_PIN_SET } GPIO_PinState;
 extern GPIO_TypeDef gpio_a, gpio_b;
 extern GPIO_TypeDef gpio_key;
+#ifdef MOTOR_IRQ_INTEGRATION
+typedef struct { uint32_t PR1; } HostExti;
+extern HostExti host_exti;
+#define EXTI (&host_exti)
+#define host_exti_pending (host_exti.PR1)
+#define __STATIC_INLINE static inline
+#define READ_REG(reg) (reg)
+#define READ_BIT(reg,bits) ((reg)&(bits))
+void HostRegisterWrite(uint32_t *reg,uint32_t value);
+#define WRITE_REG(reg,value) HostRegisterWrite(&(reg),(value))
+#else
 extern uint32_t host_exti_pending;
+#endif
 #define KEY1_GPIO_Port (&gpio_key)
 #define KEY1_Pin (1U << 13)
 #define __HAL_GPIO_EXTI_GET_IT(pin) (host_exti_pending & (pin))

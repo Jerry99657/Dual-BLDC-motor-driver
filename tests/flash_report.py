@@ -11,6 +11,7 @@ import argparse
 import hashlib
 import json
 from pathlib import Path
+import re
 import shutil
 import subprocess
 
@@ -18,6 +19,8 @@ ROOT = Path(__file__).resolve().parents[1]
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument("label", nargs="?", default="current")
 parser.add_argument("--directory", type=Path, default=Path("build/size-baseline"))
+parser.add_argument("--allow-irq-user-code", action="store_true",
+                    help="Permit only the R82 IRQ USER CODE blocks and the exact user-module CMake addition")
 args = parser.parse_args()
 OUT = ROOT / args.directory
 LABEL = args.label
@@ -45,6 +48,38 @@ def official_commands(mode):
         if path.startswith(("Drivers/", "Middlewares/", "ThirdParty/", "Core/", "USB_Device/", "mycode/kk_")):
             result[path] = entry.get("command", entry.get("arguments"))
     return result
+
+
+def verify_irq_user_changes(changed):
+    """Keep vendor files, generated initialization and compilation flags strict.
+
+    This narrow exception permits board-owned vector routing, not edits to
+    arbitrary Core blocks or any official driver implementation.
+    """
+    irq="Core/Src/stm32g4xx_it.c"
+    assert set(changed)<= {irq,"CMakeLists.txt"},changed
+    if irq in changed:
+        blocks={"Includes","ADC1_2_IRQn 0","TIM1_BRK_TIM15_IRQn 0",
+                "TIM2_IRQn 0","EXTI15_10_IRQn 0"}
+        def outside_user(text):
+            found=set()
+            def replace(match):
+                if match[2] not in blocks: return match[0]
+                assert match[2] not in found,match[2]
+                found.add(match[2])
+                return match[1]+"\n<APPLICATION IRQ CODE>\n"+match[4]
+            result=re.sub(r"(/\* USER CODE BEGIN ([^\n]*?) \*/)(.*?)(/\* USER CODE END \2 \*/)",
+                          replace,text,flags=re.S)
+            assert found==blocks,found
+            return result
+        assert outside_user((OUT/irq).read_text(encoding="utf-8"))==outside_user((ROOT/irq).read_text(encoding="utf-8")),irq
+    if "CMakeLists.txt" in changed:
+        addition=('\n# Application HAL/LL interrupt module; official driver options are unchanged.\n'
+                  'target_sources(${CMAKE_PROJECT_NAME} PRIVATE mycode/motor_irq.c)\n'
+                  'set_source_files_properties(mycode/motor_irq.c PROPERTIES COMPILE_OPTIONS "-Os;-flto")\n')
+        current=(ROOT/"CMakeLists.txt").read_text(encoding="utf-8")
+        assert current.count(addition)==1,"Unexpected build configuration change"
+        assert current.replace(addition,"")==(OUT/"CMakeLists.txt").read_text(encoding="utf-8")
 
 
 def image(mode):
@@ -86,12 +121,20 @@ if LABEL == "baseline":
         destination = OUT / "mycode" / path.name
         destination.parent.mkdir(exist_ok=True)
         shutil.copy2(path, destination)
+    for name in ("Core/Src/stm32g4xx_it.c","CMakeLists.txt"):
+        destination=OUT/name
+        destination.parent.mkdir(parents=True,exist_ok=True)
+        shutil.copy2(ROOT/name,destination)
 else:
     baseline = json.loads((OUT / "baseline.json").read_text())
     if baseline["protected"] != report["protected"]:
         changed = [name for name in set(baseline["protected"]) | set(report["protected"])
                    if baseline["protected"].get(name) != report["protected"].get(name)]
-        raise SystemExit("Protected files changed: " + ", ".join(sorted(changed)))
+        if args.allow_irq_user_code:
+            verify_irq_user_changes(changed)
+            report["permitted_user_changes"]=sorted(changed)
+        else:
+            raise SystemExit("Protected files changed: " + ", ".join(sorted(changed)))
     if baseline["commands"] != report["commands"]:
         raise SystemExit("Official/core compilation commands changed.")
     for mode, current in report["images"].items():
@@ -101,3 +144,5 @@ for mode, current in report["images"].items():
     print(mode, json.dumps({k: v for k, v in current.items() if k != "largest_functions"}))
 print("Protected files:", len(report["protected"]),
       "; official/core compile commands", "recorded." if LABEL == "baseline" else "verified.")
+if "permitted_user_changes" in report:
+    print("Verified application-only exceptions:",", ".join(report["permitted_user_changes"]))

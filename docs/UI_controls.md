@@ -1,5 +1,15 @@
 # 电机驱动板 UI 操作与验证
 
+当前固件 **UI-R86-PC**：常用遥测改为单轴 6／双轴 12／HSO 9／六步 6 路，USB CDC／USART1 使用有版本、时间戳、序号及 CRC 的统一格式；参数辨识期间保留通信。HSO 的机械位置改为独立于编码器的连续锁定相对位移，未锁定或失锁时显示 `--`，不开放无感位置闭环。新增 [电脑端工具](../pc_tool/README.md)，协议、资源和验证边界见 [R86 实施说明](PC_tool_R86.md)。无需修改 CubeMX，Flash 余量 **68 B**。
+
+当前固件 **UI-R85-SZ**：继续合并数值显示、复用文字常量和自定义页脚，并无损压缩首页图标。保留现有功能与显示效果，Debug／Release 再节省 **412 B**，Flash 剩余 **1908 B**；静态 RAM 增加 **512 B**。无需修改 CubeMX，详见 [R85 UI 体积优化及验证](UI_size_R85.md)。
+
+当前固件 **UI-R84-SZ**：112 条信息行及 43 个菜单项目使用紧凑 Flash 描述，在启动时展开到静态 RAM，保留原界面和交互。Debug／Release 再节省 676 B，Flash 剩余 1496 B；RAM 增加 1240 B。无需修改 CubeMX，详见 [R84 固定 UI 资源压缩](UI_resources_R84.md)。
+
+当前固件 **UI-R83-SZ**：优化 UI 快照复制、文本缓冲布局、诊断描述和整数格式化，保留原页面、字号、图标、动画与按键。Debug／Release 净节省 224 B，Flash 剩余 820 B；无需修改 CubeMX。实现、图像对照与资源变化见 [R83 UI 体积优化](UI_size_R83.md)。
+
+当前固件 **UI-R82-LL**：完成 HAL＋LL 第一轮迁移，KEY1 EXTI、TIM2、TIM1 Break 和 ADC12 使用用户 LL 分发器，初始化与规则组 DMA 保留 HAL。Debug／Release 净节省 592 B，Flash 剩余 596 B；无需修改 CubeMX。实现边界、测试与实板复测见 [R82 混合驱动说明](HAL_LL_R82.md)。
+
 当前固件 **UI-R81-CF**：第 4 批整理控制框架，新增 Motion → Input、LOCAL／USB／UART 来源检查与已确认参数发布。双机通信目标必须写 `M1:`／`M2:`，浏览 Run 不打断远程运行；明确的 Back／KEY1 继续停止。规则、构建占用与验证见 [R81 控制框架](Control_framework_R81.md)。无需修改 CubeMX。
 
 当前 R79 参数辨识已增加 Ls／磁链／Ke、左右结果翻页与 v5 保存，详见 [R79 操作与测量定义](Motor_detect_R79.md)。

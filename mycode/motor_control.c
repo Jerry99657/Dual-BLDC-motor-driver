@@ -964,25 +964,3 @@ void MotorControl_RecordCycles(uint32_t cycles)
         control.timing_fault=true; MotorControl_StopAll();
     }
 }
-void MotorControl_Telemetry(float d[25])
-{
-    if (MotorControl_SixStepAllowed()) {
-        SixStepSnapshot ss; SixStep_GetSnapshot(&ss);
-        d[0]=ss.target; d[1]=ss.velocity; d[7]=ss.reference;
-        d[16]=ss.duty; d[17]=ss.bemf; d[18]=(float)ss.sector;
-        d[19]=(float)ss.quality; d[20]=(float)ss.crossings; d[21]=(float)ss.state;
-        d[23]=ss.speed_control ? 1.0f : 0.0f;
-        /* Encoder fields have no control role in this encoder-free mode.
-         * Publish frozen six-step timing in the same 25-float frame. */
-        for(unsigned i=0;i<6;++i) d[8+i]=(float)ss.period_10us[i]*0.01f; /* ms */
-        d[14]=(float)ss.period_pct+0.1f*ss.period_fraction;
-        d[15]=(float)ss.phase_pct; d[24]=(float)ss.reject;
-        return;
-    }
-    if (!MotorControl_AxisEnabled(MOTOR_AXIS_2)) return;
-    d[16]=(float)control.work; d[17]=control.m2.velocity; d[18]=control.m2.target_speed;
-    d[19]=control.m2.position; d[20]=control.m2.iq; d[21]=control.m2.id;
-    d[22]=(float)control.max_cycles/170.0f;
-    d[23]=(float)((control.m2.aligned ? 1U : 0U) | (MotorSampling_IsAxisOutputRequested(MOTOR_AXIS_2) ? 2U : 0U));
-    d[24]=control.group_error;
-}

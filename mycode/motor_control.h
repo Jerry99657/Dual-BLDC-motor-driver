@@ -27,7 +27,6 @@ void MotorControl_Fast(void);  /* ADC JEOS, after the complete paired frame. */
 void MotorControl_PrepareOuter(void); /* Both new measurements, then shared references. */
 void MotorControl_Outer(void); /* TIM2, 1 kHz; after M1 encoder/outer update. */
 void MotorControl_RecordCycles(uint32_t cycles);
-void MotorControl_Telemetry(float data[25]);
 bool MotorControl_AxisEnabled(MotorAxis axis);
 bool MotorControl_IsCoupled(void);
 bool MotorControl_IsHandFollow(void);

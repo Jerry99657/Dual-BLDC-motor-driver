@@ -60,11 +60,12 @@ for mode in ("Debug", "Release"):
     hal_calls = calls(tool("objdump", "-d", "--disassemble=HAL_Init", elf))
     assert hal_calls.index("HAL_InitTick") < hal_calls.index("HAL_MspInit"), (mode, hal_calls)
 
-    # ADC/TIM HAL now share LTO with the application. Their weak default
-    # callbacks may disappear as the real callbacks inline into dispatchers;
-    # verify the motor/observer paths survived in the linked dispatch code.
-    adc_calls=calls(tool("objdump", "-d", "--disassemble=HAL_ADC_IRQHandler", elf))
-    tim_calls=calls(tool("objdump", "-d", "--disassemble=HAL_TIM_IRQHandler", elf))
+    # R82: HAL owns setup/DMA; the board's LL vectors own ADC12/TIM/EXTI.
+    # Application hooks may inline; verify the real linked control paths.
+    for removed in ("HAL_ADC_IRQHandler","HAL_TIM_IRQHandler","HAL_GPIO_EXTI_IRQHandler"):
+        assert not re.search(r"^\w+ [tT] "+removed+r"$",symbols,re.M),(mode,removed)
+    adc_calls=calls(tool("objdump", "-d", "--disassemble=MotorIRQ_Adc12", elf))
+    tim_calls=calls(tool("objdump", "-d", "--disassemble=MotorIRQ_Tim2", elf))
     assert any(c.startswith("StHso_Process") for c in adc_calls), (mode, adc_calls)
     # LTO may inline the detector into the ADC IRQ. Its ownership gate and
     # two independent pole checks must then remain in the real linked path.
@@ -73,18 +74,23 @@ for mode in ("Debug", "Release"):
     assert "service_hso_feedback" in adc_calls, (mode, adc_calls)
     assert "MotorControl_PositionVelocity" in tim_calls, (mode, tim_calls)
     assert "MotorControl_VelocityControl" in tim_calls, (mode, tim_calls)
-    assert any(c.startswith("ibus_latch") for c in tim_calls), (mode,tim_calls)
-    # GPIO HAL uses LTO: its real callback is often an unconditional tail
-    # branch rather than BL. Check both dispatch hops in the linked image.
+    # Include tail branches as well as calls when checking vector routing.
     def exti_transfers(symbol):
         code=tool("objdump", "-d", "--disassemble="+symbol, elf)
         return re.findall(r"\bb(?:lx?)?(?:\.[nw])?\s+[0-9a-f]+\s+<([^>]+)>",code)
-    assert "HAL_GPIO_EXTI_IRQHandler" in exti_transfers("EXTI15_10_IRQHandler"), mode
-    exti_calls=exti_transfers("HAL_GPIO_EXTI_IRQHandler")
+    for vector,dispatcher in (("ADC1_2_IRQHandler","MotorIRQ_Adc12"),
+                              ("TIM2_IRQHandler","MotorIRQ_Tim2"),
+                              ("TIM1_BRK_TIM15_IRQHandler","MotorIRQ_Break"),
+                              ("EXTI15_10_IRQHandler","MotorIRQ_Key1")):
+        assert re.search(r"^\w+ T "+dispatcher+r"$",symbols,re.M),(mode,dispatcher)
+        assert dispatcher in exti_transfers(vector),(mode,vector)
+    break_calls=exti_transfers("MotorIRQ_Break")
+    assert any(c.startswith("ibus_latch") for c in break_calls),(mode,break_calls)
+    exti_calls=exti_transfers("MotorIRQ_Key1")
     assert any(c.startswith("MotorSampling_GlobalStopIRQ") for c in exti_calls), (mode,exti_calls)
 
     image = (root / "FOC_two.bin").read_bytes()
-    assert b"UI-R81-CF" in image and b"UI-R80-SZ" not in image, mode
+    assert b"UI-R86-PC" in image and b"UI-R85-SZ" not in image, mode
     assert "__aeabi_ddiv" not in symbols and "__divdf3" not in symbols,mode
     for removed in ("snprintf","sniprintf","_printf_i","_svfprintf_r","_svfiprintf_r"):
         assert not re.search(r"^\w+ [tT] "+removed+r"$",symbols,re.M), (mode,removed)
@@ -103,5 +109,5 @@ for mode in ("Debug", "Release"):
         output = Path(scratch) / "verified.bin"
         tool("objcopy", "-O", "binary", elf, output)
         assert image == output.read_bytes(), mode
-    print(f"PASS: {mode}: HAL_Init precedes clocks/peripherals; strong MSP/COMP/DAC/BRK/EXTI/TIM7, real KEY1 shutdown callback; R75 typed protocol queue, no double division/printf runtime; "
+    print(f"PASS: {mode}: HAL_Init precedes clocks/peripherals; strong MSP/COMP/DAC/TIM7, real LL ADC/TIM/Break/KEY1 paths and no generic HAL IRQ dispatchers; typed protocol queue, no double division/printf runtime; "
           f"ELF/BIN match ({len(image)} B), SHA256 {hashlib.sha256(image).hexdigest()}")

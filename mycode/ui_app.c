@@ -14,78 +14,292 @@
 #include "motor_sampling.h"
 #include "st_hso.h"
 #include "ui_fonts.h"
-#include "ui_icons.h"
+#include "ui_resources_packed.h"
 #include "motor_control.h"
 #include "ui_input.h"
 #include "protocol.h"
 #include "motor_sixstep.h"
 #include "motor_detect.h"
 
-/* Application-owned text shares a base address. Descriptor offsets refer to
- * these permanent buffers; font resources and UI core ownership are unchanged. */
+/* Shared application literals also serve menus, dialogs and custom pages. */
+#define UI_STRINGS(X) \
+    X(text_drive,"Drive") \
+    X(text_output,"Output") \
+    X(text_feedback,"Feedback") \
+    X(text_bus,"Bus") \
+    X(text_motor,"Motor") \
+    X(text_mode,"Mode") \
+    X(text_vref,"VREF") \
+    X(text_refstate,"RefState") \
+    X(text_work,"Work") \
+    X(text_axis,"Axis") \
+    X(text_aligned,"Aligned") \
+    X(text_run_stop,"Run Stop") \
+    X(text_stop_age,"Stop Age") \
+    X(text_stop_err,"Stop Err") \
+    X(text_sync_err,"Sync Err") \
+    X(text_6s_zc,"6S ZC") \
+    X(text_6step_duty,"6Step Duty") \
+    X(text_6step_emf,"6Step EMF") \
+    X(text_6step_speed,"6Step Speed") \
+    X(text_6s_hold,"6S Hold") \
+    X(text_6s_start_emf,"6S Start EMF") \
+    X(text_6s_cause,"6S Cause") \
+    X(text_6s_sample,"6S Sample") \
+    X(text_input,"Input") \
+    X(text_target,"Target") \
+    X(text_speed,"Speed") \
+    X(text_speed_rpm,"Speed rpm") \
+    X(text_iq,"Iq") \
+    X(text_id,"Id") \
+    X(text_phase_a,"Phase A") \
+    X(text_phase_b,"Phase B") \
+    X(text_elec,"Elec") \
+    X(text_mech,"Mech") \
+    X(text_elec_0_360,"Elec 0-360") \
+    X(text_mech_0_360,"Mech 0-360") \
+    X(text_e2_probe,"E2 Probe") \
+    X(text_e2_total,"E2 Total") \
+    X(text_m1_ibus,"M1 IBUS") \
+    X(text_ibus_limit,"IBUS Limit") \
+    X(text_ibus_dac,"IBUS DAC") \
+    X(text_ibus_thresh,"IBUS Thresh") \
+    X(text_ibus_trips,"IBUS Trips") \
+    X(text_comp4,"COMP4") \
+    X(text_i_trip,"I Trip") \
+    X(text_iu_r_z,"IU R/Z") \
+    X(text_iv_r_z,"IV R/Z") \
+    X(text_iw_r_z,"IW R/Z") \
+    X(text_chiprev,"ChipRev") \
+    X(text_busraw,"BusRaw") \
+    X(text_buscnt,"BusCnt") \
+    X(text_framecnt,"FrameCnt") \
+    X(text_adc1err,"ADC1Err") \
+    X(text_adc2err,"ADC2Err") \
+    X(text_ref_r_c,"Ref R/C") \
+    X(text_refcnt,"RefCnt") \
+    X(text_referr,"RefErr") \
+    X(text_hso,"HSO") \
+    X(text_h_min,"H Min") \
+    X(text_h_max,"H Max") \
+    X(text_h_zero,"H Zero") \
+    X(text_stop_coast,"Stop / coast") \
+    X(text_h_reverse,"H Reverse") \
+    X(text_stop_first,"Stop first") \
+    X(text_h_gate,"H Gate") \
+    X(text_h_qual,"H Qual") \
+    X(text_h_reject,"H Reject") \
+    X(text_h_reset,"H Reset") \
+    X(text_h_r_deg,"H R Deg") \
+    X(text_h_r_hz,"H R Hz") \
+    X(text_h_r_emf,"H R EMF%") \
+    X(text_h_r_drift,"H R Drift") \
+    X(text_h_off_mv,"H Off mV") \
+    X(text_h_lim_mv,"H Lim mV") \
+    X(text_h_lost,"H Lost") \
+    X(text_h_speed,"H Speed") \
+    X(text_h_error,"H Error") \
+    X(text_h_flux,"H Flux") \
+    X(text_h_actual,"H Actual") \
+    X(text_h_time,"H Time") \
+    X(text_cmd,"Cmd") \
+    X(text_m1_model,"M1 Model") \
+    X(text_m2_model,"M2 Model") \
+    X(text_ctrl_max,"Ctrl Max") \
+    X(text_save_bus,"Save Bus") \
+    X(text_save_last,"Save Last") \
+    X(text_flash_err,"Flash Err") \
+    X(text_spi2_fault,"SPI2 Fault") \
+    X(text_spi2_reset,"SPI2 Reset") \
+    X(text_keyrpt,"KeyRpt") \
+    X(text_disperr,"DispErr") \
+    X(text_fw,"FW") \
+    X(text_firmware,"UI-R86-PC") \
+    X(text_mcu,"MCU") \
+    X(text_stm32g431,"STM32G431") \
+    X(text_control,"Control") \
+    X(text_10khz_foc,"10kHz FOC") \
+    X(text_encoder,"Encoder") \
+    X(text_mt6701,"MT6701") \
+    X(text_lcd,"LCD") \
+    X(text_st7735s,"ST7735S") \
+    X(text_ui,"UI") \
+    X(text_kk_ui,"KK_UI") \
+    X(text_keys,"Keys") \
+    X(text_6_keys,"6 keys") \
+    X(text_flash,"Flash") \
+    X(text_w25q64,"W25Q64") \
+    X(text_curr_loop,"Curr Loop") \
+    X(text_pos_speed,"Pos Speed") \
+    X(text_speed_limit,"Speed Limit") \
+    X(text_run_steps,"Run Steps") \
+    X(text_m1_protection,"M1 Protection") \
+    X(text_status_led,"Status LED") \
+    X(text_led_bright,"LED Bright") \
+    X(text_restore_defaults,"Restore Defaults") \
+    X(text_2804,"2804") \
+    X(text_4015,"4015") \
+    X(text_esc_auto,"ESC Auto") \
+    X(text_m1_detect,"M1 Detect") \
+    X(text_sensorless,"Sensorless") \
+    X(text_gear_ratio,"Gear Ratio") \
+    X(text_gear_offset,"Gear Offset") \
+    X(text_align_retry,"Align / Retry") \
+    X(text_hso_feedback,"HSO Feedback") \
+    X(text_six_step,"Six Step") \
+    X(text_motion,"Motion") \
+    X(text_adc,"ADC") \
+    X(text_system,"System") \
+    X(text_ibus_trip,"IBUS Trip") \
+    X(text_clear_ibus_trip,"Clear IBUS Trip")
 typedef struct {
-    char ibus_state[24],ibus_limit[24],ibus_voltage[24];
-    char ibus_code[16],ibus_trips[16],ibus_pin[8];
-    char mode[16];
+#define INFO_STRING_FIELD(name,text) char name[sizeof(text)];
+    UI_STRINGS(INFO_STRING_FIELD)
+#undef INFO_STRING_FIELD
+} UiStrings;
+static const UiStrings ui_strings={
+#define INFO_STRING_INIT(name,text) .name=text,
+    UI_STRINGS(INFO_STRING_INIT)
+#undef INFO_STRING_INIT
+};
+#undef UI_STRINGS
+static uint8_t home_icons[4][128];
+_Static_assert(sizeof(home_icons)==UI_RESOURCE_BYTES,"Regenerate the packed home icons");
+
+/* Trusted, generated Flash data expands once per UI reset, before KK_UI_Init.
+ * Back references may overlap; all storage and final pointers are static. */
+__attribute__((noinline,noclone)) static void init_ui_resources(void)
+{
+    const uint8_t *source=ui_resources_packed;
+    uint8_t *out=(uint8_t *)home_icons,*end=out+sizeof(home_icons);
+    unsigned flags=1U;
+    while (out<end) {
+        if (flags==1U) flags=*source++ | 256U;
+        if (flags&1U) {
+            unsigned token=*source++;
+            unsigned distance=(token&15U)+1U;
+            unsigned length=(token>>4U)+3U;
+            const uint8_t *match=out-distance;
+            do { *out++=*match++; } while (--length);
+        } else *out++=*source++;
+        flags>>=1U;
+    }
+}
+
+/* Application-owned text shares a base address. Descriptor offsets refer to
+ * these permanent buffers; font resources and UI core ownership are unchanged.
+ * Frequently addressed short buffers precede colder diagnostic buffers to
+ * keep measured Thumb address-setup costs down. This layout is never saved. */
+typedef struct {
+    char axis[4];
+    char motor[8];
+    char six_sample[4];
     char command[8];
-    char input[8];
-    char work[20],axis[4],m1[8],m2[8];
-    char sync[20],control_time[20],save[16];
-    char motor[8], motor_menu[20];
-    char settings[24],steps[20],loop_title[24];
-    char system[24],work_menu[24],save_state[24];
-    char status[20],groups[5][20];
-    char rpm[24],target_aux[24],elec_deg[24],mech_deg[24];
+    char run_stop[24];
+    char spi2_resets[8];
     char target_unit[12];
-    char hso_min[24],hso_max[24];
+    char stop_age[16];
+    char stop_errors[16];
+    char ibus_pin[8];
+    char input[8];
+    char m1[8];
+    char m2[8];
+    char output[8];
+    char enc_zero[16];
+    char enc_zpre[16];
+    char enc_zpost[16];
+    char reference[16];
+    char current_trip[24];
+    char bus[24];
+    char enc2[16];
+    char drive[16];
+    char enc_ztime[16];
+    char adc_revision[16];
+    char adc1_error[16];
+    char adc2_error[16];
+    char flash_error[16];
+    char spi2_fault[16];
+    char target_aux[24];
     char target[24];
+    char sync[20];
+    char control_time[20];
+    char ibus_state[24];
+    char mode[16];
+    char save[16];
+    char system[24];
+    char work_menu[24];
+    char save_state[24];
+    char rpm[24];
+    char elec_deg[24];
+    char mech_deg[24];
+    char hso_max[24];
+    char enc[16];
+    char enc2_err[16];
+    char enc_last[16];
+    char align[16];
+    char raw[16];
+    char err[16];
+    char ref_state[16];
+    char ref_raw[16];
+    char repeat[16];
+    char display_errors[16];
+    char hso[16];
+    char hso_error[24];
+    char hso_flux[24];
+    char hso_time[24];
+    char hso_gate[16];
+    char hso_qual[24];
+    char hso_lost[16];
+    char hso_reject[16];
+    char save_result[16];
+    char feedback[16];
+    char six_quality[24];
+    char six_start[24];
+    char six_reject[16];
+    char work[20];
+    char motor_menu[20];
+    char steps[20];
+    char status[20];
+    char ibus_limit[24];
+    char ibus_voltage[24];
+    char settings[24];
+    char loop_title[24];
+    char hso_min[24];
     char speed[24];
     char iq[24];
     char id[24];
-    char ia[24];
-    char ib[24];
-    char enc[16];
-    char enc2[16];
-    char enc2_err[16];
-    char drive[16];
-    char output[8];
-    char run_stop[24];
-    char stop_age[16], stop_errors[16];
-    char enc_crc[16], enc_field[16], enc_track[16];
-    char enc_spi[16], enc_frame[16], enc_age[24], enc_last[16];
-    char enc_zero[16], enc_zpre[16], enc_zpost[16], enc_ztime[16];
-    char current_adc[3][24];
-    char current_trip[24];
-    char adc_revision[16];
-    char align[16];
-    char raw[16];
+    char enc_age[24];
     char elec[24];
     char mech[24];
-    char err[16];
-    char bus[24];
+    char hso_speed[24];
+    char six_duty[24];
+    char six_bemf[24];
+    char six_speed[24];
+    char six_start_emf[24];
+    char groups[5][20];
+    char current_adc[3][24];
+    char ibus_code[16];
+    char ibus_trips[16];
+    char enc_crc[16];
+    char enc_field[16];
+    char enc_track[16];
+    char enc_spi[16];
+    char enc_frame[16];
     char bus_raw[16];
     char bus_count[16];
     char frame_count[16];
-    char adc1_error[16];
-    char adc2_error[16];
-    char reference[16], ref_state[16], ref_raw[16];
-    char ref_count[16], ref_errors[16];
-    char repeat[16];
-    char display_errors[16];
-    char hso[16], hso_speed[24], hso_error[24];
-    char hso_flux[24], hso_time[24];
-    char hso_gate[16], hso_qual[24], hso_lost[16];
+    char ref_count[16];
+    char ref_errors[16];
+    char hso_resets[16];
+    char hso_rangle[16];
+    char hso_rfreq[16];
+    char hso_remf[16];
+    char hso_rdrift[16];
+    char hso_offset[16];
+    char hso_olimit[16];
+    char ia[24];
+    char ib[24];
     char hso_flux_actual[24];
-    char hso_reject[16],hso_resets[16];
-    char hso_rangle[16],hso_rfreq[16],hso_remf[16],hso_rdrift[16];
-    char hso_offset[16],hso_olimit[16];
-    char save_result[16];
-    char flash_error[16];
-    char spi2_fault[16],spi2_resets[8];
-    char feedback[16];
-    char six_quality[24],six_duty[24],six_bemf[24],six_speed[24];
-    char six_start[24],six_start_emf[24];
-    char six_reject[16],six_sample[4];
 } UiTexts;
 static UiTexts texts;
 static char s_txt_axes[2][10]={"Axis M1  ","Axis M2  "};
@@ -145,7 +359,7 @@ static uint32_t s_run_lr_pressed_at,s_run_lr_released_at;
 
 /* ---------- 动态文本 ---------- */
 static MotorProfile s_profiles[2];
-static const char *const group_names[]={"Drive","Motion","Encoder","ADC"};
+static const char *const group_names[]={ui_strings.text_drive,ui_strings.text_motion,ui_strings.text_encoder,ui_strings.text_adc};
 /* ui_app_reset always seeds these before KK_UI_Init; no Flash zero padding. */
 /* Stable application-owned labels; update only their axis digit. */
 static char s_enc_labels[][9]={"E1 State","E1 CRC","E1 Field","E1 Track",
@@ -160,9 +374,12 @@ static uint32_t s_settings_save_at;
 static const char *s_pending_toast;
 
 static MotorAxis s_view_axis;
-__attribute__((noinline)) static MotorAxisSnapshot ui_state(void)
+/* UI reads run only in the main loop. Immediate field queries use one scratch
+ * snapshot; callers needing a stable full value read into their own local.
+ * Never retain this pointer across another ui_state() call. */
+__attribute__((noinline)) static const MotorAxisSnapshot *ui_state(void)
 {
-    MotorAxisSnapshot state; MotorControl_GetAxis(s_view_axis,&state); return state;
+    static MotorAxisSnapshot state; MotorControl_GetAxis(s_view_axis,&state); return &state;
 }
 static void ui_encoder_diag(MT6701Diagnostics *out)
 {
@@ -295,40 +512,64 @@ __attribute__((noinline)) static void fmt_pair(char *buf,unsigned first,unsigned
     UiText_Format(buf,16U,"%u / %u",first,second);
 }
 
-/* Fixed application descriptors, not UI widgets/callbacks. Each row occupies
- * four bytes; memcpy permits both 16- and 32-bit source fields. */
+/* Fixed application descriptors: 12-bit text offset, 4-bit format, 8-bit
+ * snapshot offset. Decode bytes explicitly, without unaligned loads. */
 enum { VALUE_COUNT, VALUE_RAD, VALUE_AMP, VALUE_TENTH, VALUE_DEG,
-       VALUE_PERCENT, VALUE_MV, VALUE_MWB, VALUE_COUNT16 };
-typedef struct { uint16_t text_offset; uint8_t offset,format; } ValueRow;
-_Static_assert(sizeof(ValueRow)==4,"Compact display descriptor");
-_Static_assert(sizeof(UiTexts)<=UINT16_MAX,"Display buffer offsets");
+       VALUE_PERCENT, VALUE_MV, VALUE_MWB, VALUE_COUNT16, VALUE_VOLT,
+       VALUE_SPEED, VALUE_DUTY, VALUE_SIX_SPEED, VALUE_AXIS_SPEED, VALUE_RPM,
+       VALUE_ERROR_DEG, VALUE_FORMAT_COUNT };
+typedef struct { uint8_t text_low,text_high_format,offset; } ValueRow;
+_Static_assert(sizeof(ValueRow)==3,"Compact display descriptor");
+_Static_assert(sizeof(UiTexts)<=4096 && VALUE_FORMAT_COUNT<=16,"Display buffer offsets/formats");
 _Static_assert(sizeof(MotorAxisSnapshot)<=UINT8_MAX && sizeof(StHsoSnapshot)<=UINT8_MAX &&
-    sizeof(MT6701Diagnostics)<=UINT8_MAX && sizeof(MotorSamplingDiagnostics)<=UINT8_MAX,
+    sizeof(MT6701Diagnostics)<=UINT8_MAX && sizeof(MotorSamplingDiagnostics)<=UINT8_MAX &&
+    sizeof(SixStepSnapshot)<=UINT8_MAX,
     "Review source offsets before extending display snapshots");
-#define VALUE_ROW(type,member,field,format) {offsetof(UiTexts,field),offsetof(type,member),format}
+#define VALUE_ROW(type,member,field,format) {offsetof(UiTexts,field)&255U, \
+    (offsetof(UiTexts,field)>>8U)|((format)<<4U),offsetof(type,member)}
 __attribute__((noinline)) static void refresh_values(const void *snapshot,const ValueRow *rows,unsigned count)
 {
+    /* One byte per float format: unit:4, multiplier:3, hundredths:1. */
+    enum { UNIT_NONE, UNIT_RAD, UNIT_AMP, UNIT_MWB, UNIT_VOLT, UNIT_SPEED,
+           UNIT_PERCENT, UNIT_RPM, UNIT_DEG };
+    static const char *const units[]={NULL,"rad","A","mWb","V","rad/s","%","rpm","deg"};
+    static const float multipliers[]={1.0f,57.2957795f,100.0f,1000.0f,9.5492966f};
+#define VALUE_FORMAT(unit,multiplier,hundredths) ((unit)|((multiplier)<<4U)|((hundredths)<<7U))
+    static const uint8_t formats[VALUE_FORMAT_COUNT]={
+        [VALUE_RAD]=VALUE_FORMAT(UNIT_RAD,0,1),
+        [VALUE_AMP]=VALUE_FORMAT(UNIT_AMP,0,1),
+        [VALUE_TENTH]=VALUE_FORMAT(UNIT_NONE,0,0),
+        [VALUE_DEG]=VALUE_FORMAT(UNIT_NONE,1,0),
+        [VALUE_PERCENT]=VALUE_FORMAT(UNIT_NONE,2,0),
+        [VALUE_MV]=VALUE_FORMAT(UNIT_NONE,3,0),
+        [VALUE_MWB]=VALUE_FORMAT(UNIT_MWB,3,0),
+        [VALUE_VOLT]=VALUE_FORMAT(UNIT_VOLT,0,1),
+        [VALUE_SPEED]=VALUE_FORMAT(UNIT_SPEED,0,0),
+        [VALUE_DUTY]=VALUE_FORMAT(UNIT_PERCENT,2,0),
+        [VALUE_SIX_SPEED]=VALUE_FORMAT(UNIT_SPEED,0,0),
+        [VALUE_AXIS_SPEED]=VALUE_FORMAT(UNIT_SPEED,0,0),
+        [VALUE_RPM]=VALUE_FORMAT(UNIT_RPM,4,0),
+        [VALUE_ERROR_DEG]=VALUE_FORMAT(UNIT_DEG,1,0),
+    };
+#undef VALUE_FORMAT
     for(unsigned i=0;i<count;++i) {
         const ValueRow *row=&rows[i];
         const char *source=(const char *)snapshot+row->offset;
-        char *destination=(char *)&texts+row->text_offset;
-        if(row->format==VALUE_COUNT || row->format==VALUE_COUNT16) {
+        unsigned format=row->text_high_format>>4U;
+        char *destination=(char *)&texts+row->text_low+((row->text_high_format&15U)<<8U);
+        if(format==VALUE_COUNT || format==VALUE_COUNT16) {
             uint32_t value=0;
-            memcpy(&value,source,row->format==VALUE_COUNT ? sizeof(value) : sizeof(uint16_t));
+            memcpy(&value,source,format==VALUE_COUNT ? sizeof(value) : sizeof(uint16_t));
             fmt_counter(destination,value);
         } else {
             float value; memcpy(&value,source,sizeof(value));
-            const char *unit=NULL;
-            unsigned places=1;
-            switch(row->format) {
-            case VALUE_RAD: unit="rad"; places=2; break;
-            case VALUE_AMP: unit="A"; places=2; break;
-            case VALUE_DEG: value*=57.2957795f; break;
-            case VALUE_PERCENT: value*=100.0f; break;
-            case VALUE_MV: value*=1000.0f; break;
-            case VALUE_MWB: value*=1000.0f; unit="mWb"; break;
-            default: break;
-            }
+            if (!isfinite(value)) { strcpy(destination,"--"); continue; }
+            unsigned spec=formats[format];
+            const char *unit=units[spec&15U];
+            unsigned places=spec>>7U ? 2U : 1U;
+            value*=multipliers[(spec>>4U)&7U];
+            if ((format==VALUE_SIX_SPEED && SixStep_IsGeneric()) ||
+                (format==VALUE_AXIS_SPEED && esc_view())) unit="Hz";
             UiText_Fixed(destination,unit ? 24U : 16U,
                 places==2 ? to_x100(value) : to_x10(value),places,unit);
         }
@@ -357,13 +598,11 @@ static void fmt_run_aux(char *buf,int32_t value)
 static const char *mode_name(JerryFOC_ControlMode mode)
 {
     switch (mode) {
-    case JERRYFOC_MODE_VELOCITY: return "Speed";
+    case JERRYFOC_MODE_VELOCITY: return ui_strings.text_speed;
     case JERRYFOC_MODE_POSITION: return "Position";
     default: return "Torque";
     }
 }
-
-static const char *drive_status_text(void) { return ui_state().status; }
 
 static void refresh_save_state(void)
 {
@@ -381,7 +620,7 @@ __attribute__((noinline)) static void axis_title(char *text,const char *suffix)
 
 static void refresh_texts(void)
 {
-    const MotorAxisSnapshot state=ui_state();
+    MotorAxisSnapshot state; MotorControl_GetAxis(s_view_axis,&state);
     strcpy(texts.work,MotorControl_WorkText());
     UiText_Format(texts.command,sizeof(texts.command),"%d",(int)Protocol_GetControlResult());
     strcpy(texts.input,MotorControl_InputText(s_view_axis));
@@ -404,7 +643,7 @@ static void refresh_texts(void)
     s_hso_choice=MotorControl_HsoAllowed();
     s_six_choice=MotorControl_SixStepAllowed();
     strcpy(texts.motor,esc_view() ? "ESC" : MotorParams_GetAxis(s_view_axis)->name);
-    axis_title(texts.motor_menu,"Motor");
+    axis_title(texts.motor_menu,ui_strings.text_motor);
     axis_title(texts.settings,"Settings");
     axis_title(texts.steps,"Steps");
     axis_title(texts.status,"Status");
@@ -413,7 +652,7 @@ static void refresh_texts(void)
     fmt_unit(texts.hso_min,hso_min_x10(),10,"rad/s");
     fmt_unit(texts.hso_max,hso_max_x10(),10,"rad/s");
     if (hso_max_x10()<hso_min_x10()) strcpy(texts.hso_max,"No run range");
-    axis_title(texts.loop_title,"Curr Loop");
+    axis_title(texts.loop_title,ui_strings.text_curr_loop);
     UiText_Format(texts.system,sizeof(texts.system),"System: %s",MotorControl_WorkText());
     UiText_Format(texts.work_menu,sizeof(texts.work_menu),"Mode: %s",MotorControl_WorkText());
     for (unsigned i=0;i<MOTOR_WORK_COUNT;++i)
@@ -444,9 +683,6 @@ static void refresh_texts(void)
         break;
     }
 
-    fmt_unit(texts.speed, to_x10(state.velocity), 10, esc_view() ? "Hz" : "rad/s");
-    fmt_unit(texts.rpm,to_x10(state.velocity*9.5492966f),10,"rpm");
-    if(esc_view()) strcpy(texts.rpm,"--");
     if (state.mode==JERRYFOC_MODE_VELOCITY) {
         strcpy(texts.target_unit,"Target rpm");
         fmt_unit(texts.target_aux,to_x10(state.target_velocity*9.5492966f),10,"rpm");
@@ -460,6 +696,8 @@ static void refresh_texts(void)
     fmt_degrees(texts.mech_deg,state.position);
 
     static const ValueRow motion_values[]={
+        VALUE_ROW(MotorAxisSnapshot,velocity,speed,VALUE_AXIS_SPEED),
+        VALUE_ROW(MotorAxisSnapshot,velocity,rpm,VALUE_RPM),
         VALUE_ROW(MotorAxisSnapshot,iq,iq,VALUE_AMP),
         VALUE_ROW(MotorAxisSnapshot,id,id,VALUE_AMP),
         VALUE_ROW(MotorAxisSnapshot,ia,ia,VALUE_AMP),
@@ -468,6 +706,7 @@ static void refresh_texts(void)
         VALUE_ROW(MotorAxisSnapshot,position,mech,VALUE_RAD),
     };
     refresh_values(&state,motion_values,sizeof(motion_values)/sizeof(motion_values[0]));
+    if(esc_view()) strcpy(texts.rpm,"--");
 
     strcpy(texts.enc,
              (s_view_axis==MOTOR_AXIS_1 ? MT6701_IsHealthy()!=0U : state.healthy) ? "OK" : "ERROR");
@@ -477,7 +716,7 @@ static void refresh_texts(void)
              encoder2.healthy ? "OK" : encoder2.stopped ? "OFF" : "ERROR", (unsigned)encoder2.raw_angle);
     fmt_counter(texts.enc2_err,encoder2.errors);
     UiText_Format(texts.drive, sizeof(texts.drive), "%s",
-             drive_status_text());
+             state.status);
     StHsoSnapshot hso;
     StHso_GetSnapshot(&hso);
     strcpy(texts.feedback,(s_view_axis==MOTOR_AXIS_1 ? JerryFOC_getFeedbackText() : "ENCODER"));
@@ -486,11 +725,14 @@ static void refresh_texts(void)
     static const char *const reject_text[]={"-","PHASE EARLY","PHASE LATE","PERIOD LOW","PERIOD HIGH"};
     strcpy(texts.six_reject,reject_text[six.reject<=SIX_REJECT_LONG ? six.reject : 0]);
     strcpy(texts.six_sample,six.sampling_off ? "OFF" : "ON");
-    fmt_unit(texts.six_duty,to_x10(six.duty*100.0f),10,"%");
-    fmt_unit(texts.six_bemf,to_x100(six.bemf),100,"V");
-    fmt_unit(texts.six_speed,to_x10(six.velocity),10,SixStep_IsGeneric() ? "Hz" : "rad/s");
+    static const ValueRow six_values[]={
+        VALUE_ROW(SixStepSnapshot,duty,six_duty,VALUE_DUTY),
+        VALUE_ROW(SixStepSnapshot,bemf,six_bemf,VALUE_VOLT),
+        VALUE_ROW(SixStepSnapshot,velocity,six_speed,VALUE_SIX_SPEED),
+        VALUE_ROW(SixStepSnapshot,startup_emf,six_start_emf,VALUE_VOLT),
+    };
+    refresh_values(&six,six_values,sizeof(six_values)/sizeof(six_values[0]));
     UiText_Format(texts.six_start,sizeof(texts.six_start),"%u/500 ms",six.startup_ms);
-    fmt_unit(texts.six_start_emf,to_x100(six.startup_emf),100,"V");
     /* All reason literals fit these 16-byte application buffers. */
     strcpy(texts.hso_gate,StHso_ReasonText(JerryFOC_isHSOActive() ? hso.reason : hso.entry_reason));
     UiText_Format(texts.hso_qual, sizeof(texts.hso_qual), "%lu/%u ms %lu/20",
@@ -500,6 +742,8 @@ static void refresh_texts(void)
     strcpy(texts.hso_lost,JerryFOC_getHSOFaultText());
     strcpy(texts.hso_reject,StHso_ReasonText(hso.capture_reason));
     static const ValueRow hso_values[]={
+        VALUE_ROW(StHsoSnapshot,velocity_rad_s,hso_speed,VALUE_SPEED),
+        VALUE_ROW(StHsoSnapshot,angle_error_rad,hso_error,VALUE_ERROR_DEG),
         VALUE_ROW(StHsoSnapshot,capture_resets,hso_resets,VALUE_COUNT),
         VALUE_ROW(StHsoSnapshot,capture_angle_rad,hso_rangle,VALUE_DEG),
         VALUE_ROW(StHsoSnapshot,capture_frequency_error_hz,hso_rfreq,VALUE_TENTH),
@@ -512,10 +756,6 @@ static void refresh_texts(void)
     refresh_values(&hso,hso_values,sizeof(hso_values)/sizeof(hso_values[0]));
     strcpy(texts.hso,
              JerryFOC_hasHSOFault() ? "LOST" : StHso_StateText(hso.state));
-    fmt_unit(texts.hso_speed, to_x10(hso.velocity_rad_s), 10, "rad/s");
-    if (isfinite(hso.angle_error_rad)) {
-        fmt_unit(texts.hso_error, to_x10(hso.angle_error_rad * 57.2957795f), 10, "deg");
-    } else strcpy(texts.hso_error,"--"); /* Do not convert the startup NaN to integer. */
     UiText_Format(texts.hso_flux, sizeof(texts.hso_flux), "%lu uWb", (unsigned long)(hso.reference_flux_wb * 1000000.0f));
     UiText_Format(texts.hso_time, sizeof(texts.hso_time), "%lu us / %lu", (unsigned long)(hso.max_control_cycles / 170U), (unsigned long)hso.overruns);
     strcpy(texts.align,state.aligning ? "ALIGNING" : state.aligned ? "YES" : "NO");
@@ -617,213 +857,272 @@ static const KK_UI_HomePage home_pages[] = {
     {home_items, sizeof(home_items) / sizeof(home_items[0])},
 };
 
-static const KK_UI_MenuItem settings_items[] = {
-    {texts.system, KK_UI_MENU_PAGE, UI_PAGE_SYSTEM},
-    {"Curr Loop",  KK_UI_MENU_BOOL,   BOOL_CURRENT_LOOP},
-    {"Pos Speed",  KK_UI_MENU_INT,    INT_POSITION_SPEED},
-    {"Speed Limit", KK_UI_MENU_INT,   INT_SPEED_LIMIT},
-    {"Run Steps",  KK_UI_MENU_PAGE, UI_PAGE_RUN_STEPS},
-    {"M1 Protection",KK_UI_MENU_PAGE,UI_PAGE_PROTECTION},
-    {"Motor",      KK_UI_MENU_PAGE, UI_PAGE_MOTOR},
-    {"Status LED", KK_UI_MENU_BOOL, BOOL_LED},
-    {"LED Bright", KK_UI_MENU_INT, INT_LED_BRIGHT},
-    {texts.save_state, KK_UI_MENU_ACTION, EVT_SAVE_STATUS},
-    {"Restore Defaults", KK_UI_MENU_CONFIRM, CONFIRM_RESET},
-};
+/* Fixed information/menu resources are immutable after reset. Compact Flash
+ * references expand once into the public KK_UI types before KK_UI_Init.
+ * Regions: 0 UiTexts, 1 literals, 2 encoder names, 3 axis labels, 4 work labels.
+ * These are fixed application resources, with no heap or widget tree. */
 
-static const KK_UI_MenuItem motor_items[] = {
-    {"2804", KK_UI_MENU_CONFIRM, CONFIRM_MOTOR_2804},
-    {"4015", KK_UI_MENU_CONFIRM, CONFIRM_MOTOR_4015},
-    {"ESC Auto", KK_UI_MENU_CONFIRM, CONFIRM_MOTOR_ESC},
-    {"M1 Detect", KK_UI_MENU_PAGE, UI_PAGE_DETECT},
+typedef struct { uint16_t name,value; } InfoRowRef;
+_Static_assert(sizeof(InfoRowRef)==4,"Compact information row");
+_Static_assert(sizeof(UiTexts)<4096 && sizeof(UiStrings)<4096 && sizeof(s_enc_labels)<4096 &&
+    sizeof(s_txt_axes)<4096 && sizeof(s_txt_work_items)<4096,"UI resource reference offsets");
+#define INFO_TEXT(field) offsetof(UiTexts,field)
+#define INFO_LITERAL(field) (4096U|offsetof(UiStrings,field))
+#define INFO_ENCODER(index) (8192U+sizeof(s_enc_labels[0])*(index))
+#define INFO_AXIS(index) (12288U+sizeof(s_txt_axes[0])*(index))
+#define INFO_WORK(index) (16384U+sizeof(s_txt_work_items[0])*(index))
+enum {
+    drive_rows_START=0, drive_rows_COUNT=15,
+    sixstep_rows_START=drive_rows_START+drive_rows_COUNT, sixstep_rows_COUNT=8,
+    motion_rows_START=sixstep_rows_START+sixstep_rows_COUNT, motion_rows_COUNT=13,
+    encoder_rows_START=motion_rows_START+motion_rows_COUNT, encoder_rows_COUNT=16,
+    adc_rows_START=encoder_rows_START+encoder_rows_COUNT, adc_rows_COUNT=19,
+    hso_rows_START=adc_rows_START+adc_rows_COUNT, hso_rows_COUNT=21,
+    diagnostics_rows_START=hso_rows_START+hso_rows_COUNT, diagnostics_rows_COUNT=11,
+    about_rows_START=diagnostics_rows_START+diagnostics_rows_COUNT, about_rows_COUNT=9,
+    INFO_ROW_COUNT=about_rows_START+about_rows_COUNT
 };
-
-static const KK_UI_MenuItem system_items[] = {
-    {texts.work_menu, KK_UI_MENU_PAGE, UI_PAGE_WORK},
-    {s_txt_axes[0], KK_UI_MENU_ACTION, EVT_FOCUS_M1},
-    {s_txt_axes[1], KK_UI_MENU_ACTION, EVT_FOCUS_M2},
-    {"Sensorless", KK_UI_MENU_PAGE, UI_PAGE_SENSORLESS},
-    {"Gear Ratio", KK_UI_MENU_INT, INT_GEAR_RATIO},
-    {"Gear Offset", KK_UI_MENU_INT, INT_GEAR_OFFSET},
-    {"Align / Retry", KK_UI_MENU_ACTION, EVT_ALIGN},
+static const InfoRowRef info_refs[]={
+    /* drive_rows */
+    {INFO_LITERAL(text_drive),INFO_TEXT(drive)},
+    {INFO_LITERAL(text_output),INFO_TEXT(output)},
+    {INFO_LITERAL(text_feedback),INFO_TEXT(feedback)},
+    {INFO_LITERAL(text_bus),INFO_TEXT(bus)},
+    {INFO_LITERAL(text_motor),INFO_TEXT(motor)},
+    {INFO_LITERAL(text_mode),INFO_TEXT(mode)},
+    {INFO_LITERAL(text_vref),INFO_TEXT(reference)},
+    {INFO_LITERAL(text_refstate),INFO_TEXT(ref_state)},
+    {INFO_LITERAL(text_work),INFO_TEXT(work)},
+    {INFO_LITERAL(text_axis),INFO_TEXT(axis)},
+    {INFO_LITERAL(text_aligned),INFO_TEXT(align)},
+    {INFO_LITERAL(text_run_stop),INFO_TEXT(run_stop)},
+    {INFO_LITERAL(text_stop_age),INFO_TEXT(stop_age)},
+    {INFO_LITERAL(text_stop_err),INFO_TEXT(stop_errors)},
+    {INFO_LITERAL(text_sync_err),INFO_TEXT(sync)},
+    /* sixstep_rows */
+    {INFO_LITERAL(text_6s_zc),INFO_TEXT(six_quality)},
+    {INFO_LITERAL(text_6step_duty),INFO_TEXT(six_duty)},
+    {INFO_LITERAL(text_6step_emf),INFO_TEXT(six_bemf)},
+    {INFO_LITERAL(text_6step_speed),INFO_TEXT(six_speed)},
+    {INFO_LITERAL(text_6s_hold),INFO_TEXT(six_start)},
+    {INFO_LITERAL(text_6s_start_emf),INFO_TEXT(six_start_emf)},
+    {INFO_LITERAL(text_6s_cause),INFO_TEXT(six_reject)},
+    {INFO_LITERAL(text_6s_sample),INFO_TEXT(six_sample)},
+    /* motion_rows */
+    {INFO_LITERAL(text_input),INFO_TEXT(input)},
+    {INFO_LITERAL(text_target),INFO_TEXT(target)},
+    {INFO_TEXT(target_unit),INFO_TEXT(target_aux)},
+    {INFO_LITERAL(text_speed),INFO_TEXT(speed)},
+    {INFO_LITERAL(text_speed_rpm),INFO_TEXT(rpm)},
+    {INFO_LITERAL(text_iq),INFO_TEXT(iq)},
+    {INFO_LITERAL(text_id),INFO_TEXT(id)},
+    {INFO_LITERAL(text_phase_a),INFO_TEXT(ia)},
+    {INFO_LITERAL(text_phase_b),INFO_TEXT(ib)},
+    {INFO_LITERAL(text_elec),INFO_TEXT(elec)},
+    {INFO_LITERAL(text_mech),INFO_TEXT(mech)},
+    {INFO_LITERAL(text_elec_0_360),INFO_TEXT(elec_deg)},
+    {INFO_LITERAL(text_mech_0_360),INFO_TEXT(mech_deg)},
+    /* encoder_rows */
+    {INFO_ENCODER(0),INFO_TEXT(enc)},
+    {INFO_ENCODER(1),INFO_TEXT(enc_crc)},
+    {INFO_ENCODER(2),INFO_TEXT(enc_field)},
+    {INFO_ENCODER(3),INFO_TEXT(enc_track)},
+    {INFO_ENCODER(4),INFO_TEXT(enc_spi)},
+    {INFO_ENCODER(5),INFO_TEXT(enc_frame)},
+    {INFO_ENCODER(6),INFO_TEXT(enc_age)},
+    {INFO_ENCODER(7),INFO_TEXT(enc_last)},
+    {INFO_ENCODER(8),INFO_TEXT(raw)},
+    {INFO_ENCODER(9),INFO_TEXT(err)},
+    {INFO_ENCODER(10),INFO_TEXT(enc_zero)},
+    {INFO_ENCODER(11),INFO_TEXT(enc_zpre)},
+    {INFO_ENCODER(12),INFO_TEXT(enc_zpost)},
+    {INFO_ENCODER(13),INFO_TEXT(enc_ztime)},
+    {INFO_LITERAL(text_e2_probe),INFO_TEXT(enc2)},
+    {INFO_LITERAL(text_e2_total),INFO_TEXT(enc2_err)},
+    /* adc_rows */
+    {INFO_LITERAL(text_m1_ibus),INFO_TEXT(ibus_state)},
+    {INFO_LITERAL(text_ibus_limit),INFO_TEXT(ibus_limit)},
+    {INFO_LITERAL(text_ibus_dac),INFO_TEXT(ibus_code)},
+    {INFO_LITERAL(text_ibus_thresh),INFO_TEXT(ibus_voltage)},
+    {INFO_LITERAL(text_ibus_trips),INFO_TEXT(ibus_trips)},
+    {INFO_LITERAL(text_comp4),INFO_TEXT(ibus_pin)},
+    {INFO_LITERAL(text_i_trip),INFO_TEXT(current_trip)},
+    {INFO_LITERAL(text_iu_r_z),INFO_TEXT(current_adc[0])},
+    {INFO_LITERAL(text_iv_r_z),INFO_TEXT(current_adc[1])},
+    {INFO_LITERAL(text_iw_r_z),INFO_TEXT(current_adc[2])},
+    {INFO_LITERAL(text_chiprev),INFO_TEXT(adc_revision)},
+    {INFO_LITERAL(text_busraw),INFO_TEXT(bus_raw)},
+    {INFO_LITERAL(text_buscnt),INFO_TEXT(bus_count)},
+    {INFO_LITERAL(text_framecnt),INFO_TEXT(frame_count)},
+    {INFO_LITERAL(text_adc1err),INFO_TEXT(adc1_error)},
+    {INFO_LITERAL(text_adc2err),INFO_TEXT(adc2_error)},
+    {INFO_LITERAL(text_ref_r_c),INFO_TEXT(ref_raw)},
+    {INFO_LITERAL(text_refcnt),INFO_TEXT(ref_count)},
+    {INFO_LITERAL(text_referr),INFO_TEXT(ref_errors)},
+    /* hso_rows */
+    {INFO_LITERAL(text_hso),INFO_TEXT(hso)},
+    {INFO_LITERAL(text_h_min),INFO_TEXT(hso_min)},
+    {INFO_LITERAL(text_h_max),INFO_TEXT(hso_max)},
+    {INFO_LITERAL(text_h_zero),INFO_LITERAL(text_stop_coast)},
+    {INFO_LITERAL(text_h_reverse),INFO_LITERAL(text_stop_first)},
+    {INFO_LITERAL(text_h_gate),INFO_TEXT(hso_gate)},
+    {INFO_LITERAL(text_h_qual),INFO_TEXT(hso_qual)},
+    {INFO_LITERAL(text_h_reject),INFO_TEXT(hso_reject)},
+    {INFO_LITERAL(text_h_reset),INFO_TEXT(hso_resets)},
+    {INFO_LITERAL(text_h_r_deg),INFO_TEXT(hso_rangle)},
+    {INFO_LITERAL(text_h_r_hz),INFO_TEXT(hso_rfreq)},
+    {INFO_LITERAL(text_h_r_emf),INFO_TEXT(hso_remf)},
+    {INFO_LITERAL(text_h_r_drift),INFO_TEXT(hso_rdrift)},
+    {INFO_LITERAL(text_h_off_mv),INFO_TEXT(hso_offset)},
+    {INFO_LITERAL(text_h_lim_mv),INFO_TEXT(hso_olimit)},
+    {INFO_LITERAL(text_h_lost),INFO_TEXT(hso_lost)},
+    {INFO_LITERAL(text_h_speed),INFO_TEXT(hso_speed)},
+    {INFO_LITERAL(text_h_error),INFO_TEXT(hso_error)},
+    {INFO_LITERAL(text_h_flux),INFO_TEXT(hso_flux)},
+    {INFO_LITERAL(text_h_actual),INFO_TEXT(hso_flux_actual)},
+    {INFO_LITERAL(text_h_time),INFO_TEXT(hso_time)},
+    /* diagnostics_rows */
+    {INFO_LITERAL(text_cmd),INFO_TEXT(command)},
+    {INFO_LITERAL(text_m1_model),INFO_TEXT(m1)},
+    {INFO_LITERAL(text_m2_model),INFO_TEXT(m2)},
+    {INFO_LITERAL(text_ctrl_max),INFO_TEXT(control_time)},
+    {INFO_LITERAL(text_save_bus),INFO_TEXT(save)},
+    {INFO_LITERAL(text_save_last),INFO_TEXT(save_result)},
+    {INFO_LITERAL(text_flash_err),INFO_TEXT(flash_error)},
+    {INFO_LITERAL(text_spi2_fault),INFO_TEXT(spi2_fault)},
+    {INFO_LITERAL(text_spi2_reset),INFO_TEXT(spi2_resets)},
+    {INFO_LITERAL(text_keyrpt),INFO_TEXT(repeat)},
+    {INFO_LITERAL(text_disperr),INFO_TEXT(display_errors)},
+    /* about_rows */
+    {INFO_LITERAL(text_fw),INFO_LITERAL(text_firmware)},
+    {INFO_LITERAL(text_mcu),INFO_LITERAL(text_stm32g431)},
+    {INFO_LITERAL(text_motor),INFO_TEXT(motor)},
+    {INFO_LITERAL(text_control),INFO_LITERAL(text_10khz_foc)},
+    {INFO_LITERAL(text_encoder),INFO_LITERAL(text_mt6701)},
+    {INFO_LITERAL(text_lcd),INFO_LITERAL(text_st7735s)},
+    {INFO_LITERAL(text_ui),INFO_LITERAL(text_kk_ui)},
+    {INFO_LITERAL(text_keys),INFO_LITERAL(text_6_keys)},
+    {INFO_LITERAL(text_flash),INFO_LITERAL(text_w25q64)},
 };
-static const KK_UI_MenuItem sensorless_items[] = {
-    {"HSO Feedback", KK_UI_MENU_BOOL, BOOL_HSO},
-    {"Six Step", KK_UI_MENU_BOOL, BOOL_SIXSTEP},
-};
-static const KK_UI_MenuItem work_items[] = {
-    {s_txt_work_items[0], KK_UI_MENU_ACTION, EVT_WORK_BASE+MOTOR_WORK_SINGLE_M1},
-    {s_txt_work_items[1], KK_UI_MENU_ACTION, EVT_WORK_BASE+MOTOR_WORK_SINGLE_M2},
-    {s_txt_work_items[2], KK_UI_MENU_ACTION, EVT_WORK_BASE+MOTOR_WORK_INDEPENDENT},
-    {s_txt_work_items[3], KK_UI_MENU_ACTION, EVT_WORK_BASE+MOTOR_WORK_SYNC_SPEED},
-    {s_txt_work_items[4], KK_UI_MENU_ACTION, EVT_WORK_BASE+MOTOR_WORK_SYNC_POSITION},
-    {s_txt_work_items[5], KK_UI_MENU_ACTION, EVT_WORK_BASE+MOTOR_WORK_MASTER_M1},
-    {s_txt_work_items[6], KK_UI_MENU_ACTION, EVT_WORK_BASE+MOTOR_WORK_MASTER_M2},
-};
-
-static const KK_UI_MenuItem status_items[] = {
-    {"Drive",KK_UI_MENU_PAGE,UI_PAGE_DRIVE},
-    {"Motion",KK_UI_MENU_PAGE,UI_PAGE_MOTION},
-    {"Encoder",KK_UI_MENU_PAGE,UI_PAGE_ENCODER},
-    {"ADC",KK_UI_MENU_PAGE,UI_PAGE_ADC},
-    {"HSO",KK_UI_MENU_PAGE,UI_PAGE_HSO},
-    {"Six Step",KK_UI_MENU_PAGE,UI_PAGE_SIXSTEP},
-    {"System",KK_UI_MENU_PAGE,UI_PAGE_DIAGNOSTICS},
-    {s_txt_axes[0],KK_UI_MENU_ACTION,EVT_FOCUS_M1},
-    {s_txt_axes[1],KK_UI_MENU_ACTION,EVT_FOCUS_M2},
-};
-static const KK_UI_MenuItem protection_items[] = {
-    {"IBUS Trip",KK_UI_MENU_INT,INT_IBUS_LIMIT},
-    {"Clear IBUS Trip",KK_UI_MENU_CONFIRM,CONFIRM_IBUS_CLEAR},
-    {texts.ibus_state,KK_UI_MENU_ACTION,EVT_IBUS_STATUS},
-};
-
-static const KK_UI_MenuPage menu_pages[] = {
-    {texts.settings, settings_items, settings_states,
-     sizeof(settings_items) / sizeof(settings_items[0])},
-    {texts.motor_menu, motor_items, motor_states,
-     sizeof(motor_items) / sizeof(motor_items[0])},
-    {"System", system_items, NULL, sizeof(system_items)/sizeof(system_items[0])},
-    {"Work Mode", work_items, NULL, sizeof(work_items)/sizeof(work_items[0])},
-    {texts.status,status_items,NULL,sizeof(status_items)/sizeof(status_items[0])},
-    {"M1 Protection",protection_items,protection_states,sizeof(protection_items)/sizeof(protection_items[0])},
-    {"M1 Sensorless",sensorless_items,sensorless_states,sizeof(sensorless_items)/sizeof(sensorless_items[0])},
-};
-
-static const KK_UI_InfoRow drive_rows[] = {
-    {"Drive",   texts.drive},
-    {"Output",  texts.output},
-    {"Feedback",texts.feedback},
-    {"Bus",     texts.bus},
-    {"Motor",   texts.motor},
-    {"Mode",    texts.mode},
-    {"VREF",    texts.reference},
-    {"RefState",texts.ref_state},
-    {"Work",texts.work},
-    {"Axis",texts.axis},
-    {"Aligned", texts.align},
-    {"Run Stop",texts.run_stop},
-    {"Stop Age",texts.stop_age},
-    {"Stop Err",texts.stop_errors},
-    {"Sync Err",texts.sync},
-};
-static const KK_UI_InfoRow sixstep_rows[] = {
-    {"6S ZC",texts.six_quality}, {"6Step Duty",texts.six_duty},
-    {"6Step EMF",texts.six_bemf}, {"6Step Speed",texts.six_speed},
-    {"6S Hold",texts.six_start}, {"6S Start EMF",texts.six_start_emf},
-    {"6S Cause",texts.six_reject}, {"6S Sample",texts.six_sample},
-};
-
-static const KK_UI_InfoRow motion_rows[] = {
-    {"Input",texts.input},
-    {"Target",  texts.target},
-    {texts.target_unit,texts.target_aux},
-    {"Speed",   texts.speed},
-    {"Speed rpm",texts.rpm},
-    {"Iq",      texts.iq},
-    {"Id",      texts.id},
-    {"Phase A", texts.ia},
-    {"Phase B", texts.ib},
-    {"Elec",    texts.elec},
-    {"Mech",    texts.mech},
-    {"Elec 0-360",texts.elec_deg}, {"Mech 0-360",texts.mech_deg},
-};
-
-static const KK_UI_InfoRow encoder_rows[] = {
-    {s_enc_labels[0], texts.enc},
-    {s_enc_labels[1], texts.enc_crc},
-    {s_enc_labels[2], texts.enc_field},
-    {s_enc_labels[3], texts.enc_track},
-    {s_enc_labels[4], texts.enc_spi},
-    {s_enc_labels[5], texts.enc_frame},
-    {s_enc_labels[6], texts.enc_age},
-    {s_enc_labels[7], texts.enc_last},
-    {s_enc_labels[8], texts.raw},
-    {s_enc_labels[9], texts.err},
-    {s_enc_labels[10], texts.enc_zero},
-    {s_enc_labels[11], texts.enc_zpre},
-    {s_enc_labels[12], texts.enc_zpost},
-    {s_enc_labels[13], texts.enc_ztime},
-    {"E2 Probe",texts.enc2},
-    {"E2 Total",texts.enc2_err},
-};
-
-static const KK_UI_InfoRow adc_rows[] = {
-    {"M1 IBUS",texts.ibus_state},
-    {"IBUS Limit",texts.ibus_limit}, {"IBUS DAC",texts.ibus_code},
-    {"IBUS Thresh",texts.ibus_voltage}, {"IBUS Trips",texts.ibus_trips}, {"COMP4",texts.ibus_pin},
-    {"I Trip",  texts.current_trip},
-    {"IU R/Z",  texts.current_adc[0]},
-    {"IV R/Z",  texts.current_adc[1]},
-    {"IW R/Z",  texts.current_adc[2]},
-    {"ChipRev", texts.adc_revision},
-    {"BusRaw",  texts.bus_raw},
-    {"BusCnt",  texts.bus_count},
-    {"FrameCnt",texts.frame_count},
-    {"ADC1Err", texts.adc1_error},
-    {"ADC2Err", texts.adc2_error},
-    {"Ref R/C", texts.ref_raw},
-    {"RefCnt",  texts.ref_count},
-    {"RefErr",  texts.ref_errors},
-};
-
-static const KK_UI_InfoRow hso_rows[] = {
-    {"HSO",     texts.hso},
-    {"H Min",texts.hso_min}, {"H Max",texts.hso_max},
-    {"H Zero","Stop / coast"}, {"H Reverse","Stop first"},
-    {"H Gate",  texts.hso_gate},
-    {"H Qual",  texts.hso_qual},
-    {"H Reject",texts.hso_reject},
-    {"H Reset",texts.hso_resets},
-    {"H R Deg",texts.hso_rangle},
-    {"H R Hz",texts.hso_rfreq},
-    {"H R EMF%",texts.hso_remf},
-    {"H R Drift",texts.hso_rdrift},
-    {"H Off mV",texts.hso_offset},
-    {"H Lim mV",texts.hso_olimit},
-    {"H Lost",  texts.hso_lost},
-    {"H Speed", texts.hso_speed},
-    {"H Error", texts.hso_error},
-    {"H Flux",  texts.hso_flux},
-    {"H Actual",texts.hso_flux_actual},
-    {"H Time",  texts.hso_time},
-};
-
-static const KK_UI_InfoRow diagnostics_rows[] = {
-    {"Cmd",texts.command},
-    {"M1 Model",texts.m1},
-    {"M2 Model",texts.m2},
-    {"Ctrl Max",texts.control_time},
-    {"Save Bus",texts.save},
-    {"Save Last",texts.save_result},
-    {"Flash Err",texts.flash_error},
-    {"SPI2 Fault",texts.spi2_fault},
-    {"SPI2 Reset",texts.spi2_resets},
-    {"KeyRpt",  texts.repeat},
-    {"DispErr", texts.display_errors},
-};
-
-static const KK_UI_InfoRow about_rows[] = {
-    {"FW",      "UI-R81-CF"},
-    {"MCU",     "STM32G431"},
-    {"Motor",   texts.motor},
-    {"Control", "10kHz FOC"},
-    {"Encoder", "MT6701"},
-    {"LCD",     "ST7735S"},
-    {"UI",      "KK_UI"},
-    {"Keys",    "6 keys"},
-    {"Flash",   "W25Q64"},
-};
+_Static_assert(sizeof(info_refs)/sizeof(info_refs[0])==INFO_ROW_COUNT,"Resource row counts");
+#undef INFO_ENCODER
+static KK_UI_InfoRow info_rows[INFO_ROW_COUNT];
+__attribute__((noinline,noclone)) static const char *info_pointer(uint16_t reference)
+{
+    static const char *const bases[]={(const char *)&texts,(const char *)&ui_strings,(const char *)s_enc_labels,(const char *)s_txt_axes,(const char *)s_txt_work_items};
+    return bases[reference>>12U]+(reference&4095U);
+}
+static void init_menu_items(void);
+__attribute__((noinline,noclone)) static void init_info_rows(void)
+{
+    for (unsigned i=0;i<INFO_ROW_COUNT;++i) {
+        info_rows[i].name=info_pointer(info_refs[i].name);
+        info_rows[i].value=info_pointer(info_refs[i].value);
+    }
+    init_menu_items();
+}
 
 static const KK_UI_InfoPage info_pages[] = {
-    {texts.groups[0], drive_rows, sizeof(drive_rows) / sizeof(drive_rows[0])},
-    {"About",  about_rows,  sizeof(about_rows) / sizeof(about_rows[0])},
-    {texts.groups[1],motion_rows,sizeof(motion_rows)/sizeof(motion_rows[0])},
-    {texts.groups[2],encoder_rows,sizeof(encoder_rows)/sizeof(encoder_rows[0])},
-    {texts.groups[3],adc_rows,sizeof(adc_rows)/sizeof(adc_rows[0])},
-    {texts.groups[4],hso_rows,sizeof(hso_rows)/sizeof(hso_rows[0])},
-    {"System",diagnostics_rows,sizeof(diagnostics_rows)/sizeof(diagnostics_rows[0])},
-    {"M1 Six Step",sixstep_rows,sizeof(sixstep_rows)/sizeof(sixstep_rows[0])},
+    {texts.groups[0],&info_rows[drive_rows_START],drive_rows_COUNT},
+    {"About",&info_rows[about_rows_START],about_rows_COUNT},
+    {texts.groups[1],&info_rows[motion_rows_START],motion_rows_COUNT},
+    {texts.groups[2],&info_rows[encoder_rows_START],encoder_rows_COUNT},
+    {texts.groups[3],&info_rows[adc_rows_START],adc_rows_COUNT},
+    {texts.groups[4],&info_rows[hso_rows_START],hso_rows_COUNT},
+    {ui_strings.text_system,&info_rows[diagnostics_rows_START],diagnostics_rows_COUNT},
+    {"M1 Six Step",&info_rows[sixstep_rows_START],sixstep_rows_COUNT},
+};
+
+/* Four-byte source records expand once into the public menu item type. */
+typedef struct { uint16_t label; uint8_t type,ref; } MenuItemRef;
+_Static_assert(sizeof(MenuItemRef)==4 && UI_PAGE_DETECT<=UINT8_MAX &&
+    EVT_WORK_BASE+MOTOR_WORK_COUNT<=UINT8_MAX,"Compact menu references");
+enum {
+    settings_items_START=0, settings_items_COUNT=11,
+    motor_items_START=settings_items_START+settings_items_COUNT, motor_items_COUNT=4,
+    system_items_START=motor_items_START+motor_items_COUNT, system_items_COUNT=7,
+    sensorless_items_START=system_items_START+system_items_COUNT, sensorless_items_COUNT=2,
+    work_items_START=sensorless_items_START+sensorless_items_COUNT, work_items_COUNT=7,
+    status_items_START=work_items_START+work_items_COUNT, status_items_COUNT=9,
+    protection_items_START=status_items_START+status_items_COUNT, protection_items_COUNT=3,
+    MENU_ITEM_COUNT=protection_items_START+protection_items_COUNT
+};
+static const MenuItemRef menu_refs[]={
+    /* settings_items */
+    {INFO_TEXT(system),KK_UI_MENU_PAGE,UI_PAGE_SYSTEM},
+    {INFO_LITERAL(text_curr_loop),KK_UI_MENU_BOOL,BOOL_CURRENT_LOOP},
+    {INFO_LITERAL(text_pos_speed),KK_UI_MENU_INT,INT_POSITION_SPEED},
+    {INFO_LITERAL(text_speed_limit),KK_UI_MENU_INT,INT_SPEED_LIMIT},
+    {INFO_LITERAL(text_run_steps),KK_UI_MENU_PAGE,UI_PAGE_RUN_STEPS},
+    {INFO_LITERAL(text_m1_protection),KK_UI_MENU_PAGE,UI_PAGE_PROTECTION},
+    {INFO_LITERAL(text_motor),KK_UI_MENU_PAGE,UI_PAGE_MOTOR},
+    {INFO_LITERAL(text_status_led),KK_UI_MENU_BOOL,BOOL_LED},
+    {INFO_LITERAL(text_led_bright),KK_UI_MENU_INT,INT_LED_BRIGHT},
+    {INFO_TEXT(save_state),KK_UI_MENU_ACTION,EVT_SAVE_STATUS},
+    {INFO_LITERAL(text_restore_defaults),KK_UI_MENU_CONFIRM,CONFIRM_RESET},
+    /* motor_items */
+    {INFO_LITERAL(text_2804),KK_UI_MENU_CONFIRM,CONFIRM_MOTOR_2804},
+    {INFO_LITERAL(text_4015),KK_UI_MENU_CONFIRM,CONFIRM_MOTOR_4015},
+    {INFO_LITERAL(text_esc_auto),KK_UI_MENU_CONFIRM,CONFIRM_MOTOR_ESC},
+    {INFO_LITERAL(text_m1_detect),KK_UI_MENU_PAGE,UI_PAGE_DETECT},
+    /* system_items */
+    {INFO_TEXT(work_menu),KK_UI_MENU_PAGE,UI_PAGE_WORK},
+    {INFO_AXIS(0),KK_UI_MENU_ACTION,EVT_FOCUS_M1},
+    {INFO_AXIS(1),KK_UI_MENU_ACTION,EVT_FOCUS_M2},
+    {INFO_LITERAL(text_sensorless),KK_UI_MENU_PAGE,UI_PAGE_SENSORLESS},
+    {INFO_LITERAL(text_gear_ratio),KK_UI_MENU_INT,INT_GEAR_RATIO},
+    {INFO_LITERAL(text_gear_offset),KK_UI_MENU_INT,INT_GEAR_OFFSET},
+    {INFO_LITERAL(text_align_retry),KK_UI_MENU_ACTION,EVT_ALIGN},
+    /* sensorless_items */
+    {INFO_LITERAL(text_hso_feedback),KK_UI_MENU_BOOL,BOOL_HSO},
+    {INFO_LITERAL(text_six_step),KK_UI_MENU_BOOL,BOOL_SIXSTEP},
+    /* work_items */
+    {INFO_WORK(0),KK_UI_MENU_ACTION,EVT_WORK_BASE+MOTOR_WORK_SINGLE_M1},
+    {INFO_WORK(1),KK_UI_MENU_ACTION,EVT_WORK_BASE+MOTOR_WORK_SINGLE_M2},
+    {INFO_WORK(2),KK_UI_MENU_ACTION,EVT_WORK_BASE+MOTOR_WORK_INDEPENDENT},
+    {INFO_WORK(3),KK_UI_MENU_ACTION,EVT_WORK_BASE+MOTOR_WORK_SYNC_SPEED},
+    {INFO_WORK(4),KK_UI_MENU_ACTION,EVT_WORK_BASE+MOTOR_WORK_SYNC_POSITION},
+    {INFO_WORK(5),KK_UI_MENU_ACTION,EVT_WORK_BASE+MOTOR_WORK_MASTER_M1},
+    {INFO_WORK(6),KK_UI_MENU_ACTION,EVT_WORK_BASE+MOTOR_WORK_MASTER_M2},
+    /* status_items */
+    {INFO_LITERAL(text_drive),KK_UI_MENU_PAGE,UI_PAGE_DRIVE},
+    {INFO_LITERAL(text_motion),KK_UI_MENU_PAGE,UI_PAGE_MOTION},
+    {INFO_LITERAL(text_encoder),KK_UI_MENU_PAGE,UI_PAGE_ENCODER},
+    {INFO_LITERAL(text_adc),KK_UI_MENU_PAGE,UI_PAGE_ADC},
+    {INFO_LITERAL(text_hso),KK_UI_MENU_PAGE,UI_PAGE_HSO},
+    {INFO_LITERAL(text_six_step),KK_UI_MENU_PAGE,UI_PAGE_SIXSTEP},
+    {INFO_LITERAL(text_system),KK_UI_MENU_PAGE,UI_PAGE_DIAGNOSTICS},
+    {INFO_AXIS(0),KK_UI_MENU_ACTION,EVT_FOCUS_M1},
+    {INFO_AXIS(1),KK_UI_MENU_ACTION,EVT_FOCUS_M2},
+    /* protection_items */
+    {INFO_LITERAL(text_ibus_trip),KK_UI_MENU_INT,INT_IBUS_LIMIT},
+    {INFO_LITERAL(text_clear_ibus_trip),KK_UI_MENU_CONFIRM,CONFIRM_IBUS_CLEAR},
+    {INFO_TEXT(ibus_state),KK_UI_MENU_ACTION,EVT_IBUS_STATUS},
+};
+_Static_assert(sizeof(menu_refs)/sizeof(menu_refs[0])==MENU_ITEM_COUNT,"Resource row counts");
+static KK_UI_MenuItem menu_items[MENU_ITEM_COUNT];
+#undef INFO_TEXT
+#undef INFO_LITERAL
+#undef INFO_AXIS
+#undef INFO_WORK
+__attribute__((noinline,noclone)) static void init_menu_items(void)
+{
+    for (unsigned i=0;i<MENU_ITEM_COUNT;++i) {
+        menu_items[i].label=info_pointer(menu_refs[i].label);
+        menu_items[i].type=(KK_UI_MenuItemType)menu_refs[i].type;
+        menu_items[i].ref=menu_refs[i].ref;
+    }
+}
+static const KK_UI_MenuPage menu_pages[] = {
+    {texts.settings, &menu_items[settings_items_START], settings_states,
+     settings_items_COUNT},
+    {texts.motor_menu, &menu_items[motor_items_START], motor_states,
+     motor_items_COUNT},
+    {ui_strings.text_system, &menu_items[system_items_START], NULL, system_items_COUNT},
+    {"Work Mode", &menu_items[work_items_START], NULL, work_items_COUNT},
+    {texts.status,&menu_items[status_items_START],NULL,status_items_COUNT},
+    {ui_strings.text_m1_protection,&menu_items[protection_items_START],protection_states,protection_items_COUNT},
+    {"M1 Sensorless",&menu_items[sensorless_items_START],sensorless_states,sensorless_items_COUNT},
 };
 
 /* 下标 = 页面 ID - 1 */
@@ -851,18 +1150,18 @@ static const KK_UI_PageRoute routes[] = {
 
 static KK_UI_IntBinding int_bindings[] = {
     [INT_IBUS_LIMIT] = {"M1 IBUS Trip",&s_ibus_limit_ma,APP_IBUS_MIN_MA,APP_IBUS_MAX_MA,100U,"mA",EVT_IBUS_LIMIT},
-    [INT_GEAR_RATIO] = {"Gear Ratio", &s_ratio_x100,-1000,1000,1U,"%",EVT_GEAR},
-    [INT_GEAR_OFFSET] = {"Gear Offset", &s_offset_x100,-6283,6283,5U,"0.01rad",EVT_GEAR},
+    [INT_GEAR_RATIO] = {ui_strings.text_gear_ratio, &s_ratio_x100,-1000,1000,1U,"%",EVT_GEAR},
+    [INT_GEAR_OFFSET] = {ui_strings.text_gear_offset, &s_offset_x100,-6283,6283,5U,"0.01rad",EVT_GEAR},
     [INT_LED_BRIGHT] = {"LED Brightness", &s_led_brightness, 0, 100, 5U, "%", EVT_LED_CHANGED},
     [INT_POSITION_SPEED] = {"Position Speed", &s_position_speed, 1, APP_SPEED_LIMIT_DEFAULT, 1U, "rad/s", EVT_POSITION_SPEED_CHANGED},
-    [INT_SPEED_LIMIT] = {"Speed Limit", &s_speed_limit, 1, APP_SPEED_LIMIT_MAX, 1U, "rad/s", EVT_SPEED_LIMIT_CHANGED},
+    [INT_SPEED_LIMIT] = {ui_strings.text_speed_limit, &s_speed_limit, 1, APP_SPEED_LIMIT_MAX, 1U, "rad/s", EVT_SPEED_LIMIT_CHANGED},
 };
 
 static KK_UI_BoolBinding bool_bindings[] = {
     [BOOL_HSO] = {"M1 HSO Feedback", &s_hso_choice, EVT_FEEDBACK},
     [BOOL_SIXSTEP] = {"M1 6 Step", &s_six_choice, EVT_SIXSTEP},
     [BOOL_CURRENT_LOOP] = {texts.loop_title, &s_current_loop_display, EVT_CURRENT_LOOP_CHANGED},
-    [BOOL_LED]          = {"Status LED",   &s_led_enable,   EVT_LED_CHANGED},
+    [BOOL_LED]          = {ui_strings.text_status_led,   &s_led_enable,   EVT_LED_CHANGED},
 };
 
 static const KK_UI_ConfirmDesc confirm_descs[] = {
@@ -908,7 +1207,7 @@ static void stop_run(void)
     s_run_lr_key=0U;
     /* Entering/backing out of an idle Run page must not interrupt the
      * independent startup alignment. An explicit serial Stop still can. */
-    if (!s_run_active && ui_state().aligning) return;
+    if (!s_run_active && ui_state()->aligning) return;
     uint32_t primask = __get_PRIMASK();
     __disable_irq();
     /* Entering/editing a view cannot cancel a USB/UART-owned run. Explicit
@@ -1111,7 +1410,7 @@ static bool select_motor(MotorProfile profile)
      * Preserve that qualification before SelectProfile checks it; running
      * outputs still coast first and must qualify again before a retry. */
     bool independent_feedback=sensorless();
-    if (!independent_feedback || ui_state().active) stop_run();
+    if (!independent_feedback || ui_state()->active) stop_run();
     bool ok=profile==MOTOR_PROFILE_COUNT ? s_view_axis==MOTOR_AXIS_1 && MotorControl_SelectGeneric() :
         MotorControl_SelectProfile(s_view_axis,profile);
     if (!ok) {
@@ -1169,6 +1468,18 @@ static void service_run_lr(uint32_t now)
 }
 
 /* ---------- 公共接口 ---------- */
+/* Reset and Run entry seed the same stopped drafts. No command is applied. */
+__attribute__((noinline,noclone)) static void seed_run_drafts(void)
+{
+    s_run_throttle_pct=s_throttle_pct;
+    s_run_speed_x10=s_speed_x10;
+    if (sensorless()) s_run_speed_x10=hso_draft(s_run_speed_x10);
+    s_run_voltage_x100=s_voltage_x100;
+    s_run_position_x100=s_position_x100;
+    s_run_current_x100=s_confirmed_current_x100=0;
+    s_run_position_origin=ui_state()->position;
+}
+
 const KK_UI_App *ui_app_get(void)
 {
     return &s_app;
@@ -1176,6 +1487,8 @@ const KK_UI_App *ui_app_get(void)
 
 void ui_app_reset(uint32_t now_ms)
 {
+    init_ui_resources();
+    init_info_rows();
     s_global_stop_seen=false;
     clear_run_stop();
     AppStorage_Load();
@@ -1188,17 +1501,11 @@ void ui_app_reset(uint32_t now_ms)
 
     if (s_view_axis==MOTOR_AXIS_1) JerryFOC_useCurrentLoop(s_current_loop ? 1U : 0U);
 
-    s_run_mode = ui_state().mode;
-    s_run_speed_x10 = s_speed_x10;
-    if (sensorless()) s_run_speed_x10=hso_draft(s_run_speed_x10);
-    s_run_voltage_x100 = s_voltage_x100;
-    s_run_position_x100 = s_position_x100;
-
+    s_run_mode = ui_state()->mode;
     s_run_active = false;
     s_run_lr_key=0U;
     s_input_repeats = s_display_errors = 0U;
-    s_run_current_x100 = s_confirmed_current_x100 = 0;
-    s_run_position_origin = ui_state().position;
+    seed_run_drafts();
     s_settings_dirty = false;
     s_settings_save_at = now_ms;
     s_info_at = now_ms;
@@ -1269,7 +1576,7 @@ void ui_app_update(uint32_t now_ms)
     if (AppStorage_PollSaveResult(&save_ok))
         s_pending_toast = save_ok ? "Saved" : AppStorage_SaveErrorText();
 
-    uint8_t healthy = ui_state().healthy ? 1U : 0U;
+    uint8_t healthy = ui_state()->healthy ? 1U : 0U;
     if (s_last_healthy != 0xFFU && s_last_healthy != 0U && healthy == 0U) {
         AppStorage_Log(APP_LOG_ENCODER_ERROR, ui_encoder_errors());
     }
@@ -1286,9 +1593,9 @@ void ui_app_update(uint32_t now_ms)
          * A recovered encoder must not erase why the UI stopped the motor. */
         uint32_t mask = __get_PRIMASK();
         __disable_irq();
-        const MotorAxisSnapshot state=ui_state();
+        MotorAxisSnapshot state; MotorControl_GetAxis(s_view_axis,&state);
         const char *reason = NULL;
-        if (!state.ready) reason = drive_status_text();
+        if (!state.ready) reason = state.status;
         else if (!MotorSampling_IsAxisOutputRequested(s_view_axis) && strcmp(state.status,"READY")) reason=state.status;
         else if (!state.healthy) reason = MotorControl_EncoderLostText(s_view_axis);
         else if (!state.aligned) reason = "NOT ALIGNED";
@@ -1465,17 +1772,11 @@ void KK_UI_CustomOnEnter(KK_UI_PageId page)
         focus_axis(MotorControl_GetWork()==MOTOR_WORK_MASTER_M1 ? MOTOR_AXIS_2 : MOTOR_AXIS_1);
     else if (MotorControl_GetWork()==MOTOR_WORK_SINGLE_M1) focus_axis(MOTOR_AXIS_1);
     else if (MotorControl_GetWork()==MOTOR_WORK_SINGLE_M2) focus_axis(MOTOR_AXIS_2);
-    s_run_mode = ui_state().mode;
+    s_run_mode = ui_state()->mode;
     if (!MotorControl_ModeAllowed(s_run_mode))
         s_run_mode=fallback_mode();
     stop_run();
-    s_run_throttle_pct=s_throttle_pct;
-    s_run_speed_x10 = s_speed_x10;
-    if (sensorless()) s_run_speed_x10=hso_draft(s_run_speed_x10);
-    s_run_voltage_x100 = s_voltage_x100;
-    s_run_position_x100 = s_position_x100;
-    s_run_current_x100 = s_confirmed_current_x100 = 0;
-    s_run_position_origin = ui_state().position;
+    seed_run_drafts();
     s_last_live_at = HAL_GetTick();
 }
 
@@ -1550,7 +1851,7 @@ void KK_UI_CustomOnInput(KK_UI_PageId page, KK_UI_InputEvent event)
     if (page != UI_PAGE_RUN) return;
     if (event.action == KK_UI_INPUT_BACK) {
         if ((s_view_axis==MOTOR_AXIS_1 && JerryFOC_hasHSOFault())) (void)JerryFOC_useHSO(0U);
-        if (s_run_active || views[1U-s_view_axis].run_active || !ui_state().aligning)
+        if (s_run_active || views[1U-s_view_axis].run_active || !ui_state()->aligning)
             MotorControl_StopAll();
         s_run_active=views[0].run_active=views[1].run_active=false;
         stop_run(); /* 在退出动画开始前停止，不等待 OnLeave。 */
@@ -1579,7 +1880,7 @@ void KK_UI_CustomOnInput(KK_UI_PageId page, KK_UI_InputEvent event)
         return;
     }
     if (event.action == KK_UI_INPUT_OK) {
-        const MotorAxisSnapshot state=ui_state();
+        MotorAxisSnapshot state; MotorControl_GetAxis(s_view_axis,&state);
         bool changed = run_target_changed();
         if ((s_view_axis==MOTOR_AXIS_1 && JerryFOC_hasHSOFault())) {
             (void)JerryFOC_useHSO(0U);
@@ -1638,7 +1939,7 @@ void KK_UI_CustomOnInput(KK_UI_PageId page, KK_UI_InputEvent event)
         } else {
             if (*draft!=0 && ((*draft>0 && next<min) || (*draft<0 && next>-min))) next=0;
             else next=hso_draft(next);
-            if (MotorSampling_IsAxisOutputRequested(s_view_axis) && ui_state().target_velocity*(float)next<0.0f)
+            if (MotorSampling_IsAxisOutputRequested(s_view_axis) && ui_state()->target_velocity*(float)next<0.0f)
                 (void)KK_UI_ShowToast("Stop before reverse",1200U);
             else *draft=next;
         }
@@ -1653,11 +1954,18 @@ bool KK_UI_CustomOnTick(KK_UI_PageId page, uint32_t now_ms)
     return true;
 }
 
+/* Custom pages share the same footer geometry and clip lifetime. */
+__attribute__((noinline,noclone)) static void draw_footer(int16_t x,uint16_t width,const char *text)
+{
+    OLED_DrawHLine(x,65,width);
+    OLED_DrawUTF8((int16_t)(4+x),67,text);
+    OLED_ResetClipWindow();
+}
+
 void KK_UI_CustomOnDraw(KK_UI_PageId page, int16_t x_offset,
                         int16_t clip_x, uint16_t clip_width)
 {
     if (page != UI_PAGE_RUN && page != UI_PAGE_RUN_STEPS && page != UI_PAGE_DETECT) return;
-    const MotorAxisSnapshot motor_state=ui_state();
     const int16_t W = (int16_t)OLED_GetWidth();
     const int16_t H = (int16_t)OLED_GetHeight();
     char buf[40];
@@ -1666,7 +1974,7 @@ void KK_UI_CustomOnDraw(KK_UI_PageId page, int16_t x_offset,
     OLED_SetDrawMode(OLED_DRAW_SET);
     if (page == UI_PAGE_DETECT) {
         OLED_SetFont(ui_font_body);
-        OLED_DrawUTF8((int16_t)(4+x_offset),1,"M1 Detect");
+        OLED_DrawUTF8((int16_t)(4+x_offset),1,ui_strings.text_m1_detect);
         OLED_DrawHLine(x_offset,14,(uint16_t)W);
         UiText_Format(buf,sizeof(buf),"I test %ld mA",(long)s_detect_ma);
         OLED_DrawUTF8((int16_t)(4+x_offset),17,buf);
@@ -1686,10 +1994,9 @@ void KK_UI_CustomOnDraw(KK_UI_PageId page, int16_t x_offset,
         }
         if(s_detect_page && !(s_detect_page==1 ? s_detect_l : s_detect_flux)) strcpy(buf,"NO DATA");
         OLED_DrawUTF8((int16_t)(4+x_offset),49,s_detect_result ? buf : "NO DATA");
-        OLED_DrawHLine(x_offset,65,(uint16_t)W);
-        OLED_DrawUTF8((int16_t)(4+x_offset),67,MotorDetect_Active() ? "OK:Stop K2:Back" :
+        draw_footer(x_offset,(uint16_t)W,MotorDetect_Active() ? "OK:Stop K2:Back" :
             detected ? "OK:Save LR:View" : "OK:Start K2:Back");
-        OLED_ResetClipWindow(); return;
+        return;
     }
     if (page == UI_PAGE_RUN_STEPS) {
         /* Compact header keeps its existing baseline; Home uses the restored
@@ -1711,17 +2018,15 @@ void KK_UI_CustomOnDraw(KK_UI_PageId page, int16_t x_offset,
             OLED_DrawUTF8((int16_t)(5 + x_offset), y, mode_name((JerryFOC_ControlMode)i));
             const char *unit = i == JERRYFOC_MODE_VELOCITY ? "rad/s" :
                                i == JERRYFOC_MODE_POSITION ? "rad" : s_current_loop ? "A" : "V";
-            fmt_fixed(v, sizeof(v), s_step_drafts[i], i == JERRYFOC_MODE_VELOCITY ? 10 : 100);
-            UiText_Format(buf, sizeof(buf), "%s %s", v, unit);
+            UiText_Fixed(buf, sizeof(buf), s_step_drafts[i], i == JERRYFOC_MODE_VELOCITY ? 1U : 2U, unit);
             OLED_DrawUTF8((int16_t)(W - 5 - OLED_GetUTF8Width(buf) + x_offset), y, buf);
             OLED_SetDrawMode(OLED_DRAW_SET);
         }
-        OLED_DrawHLine(x_offset, 65, (uint16_t)W);
-        OLED_DrawUTF8((int16_t)(4 + x_offset), 67, "L/R:Step K2:Cancel");
-        OLED_ResetClipWindow();
+        draw_footer(x_offset,(uint16_t)W,"L/R:Step K2:Cancel");
         return;
     }
     /* Use the live, validated bus measurement in every Run variant. */
+    MotorAxisSnapshot motor_state; MotorControl_GetAxis(s_view_axis,&motor_state);
     OLED_SetFont(ui_font_body);
     const char *bus=!strcmp(texts.bus,"NO DATA") ? "--V" : texts.bus;
     OLED_DrawUTF8((int16_t)(W-4-OLED_GetUTF8Width(bus)+x_offset),1,bus);
@@ -1737,9 +2042,8 @@ void KK_UI_CustomOnDraw(KK_UI_PageId page, int16_t x_offset,
         OLED_DrawUTF8((int16_t)(4+x_offset),35,buf);
         OLED_DrawUTF8((int16_t)(4+x_offset),51,active ? "RUN: Following" :
             strcmp(texts.run_stop,"--") ? texts.run_stop : "STOP: OK to set zero");
-        OLED_DrawHLine(x_offset,65,(uint16_t)W);
-        OLED_DrawUTF8((int16_t)(4+x_offset),67,active ? "OK:Stop K2:Back" : "OK:Start K2:Back");
-        OLED_ResetClipWindow(); return;
+        draw_footer(x_offset,(uint16_t)W,active ? "OK:Stop K2:Back" : "OK:Start K2:Back");
+        return;
     }
     bool hso=s_view_axis==MOTOR_AXIS_1 && MotorControl_HsoAllowed();
     bool six=s_view_axis==MOTOR_AXIS_1 && MotorControl_SixStepAllowed();
@@ -1747,7 +2051,7 @@ void KK_UI_CustomOnDraw(KK_UI_PageId page, int16_t x_offset,
     bool independent=MotorControl_GetWork()==MOTOR_WORK_INDEPENDENT;
     bool starting=hso && StHso_IsStarting();
     const char *mode=oil ? "Throttle" : s_run_mode==JERRYFOC_MODE_TORQUE ? (s_current_loop ? "Iq(A)" : "Uq(V)") : mode_name(s_run_mode);
-    UiText_Format(buf,sizeof(buf),"M%u %s %s",(unsigned)s_view_axis+1U,mode,six ? (esc_view() ? "ESC" : "6STEP") : hso ? "HSO" : "ENC");
+    UiText_Format(buf,sizeof(buf),"M%u %s %s",(unsigned)s_view_axis+1U,mode,six ? (esc_view() ? "ESC" : "6STEP") : hso ? ui_strings.text_hso : "ENC");
     OLED_DrawUTF8((int16_t)(4+x_offset),1,buf);
     OLED_DrawHLine(x_offset,14,(uint16_t)W);
     bool changed=run_target_changed();
@@ -1827,10 +2131,8 @@ void KK_UI_CustomOnDraw(KK_UI_PageId page, int16_t x_offset,
         OLED_DrawUTF8((int16_t)(4+x_offset),51,buf);
         OLED_DrawUTF8(right,51,v);
     } else OLED_DrawUTF8((int16_t)(4+x_offset),51,state);
-    OLED_DrawHLine(x_offset,65,(uint16_t)W);
     const char *action=(hso || six) && *run_target(true)==0 ? "Stop" :
         s_run_active ? (changed ? "Apply" : "Stop") : "Start";
     UiText_Format(buf,sizeof(buf),independent ? "OK:%s LR hold K2:Back" : "OK:%s K2:Back",action);
-    OLED_DrawUTF8((int16_t)(4+x_offset),67,buf);
-    OLED_ResetClipWindow();
+    draw_footer(x_offset,(uint16_t)W,buf);
 }

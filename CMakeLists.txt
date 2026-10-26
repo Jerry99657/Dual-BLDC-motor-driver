@@ -37,6 +37,10 @@ add_executable(${CMAKE_PROJECT_NAME})
 # Add STM32CubeMX generated sources
 add_subdirectory(cmake/stm32cubemx)
 
+# Application HAL/LL interrupt module; official driver options are unchanged.
+target_sources(${CMAKE_PROJECT_NAME} PRIVATE mycode/motor_irq.c)
+set_source_files_properties(mycode/motor_irq.c PROPERTIES COMPILE_OPTIONS "-Os;-flto")
+
 # Keep debug symbols and useful stepping in application code. HAL and USB
 # drivers use size optimization so the Debug image fits the real 128 KiB Flash.
 target_compile_options(${CMAKE_PROJECT_NAME} PRIVATE $<$<CONFIG:Debug>:-Og>)

@@ -10,13 +10,14 @@
 #include <string.h>
 #define WEAK __attribute__((weak))
 #ifndef CONTROL_STUB_UI
-bool MotorDetect_Active(void) { return false; }
+bool control_stub_detect_active;
+bool MotorDetect_Active(void) { return control_stub_detect_active; }
 void MotorDetect_Stop(void) {}
 void MotorDetect_Reset(void) {}
 bool MotorDetect_Start(unsigned ma) { (void)ma; return false; }
 bool MotorDetect_Process(const MotorSampleFrame *frame) { (void)frame; return false; }
 void MotorDetect_Service(uint32_t now) { (void)now; }
-const char *MotorDetect_Status(void) { return "READY"; }
+const char *MotorDetect_Status(void) { return control_stub_detect_active ? "L PULSE" : "READY"; }
 uint32_t MotorDetect_Result(void) { return 0; }
 bool SixStep_IsGeneric(void) { return false; }
 void SixStep_SetGeneric(bool enable) { (void)enable; }
@@ -129,8 +130,10 @@ void MotorControl_Fast(void) {}
 void MotorControl_Outer(void) {}
 void MotorControl_PrepareOuter(void) {}
 void MotorControl_RecordCycles(uint32_t c) { (void)c; }
-void MotorControl_Telemetry(float d[25]) { (void)d; }
 MotorWorkMode MotorControl_GetWork(void) { return work; }
+bool MotorControl_AxisEnabled(MotorAxis axis) {
+    return work>=MOTOR_WORK_INDEPENDENT || (work==MOTOR_WORK_SINGLE_M1 ? axis==MOTOR_AXIS_1 : axis==MOTOR_AXIS_2);
+}
 MotorAxis MotorControl_GetFocus(void) { return focus; }
 void MotorControl_SetFocus(MotorAxis a) {
     focus=a;

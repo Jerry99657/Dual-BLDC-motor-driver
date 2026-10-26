@@ -455,6 +455,7 @@ void JerryFOC_alignSensor(void)
 
 float JerryFOC_getAngle(void)
 {
+    if (MotorControl_HsoAllowed()) return StHso_Position();
     if (foc.angle_source) {
         return foc.angle_source->getMechanicalAngle();
     }
@@ -702,6 +703,7 @@ float JerryFOC_getIq(void) { return iq_current; }
 float JerryFOC_getId(void) { return id_current; }
 float JerryFOC_getElectricalAngle(void)
 {
+    if (MotorControl_HsoAllowed()) return StHso_IsUsable() ? StHso_Angle() : NAN;
     if (MotorControl_HsoAllowed()) return StHso_ControlAngle();
     return foc.angle_source ? foc.angle_source->getElectricalAngle() : 0.0f;
 }
@@ -836,34 +838,38 @@ __RAM_FUNC void JerryFOC_run(void)
 /* ================= ADC 注入完成中断：10 kHz ================= */
 void HAL_ADCEx_InjectedConvCpltCallback(ADC_HandleTypeDef *hadc)
 {
-    if (hadc->Instance == ADC1) {
-        uint32_t control_start = DWT->CYCCNT;
-        if (!MotorSampling_Capture()) return;
-        /* SPI DMA 不再在完成中断里自触发；由 ADC 节拍固定为 10 kHz。 */
-        MT6701_Service();
-        MT6701_2_FastService();
-        const MotorSampleFrame *frame = MotorSampling_GetFrame();
-        if (!MotorDetect_Process(frame)) {
-            if (MotorControl_HsoAllowed()) StHso_Process(frame,
-                MotorSampling_IsReady() && MotorSampling_IsCalibrated(),0.0f,0.0f,false);
-            if (foc_fast_loop_enabled) {
-                JerryFOC_run();
-            }
-            MotorControl_Fast();
+    if (hadc->Instance == ADC1) JerryFOC_FastIRQ();
+}
+
+void JerryFOC_FastIRQ(void)
+{
+    uint32_t control_start = DWT->CYCCNT;
+    if (!MotorSampling_Capture()) return;
+    /* SPI DMA 不再在完成中断里自触发；由 ADC 节拍固定为 10 kHz。 */
+    MT6701_Service();
+    MT6701_2_FastService();
+    const MotorSampleFrame *frame = MotorSampling_GetFrame();
+    if (!MotorDetect_Process(frame)) {
+        if (MotorControl_HsoAllowed()) StHso_Process(frame,
+            MotorSampling_IsReady() && MotorSampling_IsCalibrated(),0.0f,0.0f,false);
+        if (foc_fast_loop_enabled) {
+            JerryFOC_run();
         }
-        StHso_RecordControlCycles(DWT->CYCCNT - control_start);
-        MotorControl_RecordCycles(DWT->CYCCNT - control_start);
-        service_hso_feedback();
+        MotorControl_Fast();
     }
+    StHso_RecordControlCycles(DWT->CYCCNT - control_start);
+    MotorControl_RecordCycles(DWT->CYCCNT - control_start);
+    service_hso_feedback();
 }
 
 /* ================= TIM2 1 ms 外环 ================= */
 void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 {
-    if (htim->Instance != TIM2) {
-        return;
-    }
+    if (htim->Instance == TIM2) JerryFOC_OuterIRQ();
+}
 
+void JerryFOC_OuterIRQ(void)
+{
     const float Ts = 0.001f;
 
     /* 编码器多圈机械角与速度只在这里更新 */
@@ -920,51 +926,5 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 
     MotorControl_Outer();
 
-    /* 每 10 ms 通过 USART1 + USB CDC 发送一帧 JustFloat */
-    static int print_counter = 0;
-    if (++print_counter >= 10) {
-        print_counter = 0;
-
-        struct Frame {
-            float fdata[25];
-            unsigned char tail[4];
-        } frame;
-
-        frame.fdata[0] = JerryFOC_Target_Velocity;      /* 目标速度 */
-        frame.fdata[1] = filtered_velocity_global;      /* 实际速度 */
-        frame.fdata[2] = iq_current;                    /* 实际 Iq */
-        frame.fdata[3] = id_current;                    /* 实际 Id */
-        frame.fdata[4] = phase_current_a;               /* A 相电流 */
-        frame.fdata[5] = phase_current_b;               /* B 相电流 */
-        frame.fdata[6] = JerryFOC_Target_Iq;            /* 目标 Iq */
-        frame.fdata[7] = foc.sensored_velocity_reference;   /* 斜坡后速度给定 */
-        frame.fdata[8] = (float)MT6701_IsHealthy();     /* 编码器健康 */
-        frame.fdata[9] = (float)MT6701_GetSampleAgeCycles();
-        frame.fdata[10] = (float)MT6701_GetRawAngle();  /* 14 位原始角度 */
-        frame.fdata[11] = (float)MT6701_GetErrorCounter();
-        frame.fdata[12] = foc.angle_source ?
-            foc.angle_source->getElectricalAngle() : 0.0f;
-        frame.fdata[13] = current_mechanical_angle;     /* 多圈机械角 */
-        frame.fdata[14] = (float)MT6701_GetStatus();    /* Mg[3:0] */
-        frame.fdata[15] = (float)AngleSrc_Encoder_IsAligned();
-        StHsoSnapshot hso;
-        StHso_GetSnapshot(&hso);
-        frame.fdata[16] = hso.angle_rad;
-        frame.fdata[17] = hso.velocity_rad_s;
-        frame.fdata[18] = hso.angle_error_rad;
-        frame.fdata[19] = hso.flux_wb;
-        frame.fdata[20] = hso.reference_flux_wb;
-        frame.fdata[21] = (float)hso.state;
-        frame.fdata[22] = (float)hso.max_control_cycles / 170.0f;
-        frame.fdata[23] = foc.hso_feedback_fault ? -1.0f : (float)foc.hso_feedback;
-        frame.fdata[24] = (float)Protocol_GetHsoResult();
-        MotorControl_Telemetry(frame.fdata);
-
-        frame.tail[0] = 0x00;
-        frame.tail[1] = 0x00;
-        frame.tail[2] = 0x80;
-        frame.tail[3] = 0x7f;
-
-        Telemetry_Send((const uint8_t*)&frame, (uint16_t)sizeof(frame));
-    }
+    /* R86 telemetry is produced in main-loop Telemetry_Service, including Detect. */
 }

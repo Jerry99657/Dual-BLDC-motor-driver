@@ -67,3 +67,7 @@ Desktop.ini
 !/build/Release/*.elf
 !/build/Release/*.bin
 !/build/Release/*.map
+# PC console runtime recordings and Python bytecode.
+pc_tool/records/
+__pycache__/
+*.pyc

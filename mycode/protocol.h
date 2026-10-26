@@ -2,6 +2,7 @@
 #define __PROTOCOL_H
 
 #include <stdint.h>
+#include <stdbool.h>
 
 #define PROTO_SRC_USART 0U
 #define PROTO_SRC_USB   1U
@@ -18,8 +19,10 @@ int8_t Protocol_GetHsoResult(void);
 void Protocol_Service(void);
 int8_t Protocol_GetControlResult(void);
 
-/* 遥测输出：USART1 立即发送，USB CDC 由主循环发送 */
+/* Main-loop only: USART1 nonblocking TX; USB latest-frame mailbox/service. */
 void Telemetry_Send(const uint8_t *data, uint16_t len);
 void Telemetry_Service(void);
+/* R86 binary v1, shared by USB CDC and USART1. Stream selection is volatile. */
+bool Telemetry_Select(const char *name);
 
 #endif /* __PROTOCOL_H */

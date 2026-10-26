@@ -28,7 +28,16 @@ static JerryFOC_ControlMode mode;
 static StHsoConfig config={2.3f,0.00086f,0,25000,0.019f};
 static unsigned configurations, learns, disables;
 static bool observer_enabled=true;
+#ifdef TELEMETRY_CAPTURE
+static uint8_t uart_capture[128];
+static uint16_t uart_capture_length;
+static uint8_t *uart_inflight;
+#endif
 HAL_StatusTypeDef HAL_UART_Transmit_IT(UART_HandleTypeDef *h,uint8_t *p,uint16_t n) {
+#ifdef TELEMETRY_CAPTURE
+    assert(n<=sizeof(uart_capture)); memcpy(uart_capture,p,n); uart_capture_length=n;
+    uart_inflight=p;
+#endif
     (void)h; (void)p; (void)n; return HAL_OK;
 }
 static bool usb_connected, usb_busy, complete_early, publish_during_submit;

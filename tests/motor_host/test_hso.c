@@ -233,6 +233,28 @@ static void command_floor_tests(void) {
     }
     puts("PASS: R76 real HSO command floor is 5 rad/s for both profiles/directions; immediately lower values rejected, zero/nonfinite and running reverse guards retained");
 }
+static void sensorless_position_tests(void) {
+    for(int direction=-1;direction<=1;direction+=2) {
+        init(); assert(isnan(StHso_Position()) && !state().position_valid);
+        StHsoConfig c; StHso_GetConfig(&c); c.flux_wb=0.012f;
+        assert(StHso_SetConfig(&c)); idle(); assert(StHso_Start((float)direction*10));
+        reach_control();
+        assert(state().position_valid && fabsf(StHso_Position())<0.001f);
+        float velocity=state().velocity_rad_s;
+        for(unsigned i=0;i<60000;++i) step();
+        assert(StHso_IsUsable());
+        /* Several mechanical revolutions, many +/-2pi electrical crossings.
+         * Ground truth comes from the independent stub's phase increments. */
+        assert(fabsf(StHso_Position()-velocity*6)<0.05f);
+        host_primask=1; (void)StHso_Position(); assert(host_primask==1); host_primask=0;
+        ++frame.sequence; step();
+        assert(!state().position_valid && isnan(StHso_Position()));
+        StHso_Stop(); idle(); assert(StHso_Start((float)direction*10)); reach_control();
+        assert(state().position_valid && fabsf(StHso_Position())<0.001f);
+        StHso_Stop(); assert(isnan(StHso_Position()));
+    }
+    puts("PASS: encoder-free HSO relative position: positive/negative multi-turn unwrap, first-lock origin, sequence-loss invalidation, restart re-zero and IRQ mask preservation");
+}
 int main(void) {
     command_floor_tests();
     init(); assert(!StHso_Start(0) && !StHso_Start(1) && !StHso_Start(NAN));
@@ -320,5 +342,6 @@ int main(void) {
     voltage_alignment_tests();
     puts("PASS: whole-electrical-cycle EMF averages, no favourable-sample selection, zero-mean phase ripple in both directions and low speed, finite candidate diagnostics, strength/direction/phase/variance rejection, timeout retains failing gate (ST binaries mocked)");
     puts("PASS: encoder-free RsDC-style current alignment, I/F flux bootstrap, qualified HSO takeover, both directions, current ramp, no-EMF/alignment timeout, sample/sequence/range/timing/angle faults, idle admission and explicit restart (ST binaries mocked)");
+    sensorless_position_tests();
     return 0;
 }

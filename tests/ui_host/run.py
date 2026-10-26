@@ -1,10 +1,12 @@
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 
 repo = Path(__file__).resolve().parents[2]
 output = repo / "build/ui-validation"
 output.mkdir(parents=True, exist_ok=True)
+subprocess.run([sys.executable, "scripts/pack_ui_resources.py", "--check"], cwd=repo, check=True)
 subprocess.run([shutil.which("gcc") or "gcc", "-std=c11", "-Wall", "-Wextra", "-Werror", "-O1", "-Imycode", "mycode/ui_text.c", "tests/ui_host/test_ui_text.c", "-o", str(output / "test_ui_text.exe")], cwd=repo, check=True)
 subprocess.run([str(output / "test_ui_text.exe")], cwd=repo, check=True)
 sources = list((repo / "mycode/kk_ui/src").glob("*.c"))

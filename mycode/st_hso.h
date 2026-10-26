@@ -53,6 +53,8 @@ typedef struct {
     float capture_angle_rad, capture_frequency_error_hz, capture_emf_ratio;
     float capture_drift_rad; /* Last reset: phase change from frozen window anchor. */
     float emf_offset_v,emf_offset_limit_v; /* Max absolute alpha/beta DC correction / per-axis limit, volts. */
+    float mechanical_position; /* Relative rad, zero at this run's first qualified CONTROL sample. */
+    bool position_valid; /* No encoder, no absolute/standstill/restart position guarantee. */
 } StHsoSnapshot;
 
 /* Call once before starting ADC interrupts. Owns CORDIC in ADC1 ISR only. */
@@ -81,6 +83,7 @@ bool StHso_IsUsable(void);
 bool StHso_CanTakeover(void); /* Qualified and strict current-frame entry checks. */
 float StHso_Angle(void);
 float StHso_Velocity(void);
+float StHso_Position(void); /* NAN outside continuous, qualified HSO CONTROL. */
 void StHso_RecordControlCycles(uint32_t cycles);
 
 #endif

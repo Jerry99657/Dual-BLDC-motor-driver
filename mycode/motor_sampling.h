@@ -89,6 +89,7 @@ bool MotorSampling_IsAxisOutputEnabled(MotorAxis axis);
 void MotorSampling_GetAxisDiagnostics(MotorAxis axis, MotorSamplingDiagnostics *out);
 const char *MotorSampling_GetAxisStatusText(MotorAxis axis);
 float MotorSampling_GetBusVoltage(void);
+bool MotorSampling_IsBusFresh(void);
 void MotorSampling_GetDiagnostics(MotorSamplingDiagnostics *out);
 const char *MotorSampling_GetStatusText(void);
 /* 单一 ADC1 JEOS 回调中调用；成功后才计算控制环。 */
@@ -109,6 +110,9 @@ bool MotorSampling_ClearIbusTrip(void);
  * main-loop control consumes it before a fresh explicit start may rearm.
  * Release alone never resumes; require a stable 30 ms release. */
 void MotorSampling_GlobalStopIRQ(void);
+/* The vector dispatcher acknowledges BIF/SBIF/B2IF before latching the fault. */
+void MotorSampling_BreakIRQ(void);
+void MotorSampling_AdcErrorIRQ(void); /* Shared ADC fault disconnects both bridges. */
 bool MotorSampling_IsGlobalStopped(void);
 bool MotorSampling_TakeGlobalStop(void);
 bool MotorSampling_ResumeGlobalStop(void);

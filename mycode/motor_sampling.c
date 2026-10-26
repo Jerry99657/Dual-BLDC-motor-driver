@@ -1,4 +1,6 @@
 #include "motor_sampling.h"
+#include "stm32g4xx_ll_gpio.h"
+#include "stm32g4xx_ll_exti.h"
 
 #include <string.h>
 #include "adc.h"
@@ -203,8 +205,8 @@ bool MotorSampling_IsGlobalStopped(void)
 {
     /* Read the pending edge too: a short press can finish while interrupts
      * are masked. Never let a later MOE/CCER write overtake that event. */
-    if ((HAL_GPIO_ReadPin(KEY1_GPIO_Port,KEY1_Pin)==GPIO_PIN_RESET ||
-        __HAL_GPIO_EXTI_GET_IT(KEY1_Pin)) && (!acquisition.global_stopped || acquisition.key_releasing))
+    if ((!LL_GPIO_IsInputPinSet(KEY1_GPIO_Port,KEY1_Pin) ||
+        LL_EXTI_IsActiveFlag_0_31(KEY1_Pin)) && (!acquisition.global_stopped || acquisition.key_releasing))
         MotorSampling_GlobalStopIRQ();
     return acquisition.global_stopped;
 }
@@ -235,8 +237,8 @@ static void global_stop_service(void)
 {
     uint32_t mask=__get_PRIMASK(); __disable_irq();
     if (MotorSampling_IsGlobalStopped() && !acquisition.key_releasing &&
-        HAL_GPIO_ReadPin(KEY1_GPIO_Port,KEY1_Pin)==GPIO_PIN_SET &&
-        !__HAL_GPIO_EXTI_GET_IT(KEY1_Pin)) {
+        LL_GPIO_IsInputPinSet(KEY1_GPIO_Port,KEY1_Pin) &&
+        !LL_EXTI_IsActiveFlag_0_31(KEY1_Pin)) {
         acquisition.key_released_at=HAL_GetTick(); acquisition.key_releasing=true;
     }
     __set_PRIMASK(mask);
@@ -266,8 +268,10 @@ static void ibus_poll(void)
 
 void HAL_TIMEx_BreakCallback(TIM_HandleTypeDef *htim)
 {
-    if (htim->Instance==htim1.Instance) ibus_latch(); /* HAL already cleared BIF. */
+    if (htim->Instance==htim1.Instance) MotorSampling_BreakIRQ();
 }
+
+void MotorSampling_BreakIRQ(void) { ibus_latch(); }
 
 static bool ibus_write_threshold(float reference)
 {
@@ -545,6 +549,7 @@ float MotorSampling_GetBusVoltage(void)
 {
     return bus_fresh() ? acquisition.bus_voltage : 0.0f;
 }
+bool MotorSampling_IsBusFresh(void) { return bus_fresh(); }
 
 void MotorSampling_GetAxisDiagnostics(MotorAxis axis, MotorSamplingDiagnostics *out)
 {
@@ -710,8 +715,10 @@ void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef *hadc)
 
 void HAL_ADC_ErrorCallback(ADC_HandleTypeDef *hadc)
 {
-    if (hadc->Instance == ADC1 || hadc->Instance == ADC2) trip(MOTOR_SAMPLE_FAULT_ADC);
+    if (hadc->Instance == ADC1 || hadc->Instance == ADC2) MotorSampling_AdcErrorIRQ();
 }
+
+void MotorSampling_AdcErrorIRQ(void) { trip(MOTOR_SAMPLE_FAULT_ADC); }
 
 void MotorSampling_Stop(void)
 {

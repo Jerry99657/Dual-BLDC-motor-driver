@@ -1,8 +1,8 @@
 #ifndef MOTOR_HOST_ADC_H
 #define MOTOR_HOST_ADC_H
 #include "main.h"
-typedef struct { uint32_t JDR1, JDR2, JDR3, JDR4, ISR; } ADC_TypeDef;
-typedef struct { ADC_TypeDef *Instance; uint32_t ErrorCode; } ADC_HandleTypeDef;
+typedef struct { uint32_t JDR1, JDR2, JDR3, JDR4, ISR, IER; } ADC_TypeDef;
+typedef struct { ADC_TypeDef *Instance; uint32_t ErrorCode,State; } ADC_HandleTypeDef;
 extern ADC_TypeDef adc1, adc2;
 extern ADC_HandleTypeDef hadc1, hadc2;
 #define ADC1 (&adc1)

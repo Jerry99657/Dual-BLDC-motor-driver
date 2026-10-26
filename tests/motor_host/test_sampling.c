@@ -22,7 +22,11 @@ void TIM7_IRQHandler(void);
 TIM_HandleTypeDef htim1 = {&tim1}, htim8 = {&tim8}, htim6 = {&tim6};
 uint32_t host_primask;
 GPIO_TypeDef gpio_key={.pins=KEY1_Pin};
+#ifdef MOTOR_IRQ_INTEGRATION
+HostExti host_exti;
+#else
 uint32_t host_exti_pending;
+#endif
 GPIO_PinState HAL_GPIO_ReadPin(GPIO_TypeDef *port,uint16_t pin) {
     return port->pins & pin ? GPIO_PIN_SET : GPIO_PIN_RESET;
 }
