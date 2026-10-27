@@ -1,19 +1,33 @@
 <!doctype html>
 <html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>双电机控制台 · R95</title>
+<title>双电机控制台 · R101</title>
 <style>
-:root{color-scheme:dark;font:14px system-ui,"Microsoft YaHei",sans-serif;background:#10161e;color:#dfe8f3}*{box-sizing:border-box}body{margin:0}header{padding:22px 28px;border-bottom:1px solid #2a3545;display:flex;align-items:center;justify-content:space-between}h1{font-size:23px;margin:0 0 5px}small,.muted{color:#97a9be}main{max-width:1500px;margin:auto;padding:20px;display:grid;gap:16px;grid-template-columns:minmax(0,1fr) 330px}.panel{background:#18222e;border:1px solid #2c3a4c;border-radius:10px;padding:16px}.wide{grid-column:1/-1}.row{display:flex;align-items:center;gap:9px;flex-wrap:wrap}.row+.row{margin-top:12px}button,select,input{font:inherit;border-radius:5px;border:1px solid #40526a;background:#202e3e;color:inherit;padding:8px 10px}button{cursor:pointer}button:hover{background:#30455e}button.primary{background:#2863a0;border-color:#5193d9}.stop{background:#a8323b;border-color:#d8646c;font-weight:bold;font-size:17px;width:100%;padding:14px;margin-bottom:15px}input[type=number]{width:100px}h2{font-size:16px;margin:0 0 14px}h3{font-size:14px;margin:15px 0 8px}#connection{padding:5px 10px;background:#233244;border-radius:20px}#connection.good{color:#79dfb6}#connection.bad{color:#ffad91}#metrics{line-height:1.9;white-space:pre-line}#error{min-height:22px;color:#ffb5a5;margin-top:8px;overflow-wrap:anywhere}#signals{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px;margin-bottom:12px;max-height:205px;overflow:auto}#signals label{overflow:hidden;font:12px ui-monospace,monospace;cursor:pointer}#signals input{margin-right:6px}canvas{display:block;width:100%;height:480px;background:#101a25;border-radius:6px}#latest{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:7px;margin-top:12px}.value{padding:9px;background:#202e3e;border-radius:5px;font:12px ui-monospace,monospace;overflow:hidden}.value b{display:block;color:#f0f5fb;font-size:16px;margin-top:5px}.status{display:grid;gap:10px}.axis{padding:12px;background:#202e3e;border-radius:6px;line-height:1.8}.axis strong{color:#88c0ff}.badtext{color:#ffaf9f}#log{height:145px;overflow:auto;font:12px ui-monospace,monospace;white-space:pre-wrap;color:#a9bdd4}#command{flex:1;min-width:160px}#replay{color:#ffce83}#file{max-width:230px;padding:4px}@media(max-width:950px){main{grid-template-columns:1fr}.wide{grid-column:auto}header{padding:16px}#signals{grid-template-columns:1fr}#latest{grid-template-columns:repeat(2,1fr)}}
+:root{color-scheme:dark;font:14px system-ui,"Microsoft YaHei",sans-serif;background:#10161e;color:#dfe8f3}*{box-sizing:border-box}body{margin:0}header{padding:22px 28px;border-bottom:1px solid #2a3545;display:flex;align-items:center;justify-content:space-between}h1{font-size:23px;margin:0 0 5px}small,.muted{color:#97a9be}main{max-width:1500px;margin:auto;padding:20px;display:grid;gap:16px;grid-template-columns:minmax(0,1fr) 330px}.panel{background:#18222e;border:1px solid #2c3a4c;border-radius:10px;padding:16px}.wide{grid-column:1/-1}.row{display:flex;align-items:center;gap:9px;flex-wrap:wrap}.row+.row{margin-top:12px}button,select,input{font:inherit;border-radius:5px;border:1px solid #40526a;background:#202e3e;color:inherit;padding:8px 10px}button{cursor:pointer}button:hover{background:#30455e}button.primary{background:#2863a0;border-color:#5193d9}.stop{background:#a8323b;border-color:#d8646c;font-weight:bold;font-size:17px;width:100%;padding:14px;margin-bottom:15px}input[type=number]{width:100px}h2{font-size:16px;margin:0 0 14px}h3{font-size:14px;margin:15px 0 8px}#connection{padding:5px 10px;background:#233244;border-radius:20px}#connection.good{color:#79dfb6}#connection.bad{color:#ffad91}#metrics{line-height:1.9;white-space:pre-line}#error{min-height:22px;color:#ffb5a5;margin-top:8px;overflow-wrap:anywhere}#signals{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px;margin-bottom:12px;max-height:205px;overflow:auto}#signals label{overflow:hidden;font:12px ui-monospace,monospace;cursor:pointer}#signals input{margin-right:6px}canvas{display:block;width:100%;height:480px;background:#101a25;border-radius:6px}.plot-latest{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:7px;margin-top:12px}.value{padding:9px;background:#202e3e;border-radius:5px;font:12px ui-monospace,monospace;overflow:hidden}.value b{display:block;color:#f0f5fb;font-size:16px;margin-top:5px}.status{display:grid;gap:10px}.axis{padding:12px;background:#202e3e;border-radius:6px;line-height:1.8}.axis strong{color:#88c0ff}.badtext{color:#ffaf9f}#log{height:145px;overflow:auto;font:12px ui-monospace,monospace;white-space:pre-wrap;color:#a9bdd4}#command{flex:1;min-width:160px}#replay{color:#ffce83}#file{max-width:230px;padding:4px}@media(max-width:950px){main{grid-template-columns:1fr}.wide{grid-column:auto}header{padding:16px}#signals{grid-template-columns:1fr}.plot-latest{grid-template-columns:repeat(2,1fr)}}
 .config-row{display:flex;justify-content:space-between;gap:20px;border-bottom:1px solid #2b3747;padding:9px 0}.config-row b{font-weight:500;text-align:right;overflow-wrap:anywhere}.console-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}.console-grid h3{margin-top:0}#configValues{max-height:410px;overflow:auto}#pending{color:#ffce7b}button:disabled{opacity:.45;cursor:default}@media(max-width:700px){.console-grid{grid-template-columns:1fr}}
+[hidden]{display:none!important}select:disabled,input:disabled{opacity:.6}.context-note{margin:10px 0 0;line-height:1.7}.context-note.pending{color:#ffce7b}details{margin-top:14px}summary{cursor:pointer;color:#97a9be}
+.plot-canvas{touch-action:none;user-select:none;cursor:grab}.plot-canvas:focus-visible{outline:2px solid #68b4ff;outline-offset:2px}.plot-wrap{position:relative;min-width:0}.plot-tip{position:absolute;pointer-events:none;background:#192a3cf0;border:1px solid #67809e;border-radius:6px;padding:9px;white-space:pre-wrap;overflow-wrap:anywhere;max-width:calc(100% - 12px);font:12px/1.7 ui-monospace,monospace;color:#edf5ff;box-shadow:0 3px 15px #0006}.plot-toolbar{margin-bottom:12px}.plot-toolbar button,.plot-toolbar select{padding:6px 8px}.plot-toolbar label{white-space:nowrap}.plot-history{margin-top:7px}.plot-history input{flex:1;min-width:100px;padding:0}.plot-help{font-size:12px;line-height:1.8;margin:9px 0 12px}
+#plotCanvases{display:grid;gap:14px;align-items:start;min-width:0}#plotCanvases.two-columns{grid-template-columns:repeat(2,minmax(0,1fr))}.plot-card{min-width:0;background:#131e2a;border:1px solid #34465c;border-radius:8px;padding:12px}.plot-card.active{border-color:#68b4ff;box-shadow:0 0 0 1px #68b4ff44}.plot-card[data-drop="true"]{outline:2px dashed #80e1af;outline-offset:-5px;background:#193329}.plot-card-heading{justify-content:space-between;margin-bottom:10px}.plot-card-heading h3{margin:0;color:#cce2ff}.plot-card-heading button,.plot-card-heading select{padding:5px 7px}.plot-channels{display:flex;gap:6px;flex-wrap:wrap;min-height:28px;margin-bottom:10px;font-size:11px}.plot-channel{display:inline-flex;align-items:center;gap:5px;max-width:100%;overflow-wrap:anywhere;border:1px solid #40526a;background:#203044;border-radius:5px;padding:3px 5px;cursor:grab}.plot-channel button{padding:0 4px;border:0;background:transparent;font-size:16px;color:#ccd8e7}.signal-source{display:flex;justify-content:space-between;align-items:center;gap:6px;cursor:grab;min-width:0}.signal-source label{flex:1;overflow-wrap:anywhere}.signal-source>span{font-size:10px;white-space:nowrap}.waiting{opacity:.55}.plot-grid.two-columns .plot-latest{grid-template-columns:repeat(2,minmax(0,1fr))}.plot-latest .value{overflow-wrap:anywhere}@media(max-width:700px){#plotCanvases.two-columns{grid-template-columns:minmax(0,1fr)}}
 </style>
-<header><div><h1>双电机控制台</h1><small>R100 · 离线单文件上位机 · USB CDC / USART</small></div><span id="connection">未连接</span></header>
+<style>
+.plot-card-heading input{width:95px;padding:5px 7px}.plot-card-heading input[aria-invalid="true"]{border-color:#ff8b97}.plot-card-heading small{font-size:11px}.plot-buffer{position:relative;height:58px;margin-top:10px;touch-action:none;user-select:none;cursor:pointer;min-width:0}.plot-buffer-track{position:absolute;left:24px;right:24px;top:29px;height:6px;background:#3b4d63;border-radius:3px;pointer-events:none}.plot-buffer-window{position:absolute;top:29px;height:6px;background:#80e1af;border-radius:3px;cursor:grab;min-width:1px}.plot-buffer-handle{position:absolute;top:20px;padding:0;width:24px;height:24px;border:0;background:transparent!important;cursor:ew-resize;touch-action:none}.plot-buffer-handle:focus-visible{outline:2px solid #a9d3ff;outline-offset:2px}.plot-buffer-handle::after{content:'';position:absolute;top:6px;width:12px;height:12px;border-radius:50%;box-shadow:0 0 0 2px #15202e}.plot-buffer-handle.start{transform:translateX(-100%)}.plot-buffer-handle.start::after{right:-6px;background:#ff6b7a}.plot-buffer-handle.end::after{left:-6px;background:#c78dff}.plot-buffer-handle.middle{top:0;transform:translateX(-50%);cursor:grab}.plot-buffer-handle.middle::after{left:6px;background:#51d8bc}.plot-buffer-handle.middle::before{content:'';position:absolute;left:11px;top:17px;height:14px;width:2px;background:#51d8bc99}.plot-buffer[data-drag="true"],.plot-buffer[data-drag="true"] button{cursor:grabbing}.plot-buffer-tip{bottom:calc(100% + 4px);left:12px;z-index:6;max-width:calc(100% - 24px)}.plot-buffer-stats{font:11px/1.7 ui-monospace,monospace;overflow-wrap:anywhere;margin:4px 0 9px}.plot-history button{padding:4px 7px}
+</style>
+<header><div><h1>双电机控制台</h1><small>R101 · 离线单文件上位机 · USB CDC / USART</small></div><span id="connection">未连接</span></header>
 <main>
 <section class="panel wide"><div class="row"><button id="connect" class="primary">选择串口并连接</button><button id="disconnect">断开通信</button><button id="demo">离线演示</button><span class="muted">115200 · 8N1 · USB CDC／USB 转 USART · Chrome／Edge</span></div>
-<div class="row"><select id="stream" aria-label="采集组"><option>Auto</option><option>M1</option><option>M2</option><option>FOC1</option><option>FOC2</option><option>ENC1</option><option>ENC2</option><option>HSO</option><option>Six</option><option>Off</option></select><button id="applyStream">应用采集组</button><button id="record">开始记录 CSV</button><button id="pause">暂停绘图</button><span id="recordPath" class="muted"></span></div><div id="error" role="status"></div></section>
-<section class="panel wide"><h2>工作模式 · 电机与驱动</h2><div class="console-grid"><div><h3>工作模式</h3><div class="row"><select id="workMode"><option value="SingleM1">单电机 M1</option><option value="SingleM2">单电机 M2</option><option value="Independent">双机独立</option><option value="SyncSpeed">双机同步速度</option><option value="SyncPosition">双机同步位置</option><option value="MasterM1">M1 主机 → M2 从机</option><option value="MasterM2">M2 主机 → M1 从机</option></select><button id="setWork">应用工作模式</button></div><p class="muted">切换使用板端原有停机条件，型号／编码器切换可能触发自动对齐。双机均为编码器有感驱动。</p></div><div><h3>电机与驱动</h3><div class="row"><select id="motorAxis"><option>M1</option><option>M2</option></select><select id="motorModel"><option>2804</option><option>4015</option><option>ESC</option></select><button id="setMotor">应用型号</button></div><div class="row"><select id="driveMode"><option value="Encoder">编码器 FOC</option><option value="HSO">HSO 无感</option><option value="SixStep">六步无感</option></select><button id="setDrive">应用 M1 驱动</button></div><small>ESC 通用仅用于 Single M1 六步油门控制。</small></div></div></section>
-<section class="panel"><div class="row" style="justify-content:space-between;margin-bottom:12px"><h2 style="margin:0">运行曲线</h2><span id="replay"></span><label>窗口 <select id="window"><option value="5">5 秒</option><option value="10" selected>10 秒</option><option value="20">20 秒</option></select></label></div><div id="signals"></div><canvas id="plot"></canvas><small>相同单位共用纵轴，不同单位分区显示；无效值断线显示。</small><div id="latest"></div></section>
+<div class="row"><select id="stream" aria-label="采集组"><option>Auto</option><option>M1</option><option>M2</option><option>FOC1</option><option>FOC2</option><option>ENC1</option><option>ENC2</option><option>HSO</option><option>Six</option><option>Off</option></select><button id="applyStream">应用采集组</button><button id="record">开始记录 CSV</button><button id="pause">暂停绘图</button><span id="recordPath" class="muted"></span></div><div class="row"><label>发送格式 <select id="wireFormat" aria-label="发送格式"><option value="Native">Native · 完整控制台</option><option value="JustFloat">JustFloat · VOFA+</option></select></label><button id="setFormat">切换格式</button><span id="formatState" class="muted">连接时先切换 Native；板子上电默认 JustFloat。</span></div><div id="error" role="status"></div></section>
+<section class="panel wide"><h2>工作模式 · 电机与驱动</h2><div class="console-grid"><div><h3>工作模式</h3><div class="row"><select id="workMode" aria-label="工作模式"><option value="SingleM1">单电机 M1</option><option value="SingleM2">单电机 M2</option><option value="Independent">双机独立</option><option value="SyncSpeed">双机同步速度</option><option value="SyncPosition">双机同步位置</option><option value="MasterM1">M1 主机 → M2 从机</option><option value="MasterM2">M2 主机 → M1 从机</option></select><button id="setWork">应用工作模式</button></div><p id="workState" class="context-note muted" role="status"></p><p class="muted">选择后点击应用，板端接受后才生效。切换沿用停机条件，型号切换可能触发对齐。</p></div><div><h3>电机与驱动</h3><div class="row"><select id="motorAxis" aria-label="设置电机"><option>M1</option><option>M2</option></select><select id="motorModel" aria-label="电机型号"><option>2804</option><option>4015</option><option>ESC</option></select><button id="setMotor">应用型号</button></div><div class="row"><span id="driveLabel">M1 驱动</span><select id="driveMode" aria-label="电机驱动"><option value="Encoder">编码器 FOC</option><option value="HSO">HSO 无感</option><option value="SixStep">六步无感</option></select><button id="setDrive">应用驱动</button></div><p id="motorNote" class="context-note muted"></p></div></div></section>
+<section class="panel" id="plotPanel"><div class="row" style="justify-content:space-between;margin-bottom:12px"><h2 style="margin:0">运行曲线</h2><span id="replay"></span></div>
+<div class="row"><label>画布数量（XY 轴组） <select id="plotCount" aria-label="画布数量"><option value="1">1</option><option value="2">2</option><option value="3">3</option><option value="4">4</option><option value="5">5</option><option value="6">6</option></select></label><button id="plotAdd">增加画布</button><button id="plotRemove">减少画布</button><label>排列 <select id="plotColumns" aria-label="画布排列"><option value="1">单列</option><option value="2">双列</option></select></label><button id="plotAddAll" title="把全部当前可用通道叠加到当前画布，保留其他画布的通道">全部加入当前画布</button></div>
+<div class="row"><label>当前画布 <select id="plotTarget" aria-label="当前画布"><option value="1">画布 1</option></select></label><span id="plotActiveHint" class="muted"></span></div>
+<p class="muted plot-help">每个画布只有一套 XY 轴，拖入的曲线直接叠加，共用时间 X 轴和数值 Y 轴，单位标在通道名中。通道可自由组合，也可放入多个画布；先选“当前画布”再勾选也能添加，点击 × 移除。</p><div id="signals"></div>
+<datalist id="plotWindowPresets"><option value="0.1"><option value="0.5"><option value="1"><option value="5"><option value="10"><option value="20"><option value="60"></datalist><div id="plotCanvases" class="plot-grid"></div><template id="plotTemplate"><div class="row plot-card-heading"><h3 id="plotTitle">画布 1</h3><button id="plotSelect" type="button">当前画布</button><label>预设窗口 <input id="window" type="number" min="0.001" max="86400" step="any" value="10" list="plotWindowPresets" aria-label="预设窗口秒数" title="0.001～86400 秒，回车或失焦应用"> 秒 <small id="plotPresetError" class="badtext" hidden>请输入 0.001～86400 秒</small></label><button id="plotClear" type="button">清空通道</button></div><div id="plotChannels" class="plot-channels"></div><div class="row plot-toolbar"><select id="plotTime" aria-label="时间轴显示"><option value="relative">最新点 = 0</option><option value="board">板端时间</option></select><select id="plotTool" aria-label="曲线工具"><option value="pan">拖动平移</option><option value="box">框选缩放</option></select><select id="plotAxis" aria-label="缩放和平移方向"><option value="xy">X + Y</option><option value="x">仅 X</option><option value="y">仅 Y</option></select><button id="plotZoomIn" aria-label="放大时间轴">＋</button><button id="plotZoomOut" aria-label="缩小时间轴">−</button><label><input id="plotAutoY" type="checkbox" checked> 自动 Y</label><button id="plotReset">复位视图</button><button id="plotPause">暂停此图</button><button id="plotFollow" class="primary">跟随最新</button></div>
+<div id="plotWrap" class="plot-wrap"><canvas id="plot" class="plot-canvas" tabindex="0" aria-label="运行曲线，可拖动平移、滚轮缩放、Shift 拖动框选、双击复位"></canvas><div id="plotTip" class="plot-tip" role="tooltip" hidden></div></div>
+<div id="plotBuffer" class="plot-buffer" role="group" aria-label="采样缓冲与 X 轴视窗"><div class="plot-buffer-track"></div><div id="plotBufferWindow" class="plot-buffer-window" data-edge="move" title="拖动选区整体平移 X 轴"></div><button id="plotBufferStart" class="plot-buffer-handle start" type="button" role="slider" aria-label="视窗左端，相对最新秒数" aria-orientation="horizontal" data-edge="left" title="拖动左端伸缩，右端保持"></button><button id="plotBufferEnd" class="plot-buffer-handle end" type="button" role="slider" aria-label="视窗右端，相对最新秒数" aria-orientation="horizontal" data-edge="right" title="拖动右端伸缩，左端保持"></button><button id="plotBufferMove" class="plot-buffer-handle middle" type="button" role="slider" aria-label="整体平移视窗，相对最新秒数" aria-orientation="horizontal" data-edge="move" title="拖动绿色中点整体平移"></button><div id="plotBufferTip" class="plot-tip plot-buffer-tip" role="tooltip" hidden></div></div><div class="row plot-history"><span id="plotViewState" class="muted"></span><button id="plotFitX" type="button">全部缓存</button></div><div id="plotBufferStats" class="muted plot-buffer-stats"></div>
+<small id="plotValuesLabel">最新接收值</small><div id="latest" class="plot-latest"></div></template>
+<p class="muted plot-help">缓冲条红端改起点、紫端改终点、绿色中点／选区整体平移；预设窗口可直接输入秒数。拖拽、滚轮和框选期间持续更新，只有主动暂停才冻结；最新点默认为 0，跟随最新恢复右端对齐，各画布独立。</p></section>
 <aside class="panel"><h2>实时板端状态</h2><div id="status" class="status"><span class="muted">等待板端状态帧</span></div><h3>链路</h3><div id="metrics"></div><h3>参数辨识</h3><div id="detect" class="muted">--</div></aside>
-<section class="panel"><h2>Run 控制</h2><button class="stop" id="stop">全局停止 · Stop</button><div class="row"><select id="axis"><option>M1</option><option>M2</option></select><select id="action"><option>Speed</option><option>Angle</option><option>Torque</option><option>Throttle</option></select><input id="target" type="number" step="any" value="10" aria-label="目标值"><button id="apply" class="primary">发送目标</button></div><small>Speed：rad/s；Angle：rad；Throttle：%；Torque：电流环 ON 为 A，OFF 为 V。</small><div class="row"><button id="pauseMotors">锁存暂停 · KEY1</button><button id="axisStop">停止选中轴</button><button id="follow">启动主从 Follow</button><button id="setFocus">板端 View 切到选中轴</button></div><div class="row"><input id="command" placeholder="例如 Work:Independent / M2:Stop" aria-label="原始命令"><button id="send">发送</button></div><p class="muted">命令由板端准入和限幅。连接、切换采集组不会启动电机；断开通信不等于停机。</p><div id="pending" role="status"></div><div id="log"></div></section>
-<section class="panel"><h2>CSV 回放</h2><p class="muted">直接保存 CSV 到电脑。导入本工具生成的 CSV，拖动时间轴检查历史曲线。</p><input type="file" id="file" accept=".csv"><div class="row"><button id="live">返回实时</button><input type="range" id="scrub" min="0" max="1000" value="1000" aria-label="回放时间" style="flex:1"></div><p class="muted">HSO relative_position 是本次连续锁定后的估算相对位移，每次启动重新建零；不是断电保持的绝对位置。</p><p class="muted">每条命令显示编号与板端回执。超时表示结果未知，运动指令不会自动重发。</p></section>
+<section class="panel"><h2>Run 控制</h2><button class="stop" id="stop">全局停止 · Stop</button><div class="row"><label>运行轴 <select id="axis" aria-label="运行轴"><option>M1</option><option>M2</option></select></label><span id="runContext" class="muted"></span></div><div id="runTargetRow" class="row"><select id="action" aria-label="控制方式"><option>Speed</option><option>Angle</option><option>Torque</option><option>Throttle</option></select><input id="target" type="number" step="any" value="10" aria-label="目标值"><span id="targetUnit"></span><button id="apply" class="primary">发送目标</button></div><p id="runNote" class="context-note muted" role="status"></p><div class="row"><button id="follow" class="primary" hidden>启动主从 Follow</button><button id="pauseMotors">锁存暂停 · KEY1</button><button id="axisStop">停止选中轴</button><button id="setFocus">板端 View 切到选中轴</button></div><details><summary>高级原始命令</summary><div class="row"><input id="command" placeholder="例如 Work:Independent / M2:Stop" aria-label="原始命令"><button id="send">发送</button></div></details><p class="muted">命令由板端准入和限幅。连接、选择模式不会启动电机；断开通信不等于停机。</p><div id="pending" role="status"></div><div id="log"></div></section>
+<section class="panel"><h2>CSV 回放</h2><p class="muted">直接保存 CSV 到电脑。导入本工具生成的 CSV，拖动时间轴检查历史曲线。</p><input type="file" id="file" accept=".csv"><div class="row"><button id="live">返回实时</button><span id="csvPlotTarget" class="muted">画布 1</span><input type="range" id="scrub" min="0" max="1000" value="1000" aria-label="回放时间" style="flex:1"></div><p class="muted">HSO relative_position 是本次连续锁定后的估算相对位移，每次启动重新建零；不是断电保持的绝对位置。</p><p class="muted">每条命令显示编号与板端回执。超时表示结果未知，运动指令不会自动重发。</p></section>
 <section class="panel wide"><div class="row"><h2 style="margin:0">板端设置（读回快照）</h2><button id="readConfig" class="primary">读取全部设置</button><button id="exportConfig">导出配置快照</button></div><p class="muted">以下为最近读回值；板上修改后点击读取刷新。写入须通过板端原有准入条件，Saved 表示已写入 W25Q64。固定 PID／电机预设不开放编辑。R88 提供设置写入、LCD Run 联动、辨识与诊断。</p><div id="configValues">连接后读取板端当前配置</div></section>
 
 <section class="panel wide"><h2>Settings 编辑</h2><p class="muted">先读取再编辑；回执不会覆盖尚未发送的草稿。电流环切换和 IBUS 阈值需要停机；本地编辑框打开时板端拒绝远程修改。</p>
@@ -30,10 +44,501 @@ const $=id=>document.getElementById(id),colors=['#68b4ff','#80e1af','#ffce7b','#
 let cursor=0,paused=false,replaying=false,recording=false,series=new Map(),selected=new Set(),lastKind=null,epoch=null,latestTime=0,replayEnd=0,replayStart=0,lastConnection='',lastStatus={},recordPath='';
 function log(text){$('log').textContent=new Date().toLocaleTimeString()+' '+text+'\n'+$('log').textContent.slice(0,7000)}
 async function act(fn){try{$('error').textContent='';await fn()}catch(e){$('error').textContent=e.message;log('ERROR '+e.message)}}
-function clear(){series.clear();selected.clear();lastKind=null;epoch=null;latestTime=0;renderSignals();draw()}
-function add(frame){if(epoch!==null&&epoch!==frame.epoch)clear();epoch=frame.epoch;if(lastKind!==null&&lastKind!==frame.kind)clear();lastKind=frame.kind;epoch=frame.epoch;latestTime=frame.ms/1000;let changed=false;for(const [key,unit,value] of frame.values){const id=key+'|'+unit;if(!series.has(id)){series.set(id,{key,unit,points:[],value:null});if(selected.size<8)selected.add(id);changed=true}const s=series.get(id);s.points.push([latestTime,value]);if(s.points.length>2200)s.points.splice(0,s.points.length-2200);s.value=value}if(changed)renderSignals()}
-function renderSignals(){const box=$('signals');box.replaceChildren();[...series].forEach(([id,s],i)=>{const label=document.createElement('label'),input=document.createElement('input');input.type='checkbox';input.checked=selected.has(id);input.onchange=()=>{if(input.checked)selected.add(id);else selected.delete(id);draw()};label.style.color=colors[i%colors.length];label.append(input,document.createTextNode(s.key+' ['+s.unit+']'));box.append(label)})}
-function draw(){const canvas=$('plot'),rect=canvas.getBoundingClientRect(),dpr=devicePixelRatio||1;canvas.width=Math.max(1,rect.width*dpr);canvas.height=480*dpr;const c=canvas.getContext('2d');c.scale(dpr,dpr);const width=rect.width,height=480;const groups=new Map();[...series].forEach(([id,s],i)=>{if(selected.has(id)){if(!groups.has(s.unit))groups.set(s.unit,[]);groups.get(s.unit).push([s,i])}});const end=replaying?replayStart+(replayEnd-replayStart)*Number($('scrub').value)/1000:latestTime,span=Number($('window').value),start=end-span,band=height/Math.max(groups.size,1);let row=0;for(const [unit,items]of groups){const top=row++*band+22,bottom=row*band-23,left=72,right=width-14;let lo=Infinity,hi=-Infinity;for(const [s]of items)for(const [t,v]of s.points)if(t>=start&&t<=end&&v!==null){lo=Math.min(lo,v);hi=Math.max(hi,v)}if(!Number.isFinite(lo)){lo=-1;hi=1}if(hi-lo<1e-6){lo-=1;hi+=1}const margin=(hi-lo)*.08;lo-=margin;hi+=margin;c.font='11px system-ui';c.fillStyle='#9aadc4';c.fillText(unit,8,top);for(let j=0;j<=2;j++){const y=top+(bottom-top)*j/2;c.strokeStyle='#29394b';c.beginPath();c.moveTo(left,y);c.lineTo(right,y);c.stroke();c.fillText((hi-(hi-lo)*j/2).toPrecision(4),5,y+4)}for(let j=0;j<=5;j++){const x=left+(right-left)*j/5;c.strokeStyle='#223144';c.beginPath();c.moveTo(x,top);c.lineTo(x,bottom);c.stroke();if(row===groups.size)c.fillText((start+span*j/5).toFixed(1)+'s',x-12,height-4)}c.save();c.beginPath();c.rect(left,top,right-left,Math.max(0,bottom-top));c.clip();for(const [s,i]of items){c.strokeStyle=colors[i%colors.length];c.lineWidth=1.6;c.beginPath();let pen=false;for(const [t,v]of s.points){if(t<start||t>end)continue;if(v===null){pen=false;continue}const x=left+(t-start)/span*(right-left),y=bottom-(v-lo)/(hi-lo)*(bottom-top);if(pen)c.lineTo(x,y);else c.moveTo(x,y);pen=true}c.stroke()}c.restore()}if(!groups.size){c.fillStyle='#7f97b2';c.font='15px system-ui';c.fillText('连接开发板后显示曲线',25,50)}const values=$('latest');values.replaceChildren();for(const [id,s]of series)if(selected.has(id)){const el=document.createElement('div');el.className='value';el.textContent=s.key;const b=document.createElement('b');let v=s.value;if(replaying){v=null;for(const [t,n]of s.points)if(t<=end)v=n}b.textContent=(v===null?'--':Number(v).toPrecision(5))+' '+s.unit;el.append(b);values.append(el)}}
+function clear(){series.clear();lastKind=null;epoch=null;latestTime=0;resetPlotData();renderSignals();draw()}
+function add(frame){if(epoch!==null&&epoch!==frame.epoch)clear();epoch=frame.epoch;if(lastKind!==null&&lastKind!==frame.kind)clear();lastKind=frame.kind;epoch=frame.epoch;latestTime=frame.ms/1000;let changed=false;for(const [key,unit,value] of frame.values){const id=key+'|'+unit;if(!series.has(id)){series.set(id,{key,unit,points:[],value:null});if(!channelCatalog.has(id))channelCatalog.set(id,{key,unit,color:colors[channelCatalog.size%colors.length]});const first=plots[0];if(first?.autoSelect&&first.selected.size<8)first.selected.add(id);changed=true}const s=series.get(id);s.points.push([latestTime,value]);if(s.points.length>2200)s.points.splice(0,s.points.length-2200);s.value=value}if(changed){renderSignals();renderPlotChannels()}queueLivePlots()}
+/* Independent Canvas implementation. Interaction reference:
+ * https://www.vofa.plus/docs/learning/widgets/wave/
+ * Vodka publishes plugins, not the wave renderer; no upstream code is embedded. */
+const clampPlot=(value,lo,hi)=>Math.max(lo,Math.min(hi,value));
+function plotLowerBound(points,time){let lo=0,hi=points.length;while(lo<hi){const mid=(lo+hi)>>>1;if(points[mid][0]<time)lo=mid+1;else hi=mid}return lo}
+function plotNearest(points,time){
+ if(!points.length||time<points[0][0]||time>points.at(-1)[0])return null;
+ const i=plotLowerBound(points,time),a=points[Math.max(0,i-1)],b=points[Math.min(i,points.length-1)];
+ return time-a[0]<=b[0]-time?a:b;
+}
+function plotTicks(lo,hi,count){
+ const raw=(hi-lo)/Math.max(1,count),power=10**Math.floor(Math.log10(raw));
+ if(!Number.isFinite(raw)||raw<=0||!power)return {step:1,values:[]};
+ const step=([1,2,2.5,5,10].find(n=>n*power>=raw)||10)*power,values=[];
+ const first=Math.ceil(lo/step-1e-10)*step;
+ for(let i=0;i<20;++i){const v=first+i*step;if(v>hi+step*1e-9)break;if(v>=lo-step*1e-9)values.push(v)}
+ return {step,values};
+}
+function plotNumber(value,step=0){
+ if(!Number.isFinite(value))return '--';
+ if(Math.abs(value)<Math.max(1e-15,Math.abs(step)*1e-9))value=0;
+ const a=Math.abs(value);
+ if(a>=1e6||(a>0&&a<.001))return value.toExponential(step?clampPlot(Math.ceil(Math.log10(a/Math.abs(step)))+1,2,13):6);
+ const decimals=step?clampPlot(Math.ceil(-Math.log10(Math.abs(step)))+1,0,6):6;
+ return value.toFixed(decimals).replace(/(\.\d*?[1-9])0+$|\.0+$/,'$1');
+}
+function plotValue(value){return Number.isSafeInteger(value)?String(value):plotNumber(value)}
+const MAX_PLOTS=6,CHANNEL_MIME='application/x-foc-channel';
+const PLOT_MIN_SPAN=.001,PLOT_MAX_SPAN=86400;
+function plotDuration(value){return value>0&&value<1?plotNumber(value*1000)+' ms':plotNumber(value)+' s'}
+const PLOT_CONTROLS=new Set(['window','plotTool','plotAxis','plotZoomIn','plotZoomOut','plotAutoY','plotReset','plotFollow','plotWrap','plot','plotTip','plotViewState','plotValuesLabel','latest','plotTitle','plotSelect','plotChannels','plotClear','plotPause','plotTime','plotPresetError','plotBuffer','plotBufferWindow','plotBufferStart','plotBufferEnd','plotBufferMove','plotBufferTip','plotBufferStats','plotFitX']);
+const channelCatalog=new Map(),plots=[];
+let visiblePlots=1,activePlotIndex=0,plotView=null,plotLayout=null;
+function plotDomId(id,index){return index?id+'-'+(index+1):id}
+function activePlot(){return plots[activePlotIndex]}
+function publishPlot(index,view,layout){if(index===activePlotIndex){plotView=view;plotLayout=layout}}
+function plotBounds(){return activePlot()?.bounds()||{lo:latestTime,hi:latestTime}}
+function plotGroups(){return activePlot()?.groups()||[]}
+function freezePlot(){activePlot()?.freeze()}
+function followPlot(reset=false){activePlot()?.follow(reset)}
+function scrubPlot(value){activePlot()?.scrub(value)}
+function draw(){for(let i=0;i<visiblePlots;++i)plots[i]?.draw()}
+let livePlotFrame=0;
+function queueLivePlots(){
+ if(livePlotFrame||!globalThis.requestAnimationFrame)return;
+ livePlotFrame=requestAnimationFrame(()=>{livePlotFrame=0;for(let i=0;i<visiblePlots;++i)if(!plots[i]?.view.frozen)plots[i]?.draw()});
+}
+function syncPauseControls(){paused=plots.slice(0,visiblePlots).every(plot=>plot.view.frozen);$('pause').textContent=paused?'继续绘图':'暂停绘图'}
+function resetPlotData(){
+ for(const plot of plots){if(plot.autoSelect)plot.selected.clear();plot.resetData()}
+ paused=false;$('pause').textContent='暂停绘图';renderPlotChannels();
+}
+function activatePlot(index,force=false){
+ if(!Number.isInteger(index)||index<0||index>=visiblePlots||!plots[index])return false;
+ if(!force&&index===activePlotIndex&&selected===plots[index].selected){publishPlot(index,plots[index].view,plots[index].layout);return true}
+ if(index!==activePlotIndex&&activePlot()){activePlot().cancelGesture();activePlot().draw()}
+ activePlotIndex=index;selected=plots[index].selected;
+ publishPlot(index,plots[index].view,plots[index].layout);
+ $('plotTarget').value=String(index+1);$('plotActiveHint').textContent='当前画布 '+(index+1)+'：勾选通道与 CSV 滑条对应该画布。';
+ $('csvPlotTarget').textContent='画布 '+(index+1);
+ for(let i=0;i<plots.length;++i){plots[i].root.className='plot-card'+(i===index?' active':'');plots[i].control('plotSelect').textContent=i===index?'当前画布':'选择此画布';plots[i].control('plotSelect').disabled=i===index}
+ renderSignals();plots[index].draw();return true;
+}
+function setPlotCount(count){
+ count=Number(count);if(!Number.isInteger(count)||count<1||count>MAX_PLOTS)return false;
+ visiblePlots=count;
+ const template=$('plotTemplate').innerHTML||'';
+ while(plots.length<count){
+  const index=plots.length,root=document.createElement('article');root.id='plotCard-'+(index+1);root.className='plot-card';root.dataset.plot=String(index+1);
+  root.innerHTML=template.replace(/\b(id|for)="([^"]+)"/g,(full,attribute,id)=>PLOT_CONTROLS.has(id)?attribute+'="'+plotDomId(id,index)+'"':full);
+  $('plotCanvases').append(root);
+  const plot=createPlot(index,root,index===0?selected:new Set());plots.push(plot);plot.bind();
+  plot.control('plotTitle').textContent='画布 '+(index+1);
+  root.setAttribute('aria-labelledby',plotDomId('plotTitle',index));
+  plot.control('plot').setAttribute('aria-label','画布 '+(index+1)+'，可拖入通道、平移和缩放');
+  plot.control('plotSelect').onclick=()=>activatePlot(index);
+  plot.control('plotPause').onclick=()=>{activatePlot(index);plot.view.frozen?plot.resume():plot.freeze();syncPauseControls();draw()};
+  plot.control('plotClear').onclick=()=>{activatePlot(index);plot.autoSelect=false;plot.selected.clear();plot.follow(true);renderPlotChannels();renderSignals()};
+  root.addEventListener('pointerdown',()=>activatePlot(index),true);
+  root.addEventListener('focusin',()=>activatePlot(index));
+  root.ondragover=e=>{
+   const types=Array.from(e.dataTransfer?.types||[]);
+   if(types.includes(CHANNEL_MIME)||types.includes('text/plain')){e.preventDefault();e.dataTransfer.dropEffect='copy';root.dataset.drop='true'}
+  };
+  root.ondragleave=e=>{if(!root.contains?.(e.relatedTarget))delete root.dataset.drop};
+  root.ondrop=e=>{
+   e.preventDefault();e.stopPropagation();delete root.dataset.drop;
+   const id=e.dataTransfer?.getData(CHANNEL_MIME)||e.dataTransfer?.getData('text/plain');
+   if(id)assignPlotChannel(index,id,true);
+  };
+ }
+ for(let i=0;i<plots.length;++i){plots[i].root.hidden=i>=count;if(i>=count)plots[i].cancelGesture()}
+ const values=Array.from({length:count},(_,i)=>String(i+1)),labels=Object.fromEntries(values.map(v=>[v,'画布 '+v]));
+ selectChoices('plotTarget',values,labels,String(Math.min(activePlotIndex,count-1)+1));
+ $('plotCount').value=String(count);$('plotAdd').disabled=count===MAX_PLOTS;$('plotRemove').disabled=count===1;
+ updatePlotColumns();activatePlot(Math.min(activePlotIndex,count-1),true);renderPlotChannels();syncPauseControls();draw();return true;
+}
+function updatePlotColumns(){
+ $('plotCanvases').className='plot-grid'+(visiblePlots>1&&$('plotColumns').value==='2'?' two-columns':'');
+}
+function channelInfo(id){const known=channelCatalog.get(id);if(known)return known;const split=id.lastIndexOf('|');return {key:split<0?id:id.slice(0,split),unit:split<0?'':id.slice(split+1),color:'#97a9be'}}
+function startChannelDrag(e,id){
+ if(!channelCatalog.has(id)||!e.dataTransfer)return;
+ e.dataTransfer.setData(CHANNEL_MIME,id);e.dataTransfer.setData('text/plain',id);e.dataTransfer.effectAllowed='copy';
+}
+function endChannelDrag(){for(const plot of plots)delete plot.root.dataset.drop}
+function assignPlotChannel(index,id,enabled){
+ if(!Number.isInteger(index)||index<0||index>=visiblePlots||!channelCatalog.has(id))return false;
+ const plot=plots[index],had=plot.selected.has(id);plot.autoSelect=false;
+ if(enabled){plot.selected.add(id);if(!had){plot.view.y.clear();plot.follow()}}
+ else{plot.selected.delete(id);plot.view.frozen?.delete(id);if(had){plot.view.y.clear();plot.view.hover=null}}
+ activatePlot(index);renderPlotChannels();renderSignals();plot.draw();return true;
+}
+function renderPlotChannels(){
+ for(let index=0;index<plots.length;++index){
+  const plot=plots[index],box=plot.control('plotChannels');box.replaceChildren();
+  if(!plot.selected.size){const note=document.createElement('span');note.className='muted';note.textContent='将上方通道拖入画布，或选择此画布后勾选。';box.append(note)}
+  for(const id of plot.selected){
+   const info=channelInfo(id),chip=document.createElement('span'),remove=document.createElement('button');
+   chip.className='plot-channel'+(series.has(id)?'':' waiting');chip.style.color=info.color;chip.draggable=true;chip.dataset.channel=id;
+   chip.ondragstart=e=>startChannelDrag(e,id);chip.ondragend=endChannelDrag;
+   chip.append(document.createTextNode(info.key+' ['+info.unit+']'+(series.has(id)?'':' · 等待采样')));
+   remove.type='button';remove.textContent='×';remove.draggable=false;remove.setAttribute('aria-label','从画布 '+(index+1)+' 移除 '+info.key);
+   remove.onclick=e=>{e.stopPropagation();assignPlotChannel(index,id,false)};chip.append(remove);box.append(chip);
+  }
+ }
+}
+function renderSignals(){
+ const box=$('signals');box.replaceChildren();
+ for(const [id,info]of [...channelCatalog].sort((a,b)=>Number(series.has(b[0]))-Number(series.has(a[0])))){
+  const source=document.createElement('div'),label=document.createElement('label'),input=document.createElement('input'),badge=document.createElement('span');
+  source.className='signal-source'+(series.has(id)?'':' waiting');source.draggable=true;source.dataset.channel=id;
+  source.ondragstart=e=>startChannelDrag(e,id);source.ondragend=endChannelDrag;
+  input.type='checkbox';input.checked=selected.has(id);input.setAttribute('aria-label','当前画布显示 '+info.key);
+  input.onchange=()=>assignPlotChannel(activePlotIndex,id,input.checked);
+  label.style.color=info.color;label.append(input,document.createTextNode(info.key+' ['+info.unit+']'+(series.has(id)?'':' · 等待采样')));
+  const count=plots.slice(0,visiblePlots).filter(plot=>plot.selected.has(id)).length;
+  badge.className='muted';badge.textContent=count?'已绑定 '+count:'';source.append(label,badge);box.append(source);
+ }
+}
+function addAllPlotChannels(){
+ const plot=activePlot();if(!plot||!series.size)return;
+ plot.autoSelect=false;let changed=false;
+ for(const id of series.keys())if(!plot.selected.has(id)){plot.selected.add(id);changed=true}
+ if(changed){plot.view.y.clear();plot.follow()}
+ activatePlot(activePlotIndex,true);renderPlotChannels();
+}
+function pauseAllPlots(){
+ const resume=paused;
+ for(let i=0;i<visiblePlots;++i)resume?plots[i].resume():plots[i].freeze();
+ syncPauseControls();draw();
+}
+function bindPlot(){
+ $('plotColumns').value='2';$('plotCount').value='1';
+ $('plotCount').onchange=()=>setPlotCount($('plotCount').value);
+ $('plotTarget').onchange=()=>activatePlot(Number($('plotTarget').value)-1);
+ $('plotColumns').onchange=()=>{updatePlotColumns();draw()};
+ $('plotAdd').onclick=()=>{if(setPlotCount(visiblePlots+1))activatePlot(visiblePlots-1)};
+ $('plotRemove').onclick=()=>setPlotCount(visiblePlots-1);
+ $('plotAddAll').onclick=addAllPlotChannels;
+ $('scrub').oninput=()=>scrubPlot($('scrub').value);
+ setPlotCount(1);
+}
+
+function createPlot(index,root,selected){
+ const $=id=>document.getElementById(PLOT_CONTROLS.has(id)?plotDomId(id,index):id);
+ const plotView={span:10,preset:10,offset:0,end:null,frozen:null,origin:null,y:new Map(),hover:null,drag:null};
+ let plotLayout=null,plotFrame=0,valuesAt=-Infinity,valuesSource=null,valuesSelection='';
+function plotSource(){return plotView.frozen||series}
+function plotBounds(){
+ let lo=Infinity,hi=-Infinity;
+ for(const [id,s]of plotSource())if(selected.has(id)&&s.points.length){lo=Math.min(lo,s.points[0][0]);hi=Math.max(hi,s.points.at(-1)[0])}
+ return Number.isFinite(lo)?{lo,hi}:{lo:latestTime,hi:latestTime};
+}
+function plotOrigin(){return plotView.frozen?plotView.origin:latestTime}
+function plotEnd(){return plotView.frozen?plotView.end:latestTime+plotView.offset}
+function constrainPlotEnd(end){const b=plotBounds();return clampPlot(end,b.lo+Math.min(PLOT_MIN_SPAN,b.hi-b.lo),Math.max(b.hi,plotOrigin()+plotView.span*.95))}
+function setPlotEnd(end){
+ end=constrainPlotEnd(end);plotView.offset=end-plotOrigin();
+ if(plotView.frozen)plotView.end=end;
+}
+function freezePlot(end=plotEnd()){
+ if(!plotView.frozen){plotView.frozen=new Map([...series].filter(([id])=>selected.has(id)).map(([id,s])=>[id,{...s,points:s.points.slice()}]));plotView.origin=latestTime}
+ plotView.end=end;cancelGesture();valuesAt=-Infinity;draw();
+}
+function cancelGesture(){
+ const d=plotView.drag;plotView.drag=plotView.hover=null;
+ delete $('plotBuffer').dataset.drag;$('plotBufferTip').hidden=true;$('plotTip').hidden=true;
+ if(d)try{$(d.kind==='buffer'?'plotBuffer':'plot').releasePointerCapture(d.pointer)}catch{};
+}
+function resetPlotData(){cancelGesture();plotView.span=plotView.preset;plotView.offset=0;plotView.end=null;plotView.frozen=null;plotView.origin=null;plotView.y.clear();plotLayout=null;valuesAt=-Infinity;paused=false;$('pause').textContent='暂停绘图'}
+function resumePlot(){
+ cancelGesture();plotView.end=null;plotView.frozen=null;plotView.origin=null;valuesAt=-Infinity;
+ paused=false;$('pause').textContent='暂停绘图';draw();
+}
+function followPlot(reset=false){
+ if(reset){plotView.span=plotView.preset;plotView.y.clear();$('window').value=String(plotView.preset);presetValidity(true)}
+ plotView.offset=0;resumePlot();
+}
+function queuePlot(){
+ if(plotFrame)return;
+ if(globalThis.requestAnimationFrame)plotFrame=requestAnimationFrame(()=>{plotFrame=0;draw()});else draw();
+}
+function presetValidity(valid){
+ $('window').setCustomValidity?.(valid?'':'请输入 0.001～86400 秒');
+ $('window').setAttribute('aria-invalid',valid?'false':'true');$('plotPresetError').hidden=valid;
+}
+function applyPreset(){
+ const value=Number($('window').value),valid=$('window').value!==''&&Number.isFinite(value)&&value>=PLOT_MIN_SPAN&&value<=PLOT_MAX_SPAN;
+ presetValidity(valid);if(!valid)return false;
+ const end=plotEnd();plotView.preset=plotView.span=value;setPlotEnd(end);draw();return true;
+}
+function fitPlotX(){const b=plotBounds();plotView.span=clampPlot(b.hi-b.lo,PLOT_MIN_SPAN,PLOT_MAX_SPAN);setPlotEnd(b.hi);draw()}
+function bufferDomain(){
+ const d=plotView.drag,o=plotOrigin();
+ if(d?.kind==='buffer')return {lo:o+d.lo,hi:o+d.hi};
+ const b=plotBounds(),end=plotEnd(),lo=Math.min(b.lo,end-plotView.span),hi=Math.max(b.hi,o,end);
+ return {lo,hi:Math.max(hi,lo+PLOT_MIN_SPAN)};
+}
+function bufferCss(ratio){return 'calc('+(ratio*100)+'% + '+(24-48*ratio)+'px)'}
+function syncBufferBar(){
+ const domain=bufferDomain(),end=plotEnd(),start=end-plotView.span,o=plotOrigin(),width=domain.hi-domain.lo;
+ const left=clampPlot((start-domain.lo)/width,0,1),right=clampPlot((end-domain.lo)/width,0,1);
+ $('plotBufferWindow').style.left=bufferCss(left);$('plotBufferWindow').style.right=bufferCss(1-right);
+ const controls=[['plotBufferStart',left,start],['plotBufferEnd',right,end],['plotBufferMove',(left+right)/2,(start+end)/2]];
+ let cached=0,visible=0;
+ for(const [id,s]of plotSource())if(selected.has(id)){
+  cached=Math.max(cached,s.points.length);const first=plotLowerBound(s.points,start),last=plotLowerBound(s.points,end);
+  visible=Math.max(visible,last-first+(last<s.points.length&&s.points[last][0]<=end?1:0));
+ }
+ for(const [id,position,time]of controls){const el=$(id);el.style.left=bufferCss(position);el.disabled=!cached;el.setAttribute('aria-valuemin',String(domain.lo-o));el.setAttribute('aria-valuemax',String(domain.hi-o));el.setAttribute('aria-valuenow',String(time-o));el.setAttribute('aria-valuetext',plotNumber(time-o)+' 秒，相对最新')}
+ $('plotBufferStats').textContent='可视 '+visible+' / 缓存 '+cached+' 点/通道 · 窗口 '+plotDuration(plotView.span)+' · '+plotDuration(plotLayout?.xStep||plotView.span/10)+'/格';
+ $('plotBufferTip').textContent='左端 '+plotNumber(start-o)+' s → 右端 '+plotNumber(end-o)+' s（相对最新）\n'+$('plotBufferStats').textContent+'\n点数取所选通道最大值。红色：改起点；紫色：改终点；绿色／选区：整体平移。';
+}
+function setBufferRange(d,delta){
+ let a=d.start,b=d.end;const minimum=Math.min(PLOT_MIN_SPAN,d.hi-d.lo);
+ if(d.edge==='left')a=clampPlot(a+delta,Math.max(d.lo,b-PLOT_MAX_SPAN),Math.min(b-minimum,b>0?b-b/.95:b-minimum));
+ else if(d.edge==='right'){
+  const bounds=plotBounds(),low=Math.max(a+minimum,bounds.lo-plotOrigin()+Math.min(PLOT_MIN_SPAN,bounds.hi-bounds.lo));
+  b=clampPlot(b+delta,low,Math.min(d.hi,a+PLOT_MAX_SPAN,-19*a));
+ }else{delta=clampPlot(delta,d.lo-a,d.hi-b);a+=delta;b+=delta}
+ plotView.span=d.edge==='move'?d.span:clampPlot(b-a,PLOT_MIN_SPAN,PLOT_MAX_SPAN);setPlotEnd(plotOrigin()+b);draw();
+}
+function bufferPointerDown(e){
+ if(e.button!==0&&e.button!==1)return;activatePlot(index);
+ if(!plotSource().size||![...selected].some(id=>plotSource().get(id)?.points.length))return;
+ const root=$('plotBuffer'),rect=root.getBoundingClientRect(),domain=bufferDomain(),o=plotOrigin(),edge=e.target?.dataset.edge||'move';
+ e.preventDefault();const d=plotView.drag={kind:'buffer',edge,start:plotEnd()-plotView.span-o,end:plotEnd()-o,span:plotView.span,lo:domain.lo-o,hi:domain.hi-o,x:e.clientX,width:Math.max(1,rect.width-48),pointer:e.pointerId,active:true};
+ if(!e.target?.dataset.edge){const time=domain.lo+(clampPlot(e.clientX-(rect.left||0)-24,0,d.width)/d.width)*(domain.hi-domain.lo)-o;setBufferRange(d,time-(d.start+d.end)/2);d.start=plotEnd()-plotView.span-o;d.end=plotEnd()-o}
+ root.dataset.drag='true';$('plotBufferTip').hidden=false;
+ const id=edge==='left'?'plotBufferStart':edge==='right'?'plotBufferEnd':'plotBufferMove';$(id).focus();
+ try{root.setPointerCapture(e.pointerId)}catch{};draw();
+}
+function bufferPointerMove(e){
+ const d=plotView.drag;if(d?.kind!=='buffer')return;
+ e.preventDefault();setBufferRange(d,(e.clientX-d.x)/d.width*(d.hi-d.lo));
+}
+function bufferPointerUp(e){
+ if(plotView.drag?.kind!=='buffer')return;
+ plotView.drag=null;delete $('plotBuffer').dataset.drag;$('plotBufferTip').hidden=true;
+ try{$('plotBuffer').releasePointerCapture(e.pointerId)}catch{};draw();
+}
+function bufferKey(e,edge){
+ if(!['ArrowLeft','ArrowRight','Home','End'].includes(e.key))return;
+ e.preventDefault();const domain=bufferDomain(),o=plotOrigin(),d={edge,start:plotEnd()-plotView.span-o,end:plotEnd()-o,span:plotView.span,lo:domain.lo-o,hi:domain.hi-o};
+ const step=Math.max(PLOT_MIN_SPAN,plotView.span*(e.shiftKey ? .1 : .02));
+ const anchor=edge==='left'?d.start:edge==='right'?d.end:(d.start+d.end)/2;
+ const delta=e.key==='Home'?d.lo-anchor:e.key==='End'?d.hi-anchor:e.key==='ArrowLeft'?-step:step;
+ setBufferRange(d,delta);
+}
+function plotGroups(){
+ // A canvas always owns exactly one XY pair, including empty/waiting views.
+ const group={key:'__xy',unit:'数值',items:[]},units=new Set();
+ for(const id of selected){
+  units.add(channelInfo(id).unit);const s=plotSource().get(id);
+  if(s)group.items.push({id,s,color:channelInfo(id).color});
+ }
+ if(units.size===1)group.unit=[...units][0]||'数值';
+ else if(units.size>1)group.unit='数值 · 单位见通道';
+ return [group];
+}
+function plotRange(group,start,end){
+ const fixed=plotView.y.get(group.key);if(fixed)return {...fixed};
+ let lo=Infinity,hi=-Infinity;
+ for(const {s}of group.items){
+  const first=Math.max(0,plotLowerBound(s.points,start)-1),last=Math.min(s.points.length,plotLowerBound(s.points,end)+1);
+  for(let i=first;i<last;++i){const v=s.points[i][1];if(Number.isFinite(v)){lo=Math.min(lo,v);hi=Math.max(hi,v)}}
+ }
+ if(!Number.isFinite(lo)){lo=-1;hi=1}
+ const pad=hi>lo?(hi-lo)*.08:Math.max(Math.abs(lo)*.02,1);
+ return {lo:lo-pad,hi:hi+pad};
+}
+function syncPlotControls(){
+ const b=plotBounds(),min=b.lo+Math.min(plotView.span,b.hi-b.lo),span=b.hi-min;
+ const position=span>0?Math.round(1000*clampPlot((plotEnd()-min)/span,0,1)):1000;
+ if(index===activePlotIndex){$('scrub').value=String(position);$('scrub').disabled=!series.size||span<=0}
+ syncBufferBar();
+ $('plotFollow').textContent=replaying?'回放末尾':'跟随最新';
+ $('plotFollow').className=!plotView.frozen&&Math.abs(plotView.offset)<1e-9?'primary':'';
+ $('plotPause').textContent=plotView.frozen?'继续此图':'暂停此图';
+ $('plotAutoY').checked=plotGroups().every(group=>!plotView.y.has(group.key));
+ $('plotValuesLabel').textContent=plotView.frozen?'暂停快照的末值':'最新接收值';
+ $('plotViewState').textContent=(replaying?'CSV 回放':plotView.frozen?'已暂停':'实时更新')+' · '+plotNumber(plotView.span)+' s'+(Math.abs(plotView.offset)>1e-6?' · '+(plotView.offset<0?'滞后 ':'前留 ')+plotNumber(Math.abs(plotView.offset))+' s':'');
+}
+function renderPlotValues(){
+ const source=plotSource(),selection=[...selected].join('\0'),now=performance.now();
+ if(now-valuesAt<100&&source===valuesSource&&selection===valuesSelection)return;
+ valuesAt=now;valuesSource=source;valuesSelection=selection;
+ const latest=$('latest');latest.replaceChildren();
+ for(const [id,s]of plotSource())if(selected.has(id)){
+  const el=document.createElement('div'),b=document.createElement('b');el.className='value';
+  el.append(document.createTextNode(s.key));b.textContent=plotValue(s.value)+' '+s.unit;el.append(b);latest.append(el);
+ }
+}
+function draw(){
+ if(index>=visiblePlots||root.hidden)return;
+ if(!plotView.frozen)plotView.offset=constrainPlotEnd(latestTime+plotView.offset)-latestTime;
+ const canvas=$('plot'),groups=plotGroups(),rect=canvas.getBoundingClientRect(),width=Math.max(1,rect.width),dpr=devicePixelRatio||1;
+ const band=visiblePlots>1?240:420,height=band+48;
+ if(canvas.style.height!==height+'px')canvas.style.height=height+'px';
+ if(canvas.width!==Math.round(width*dpr))canvas.width=Math.round(width*dpr);
+ if(canvas.height!==Math.round(height*dpr))canvas.height=Math.round(height*dpr);
+ const c=canvas.getContext('2d');c.setTransform(dpr,0,0,dpr,0,0);c.clearRect(0,0,width,height);
+ c.lineWidth=1;c.setLineDash([]);c.font='11px ui-monospace,monospace';c.textBaseline='middle';
+ const end=plotEnd(),start=end-plotView.span,panels=groups.map(g=>({...g,...plotRange(g,start,end),top:28,bottom:band-10,header:12}));
+ let labelWidth=0;
+ for(const p of panels){p.ticks=plotTicks(p.lo,p.hi,Math.max(2,Math.floor((p.bottom-p.top)/34)));for(const v of p.ticks.values)labelWidth=Math.max(labelWidth,c.measureText(plotNumber(v,p.ticks.step)).width)}
+ const left=Math.min(Math.max(64,labelWidth+22),Math.max(64,width-110)),right=Math.max(left+1,width-18);
+ const relative=$('plotTime').value!=='board',origin=relative?plotOrigin():0,timeScale=relative&&plotView.span<1?1000:1;
+ const xt=plotTicks((start-origin)*timeScale,(end-origin)*timeScale,Math.max(2,Math.floor((right-left)/95)));
+ plotLayout={width,height,left,right,start,end,origin,relative,timeScale,xStep:xt.step/timeScale,panels,bottom:panels.at(-1)?.bottom||height-48};
+ publishPlot(index,plotView,plotLayout);
+ renderPlotValues();syncPlotControls();$('plotTip').hidden=true;
+ for(const p of panels){
+  // Unit header and numeric ticks have disjoint vertical regions.
+  c.font='600 12px system-ui';c.textAlign='left';c.textBaseline='middle';c.fillStyle='#b5c9df';c.fillText(p.unit,12,p.header);
+  c.font='11px ui-monospace,monospace';
+  for(const value of p.ticks.values){
+   const y=p.bottom-(value-p.lo)/(p.hi-p.lo)*(p.bottom-p.top);
+   c.strokeStyle='#29394b';c.beginPath();c.moveTo(left,y);c.lineTo(right,y);c.stroke();
+   c.fillStyle='#9aadc4';c.textAlign='right';c.fillText(plotNumber(value,p.ticks.step),left-10,y);
+  }
+  for(const t of xt.values){const x=left+(t/timeScale+origin-start)/plotView.span*(right-left);c.strokeStyle='#223244';c.beginPath();c.moveTo(x,p.top);c.lineTo(x,p.bottom);c.stroke()}
+  c.strokeStyle='#34465d';c.strokeRect(left,p.top,right-left,p.bottom-p.top);
+  c.save();c.beginPath();c.rect(left,p.top,right-left,p.bottom-p.top);c.clip();
+  for(const {s,color}of p.items){
+   c.strokeStyle=color;c.lineWidth=1.5;c.beginPath();let pen=false;
+   const first=Math.max(0,plotLowerBound(s.points,start)-1),last=Math.min(s.points.length,plotLowerBound(s.points,end)+1);
+   for(let i=first;i<last;++i){const [t,v]=s.points[i];if(!Number.isFinite(v)){pen=false;continue}
+    const x=left+(t-start)/plotView.span*(right-left),y=p.bottom-(v-p.lo)/(p.hi-p.lo)*(p.bottom-p.top);
+    if(pen)c.lineTo(x,y);else{c.moveTo(x,y);pen=true}
+   }c.stroke();
+  }c.restore();
+  const latestX=left+(plotOrigin()-start)/plotView.span*(right-left);
+  if(relative&&latestX>=left&&latestX<=right){c.save();c.setLineDash([3,3]);c.strokeStyle='#bc8cf0';c.beginPath();c.moveTo(latestX,p.top);c.lineTo(latestX,p.bottom);c.stroke();c.restore()}
+  if(!p.items.length){c.fillStyle='#97a9be';c.textAlign='center';c.fillText(selected.size?'等待已选通道的数据':'将通道拖到这里叠加比较',(left+right)/2,(p.top+p.bottom)/2,Math.max(1,right-left-16))}
+ }
+ c.fillStyle='#9aadc4';c.font='11px ui-monospace,monospace';c.textBaseline='middle';
+ let previousLabelEnd=-Infinity;
+ for(const t of xt.values){
+  const text=plotNumber(t,xt.step),half=c.measureText(text).width/2,x=left+(t/timeScale+origin-start)/plotView.span*(right-left);
+  const center=clampPlot(x,half+6,width-half-6);
+  if(center-half<previousLabelEnd+10)continue;
+  c.fillStyle=relative&&Math.abs(t)<xt.step*1e-9?'#bc8cf0':'#9aadc4';c.textAlign='center';c.fillText(text,center,plotLayout.bottom+19);previousLabelEnd=center+half;
+ }
+ c.fillStyle='#9aadc4';c.textAlign='center';c.fillText(relative?'相对最新 / '+(timeScale===1000?'ms':'s'):'板端时间 / s',(left+right)/2,height-8);
+ drawPlotHover(c);drawPlotBox(c);
+}
+function plotPoint(e){const r=$('plot').getBoundingClientRect();return {x:e.clientX-(r.left||0),y:e.clientY-(r.top||0)}}
+function plotHit(point){
+ const l=plotLayout;if(!l||!l.panels.length||point.x<0||point.x>l.right)return null;
+ for(const p of l.panels)if(point.y>=p.top&&point.y<=p.bottom)return {panel:p,axis:point.x<l.left?'y':'body'};
+ if(point.x>=l.left&&point.y>l.bottom&&point.y<l.height)return {panel:l.panels.at(-1),axis:'x'};
+ return null;
+}
+function plotAxes(hit,e={}){
+ const mode=hit.axis==='body'?e.shiftKey?'x':e.ctrlKey||e.altKey?'y':$('plotAxis').value:hit.axis;
+ return {x:mode!=='y',y:mode!=='x'};
+}
+function setPlotY(key,range){
+ if(Number.isFinite(range.lo)&&Number.isFinite(range.hi)&&range.hi>range.lo){plotView.y.set(key,range);$('plotAutoY').checked=false}
+}
+function zoomPlot(factor,point,axes){
+ const l=plotLayout,hit=plotHit(point);if(!l||!hit)return;
+ const p=hit.panel;
+ if(axes.x){
+  const ratio=clampPlot((point.x-l.left)/(l.right-l.left),0,1),anchor=l.start+ratio*plotView.span;
+  plotView.span=clampPlot(plotView.span*factor,PLOT_MIN_SPAN,PLOT_MAX_SPAN);
+  setPlotEnd(anchor+(1-ratio)*plotView.span);
+ }
+ if(axes.y){
+  const ratio=clampPlot((p.bottom-point.y)/(p.bottom-p.top),0,1),anchor=p.lo+ratio*(p.hi-p.lo);
+  const span=clampPlot((p.hi-p.lo)*factor,Math.max(1e-12,Math.abs(anchor)*1e-12),1e20);
+  setPlotY(p.key,{lo:anchor-ratio*span,hi:anchor+(1-ratio)*span});
+ }
+ draw();
+}
+function drawPlotHover(c){
+ const point=plotView.hover,l=plotLayout,hit=point&&plotHit(point);if(!hit||hit.axis!=='body'||plotView.drag?.active)return;
+ const time=l.start+(point.x-l.left)/(l.right-l.left)*plotView.span,p=hit.panel;
+ const timeText=time.toFixed(6).replace(/(\.\d*?[1-9])0+$|\.0+$/,'$1'),lines=['t = '+timeText+' s · 邻近采样'];
+ if(l.relative)lines.push('相对最新 '+plotNumber((time-l.origin)*l.timeScale)+' '+(l.timeScale===1000?'ms':'s'));
+ c.save();c.setLineDash([4,4]);c.strokeStyle='#8ca2ba';c.lineWidth=1;
+ for(const panel of l.panels){c.beginPath();c.moveTo(point.x,panel.top);c.lineTo(point.x,panel.bottom);c.stroke()}
+ c.beginPath();c.moveTo(l.left,point.y);c.lineTo(l.right,point.y);c.stroke();c.setLineDash([]);
+ c.beginPath();c.rect(l.left,p.top,l.right-l.left,p.bottom-p.top);c.clip();
+ for(const {s,color}of p.items){
+  const sample=plotNearest(s.points,time),value=sample?.[1];lines.push(s.key+': '+plotValue(value)+' '+s.unit);
+  if(Number.isFinite(value)){const x=l.left+(sample[0]-l.start)/plotView.span*(l.right-l.left),y=p.bottom-(value-p.lo)/(p.hi-p.lo)*(p.bottom-p.top);c.fillStyle=color;c.beginPath();c.arc(x,y,3,0,2*Math.PI);c.fill()}
+ }c.restore();
+ const tip=$('plotTip');tip.textContent=lines.join('\n');tip.hidden=false;
+ tip.style.left=clampPlot(point.x+14,6,Math.max(6,l.width-(tip.offsetWidth||280)-6))+'px';
+ tip.style.top=clampPlot(point.y+14,6,Math.max(6,l.height-(tip.offsetHeight||100)-6))+'px';
+}
+function drawPlotBox(c){
+ const d=plotView.drag;if(!d?.active||d.kind!=='box')return;
+ const l=plotLayout,p=d.panel,a=d.start,b=d.point;
+ const x1=d.axes.x?clampPlot(Math.min(a.x,b.x),l.left,l.right):l.left,x2=d.axes.x?clampPlot(Math.max(a.x,b.x),l.left,l.right):l.right;
+ const y1=d.axes.y?clampPlot(Math.min(a.y,b.y),p.top,p.bottom):p.top,y2=d.axes.y?clampPlot(Math.max(a.y,b.y),p.top,p.bottom):p.bottom;
+ c.fillStyle='#68b4ff26';c.fillRect(x1,y1,x2-x1,y2-y1);c.strokeStyle='#68b4ff';c.strokeRect(x1,y1,x2-x1,y2-y1);
+}
+function plotPointerDown(e){
+ activatePlot(index);
+ if(e.button!==0&&e.button!==1)return;const point=plotPoint(e),hit=plotHit(point);if(!hit)return;
+ e.preventDefault();$('plot').focus();
+ const axes=plotAxes(hit,e),kind=e.shiftKey||$('plotTool').value==='box'?'box':'pan';
+ // Shift chooses the box tool; the explicit axis selector still scopes it.
+ if(e.shiftKey&&hit.axis==='body'){axes.x=$('plotAxis').value!=='y';axes.y=$('plotAxis').value!=='x'}
+ plotView.drag={start:point,point,panel:{...hit.panel},axes,kind,end:plotEnd(),at:latestTime,live:!plotView.frozen,span:plotView.span,active:false,pointer:e.pointerId};
+ try{$('plot').setPointerCapture(e.pointerId)}catch{};
+}
+function plotPointerMove(e){
+ const point=plotPoint(e),d=plotView.drag;plotView.hover=point;
+ if(d){
+  const dx=point.x-d.start.x,dy=point.y-d.start.y;
+  if(!d.active&&Math.hypot(dx,dy)>=3)d.active=true;
+  d.point=point;
+  if(d.active&&d.kind==='pan'){
+   if(d.axes.x)setPlotEnd(d.end+(d.live?latestTime-d.at:0)-dx/(plotLayout.right-plotLayout.left)*d.span);
+   if(d.axes.y){const shift=dy/(d.panel.bottom-d.panel.top)*(d.panel.hi-d.panel.lo);setPlotY(d.panel.key,{lo:d.panel.lo+shift,hi:d.panel.hi+shift})}
+  }
+ }
+ const hit=plotHit(point);$('plot').style.cursor=d?.active?'grabbing':hit?.axis==='y'?'ns-resize':hit?.axis==='x'?'ew-resize':$('plotTool').value==='box'?'crosshair':'grab';
+ queuePlot();
+}
+function plotPointerUp(e){
+ const d=plotView.drag;if(!d)return;
+ if(d.active&&d.kind==='box'){
+  const l=plotLayout,p=d.panel,a=d.start,b=d.point;
+  if(d.axes.x&&Math.abs(a.x-b.x)>6){
+   const x1=clampPlot(Math.min(a.x,b.x),l.left,l.right),x2=clampPlot(Math.max(a.x,b.x),l.left,l.right);
+   const end=d.end+(d.live?latestTime-d.at:0)-d.span+(x2-l.left)/(l.right-l.left)*d.span;
+   plotView.span=clampPlot((x2-x1)/(l.right-l.left)*d.span,PLOT_MIN_SPAN,PLOT_MAX_SPAN);setPlotEnd(end);
+  }
+  if(d.axes.y&&Math.abs(a.y-b.y)>6){const y1=clampPlot(Math.min(a.y,b.y),p.top,p.bottom),y2=clampPlot(Math.max(a.y,b.y),p.top,p.bottom);setPlotY(p.key,{lo:p.hi-(y2-p.top)/(p.bottom-p.top)*(p.hi-p.lo),hi:p.hi-(y1-p.top)/(p.bottom-p.top)*(p.hi-p.lo)})}
+ }
+ plotView.drag=null;try{$('plot').releasePointerCapture(e.pointerId)}catch{};draw();
+}
+function scrubPlot(value){
+ const b=plotBounds(),min=b.lo+Math.min(plotView.span,b.hi-b.lo);
+ setPlotEnd(min+(b.hi-min)*clampPlot(Number(value)/1000,0,1));plotView.hover=null;draw();
+}
+function bindPlot(){
+ const canvas=$('plot');
+ canvas.onpointerdown=plotPointerDown;canvas.onpointermove=plotPointerMove;canvas.onpointerup=plotPointerUp;
+ canvas.onpointercancel=()=>{plotView.drag=null;queuePlot()};canvas.onlostpointercapture=()=>{if(plotView.drag){plotView.drag=null;queuePlot()}};
+ canvas.onpointerleave=()=>{if(!plotView.drag){plotView.hover=null;queuePlot()}};
+ canvas.addEventListener('wheel',e=>{const point=plotPoint(e),hit=plotHit(point);if(!hit)return;activatePlot(index);e.preventDefault();zoomPlot(Math.exp(clampPlot(e.deltaY*(e.deltaMode===1?16:e.deltaMode===2?400:1),-600,600)*.0015),point,plotAxes(hit,e))},{passive:false});
+ canvas.ondblclick=e=>{activatePlot(index);e.preventDefault();const hit=plotHit(plotPoint(e));if(hit?.axis==='y'){plotView.y.delete(hit.panel.key);draw()}else followPlot(true)};
+ canvas.onkeydown=e=>{
+  activatePlot(index);
+  if(!plotLayout?.panels.length)return;
+  if(e.key==='Home'){e.preventDefault();followPlot(true)}
+  else if(e.key==='ArrowLeft'||e.key==='ArrowRight'){e.preventDefault();setPlotEnd(plotEnd()+(e.key==='ArrowLeft'?-.1:.1)*plotView.span);draw()}
+  else if(['+','=','-'].includes(e.key)){e.preventDefault();const p=plotLayout.panels[0];zoomPlot(e.key==='-'?1.25:.8,{x:(plotLayout.left+plotLayout.right)/2,y:(p.top+p.bottom)/2},{x:true,y:false})}
+ };
+ $('plotFollow').onclick=()=>followPlot();$('plotReset').onclick=()=>followPlot(true);
+ for(const [id,factor]of [['plotZoomIn',.8],['plotZoomOut',1.25]])$(id).onclick=()=>{if(!plotLayout?.panels.length)return;const p=plotLayout.panels[0];zoomPlot(factor,{x:(plotLayout.left+plotLayout.right)/2,y:(p.top+p.bottom)/2},{x:true,y:false})};
+ $('plotAutoY').onchange=()=>{if($('plotAutoY').checked)plotView.y.clear();else for(const p of plotLayout?.panels||[])plotView.y.set(p.key,{lo:p.lo,hi:p.hi});draw()};
+ $('plotTool').onchange=()=>{$('plot').style.cursor=$('plotTool').value==='box'?'crosshair':'grab'};
+ $('window').onchange=applyPreset;
+ $('window').onkeydown=e=>{if(e.key==='Enter'){e.preventDefault();applyPreset()}};
+ $('plotTime').onchange=()=>{plotView.hover=null;draw()};
+ const buffer=$('plotBuffer');buffer.onpointerdown=bufferPointerDown;buffer.onpointermove=bufferPointerMove;buffer.onpointerup=bufferPointerUp;buffer.onpointercancel=bufferPointerUp;
+ buffer.onlostpointercapture=e=>{if(plotView.drag?.kind==='buffer')bufferPointerUp(e)};
+ buffer.onpointerenter=()=>{$('plotBufferTip').hidden=false};buffer.onpointerleave=()=>{if(plotView.drag?.kind!=='buffer')$('plotBufferTip').hidden=true};
+ for(const [id,edge]of [['plotBufferStart','left'],['plotBufferEnd','right'],['plotBufferMove','move']])$(id).onkeydown=e=>bufferKey(e,edge);
+ $('plotFitX').onclick=fitPlotX;
+ $('window').value=String(plotView.preset);$('plotTime').value='relative';$('plotAxis').value='xy';$('plotTool').value='pan';
+}
+ return {index,root,selected,autoSelect:index===0,view:plotView,get layout(){return plotLayout},control:$,draw,bind:bindPlot,resetData:resetPlotData,follow:followPlot,freeze:freezePlot,resume:resumePlot,scrub:scrubPlot,bounds:plotBounds,groups:plotGroups,cancelGesture};
+}
+
 function status(s){lastStatus=s;const box=$('status');box.replaceChildren();if(!s.work){box.textContent='等待板端状态帧';return}const head=document.createElement('div');head.textContent=s.work+' · '+s.drive+' · '+s.stream;box.append(head);for(let i=0;i<2;i++){const f=s.flags[i],el=document.createElement('div');el.className='axis';if(!(f&128)){el.textContent=inactiveAxisLabel(i);box.append(el);continue;}const strong=document.createElement('strong');strong.textContent='M'+(i+1)+' · '+s.axis_status[i];el.append(strong,document.createElement('br'),document.createTextNode(s.mode[i]+' / '+s.input[i]+' / '+(f&8?'请求运行':'停止')),document.createElement('br'),document.createTextNode('Curr Loop '+(f&16?'ON':'OFF')+' · E'+(i+1)+' '+(s.encoders[i]?'OK':'LOST')));box.append(el)}const tail=document.createElement('div');tail.textContent=statusBanner(s);box.append(tail);const result=document.createElement('div');result.textContent='最近命令 '+s.control_result+' · HSO '+s.hso_result+' · '+s.command_status;box.append(result);const p=s.detect_result&255,pp=p>127?p-256:p;$('detect').textContent=s.detect_status+' · PP '+pp+' · R '+((s.detect_result>>>8)&65535)/1000+' Ω · Ls '+s.detect_ls_uh+' µH · Flux '+s.detect_flux_uwb+' µWb'}
 /* All transport, parsing and recording run locally in this document. */
 const WIRE_LENGTHS={1:26,2:26,3:50,4:38,5:26,6:30,7:30,8:48,9:48,10:44,11:38,16:96,32:92,33:64};
@@ -69,10 +574,27 @@ function channels(f){const k=f.kind,b=f.payload,v=new DataView(b.buffer,b.byteOf
  if(k===11){const keys=['startup_emf','crossings','period_pct','ratio_pct','ratio_tenth','startup_ms','sector','quality','gate','period_0','period_1','period_2','period_3','period_4','period_5','state','sampling_off','speed_control','reject'],units=['V','count','%','%','tenth','ms','index','count','ASCII',...Array(6).fill('10us'),'code','bool','bool','code'];return keys.map((key,i)=>['six.'+key,units[i],i===0?v.getFloat32(0,true):i===1?v.getUint32(4,true):i<15?v.getUint16(8+(i-2)*2,true):b[34+i-15]])}return [];
 }
 let connecting=false,sessionToken=0,demo=false,demoStart=0,demoSequence=0;
+/* Observe two consecutive fixed-width JustFloat frames to detect a board-side
+ * format switch. Native RPC/CRC parsing remains the complete console source. */
+class JustFloatProbe{
+ constructor(){this.reset()}
+ reset(){this.bytes=[];this.count=0;this.length=0}
+ feed(chunk){let found=false;for(const byte of chunk){
+  this.bytes.push(byte);const n=this.bytes.length;
+  if(n>=4&&this.bytes[n-4]===0&&this.bytes[n-3]===0&&this.bytes[n-2]===128&&this.bytes[n-1]===127){
+   let valid=[28,32,40,52].includes(n);
+   if(valid){const view=new DataView(Uint8Array.from(this.bytes).buffer);for(let i=0;i<n-4;i+=4){const v=view.getFloat32(i,true);if(!Number.isFinite(v)&&!Number.isNaN(v))valid=false}}
+   this.count=valid?(this.length===n?this.count+1:1):0;this.length=n;this.bytes=[];
+   if(this.count>=2)found=true;
+  }else if(n>128){this.bytes=this.bytes.slice(-3);this.count=0;this.length=0}
+ }return found}
+}
+let outputFormat='Unknown',formatVerified=false;
+const formatProbe=new JustFloatProbe();
 let port=null,reader=null,readTask=null,writer=null,parser=new WireParser(),connected=false,closing=false,received=0,lastRx=0,lastEpoch=0,nextRequest=1,pending=new Map(),txChain=Promise.resolve(),boardConfig=null,recordChunks=[],recordBytes=0,recordWriter=null,recordOpening=false;
 const configKeys=['speed_x10','voltage_x100','position_x100','flags','led_brightness','speed_step_x10','torque_step_x100','position_step_x100','control_config','gear_ratio_x100','gear_offset_x100','axis2_flags','axis2_speed_x10','axis2_voltage_x100','axis2_position_x100','axis2_speed_step_x10','axis2_torque_step_x100','axis2_position_step_x100','motor_detect','motor_detect_l_uh','motor_detect_flux_uwb'];
 function decodeReply(f){const b=f.payload,v=new DataView(b.buffer,b.byteOffset,b.length),settings={};for(let i=0;i<configKeys.length;i++)settings[configKeys[i]]=v.getInt32(8+i*4,true);const cfg=settings.control_config,work=cfg&7;return {id:v.getUint16(0,true),result:v.getInt8(2),source:b[3],schema:b[4],firmware:b[5],capabilities:15,save:b[6],focus:b[7],profiles:[(settings.flags>>>24)&1,(cfg>>>4)&1],drive:work===0?(cfg&16384?2:cfg&8?1:0):0,work,settings}}
-function failPending(reason){for(const p of pending.values()){clearTimeout(p.timer);p.reject(Error(reason))}pending.clear()}
+function failPending(reason){for(const p of pending.values()){clearTimeout(p.timer);p.reject(Error(reason))}pending.clear();refreshControlChoices()}
 function download(name,data,type){const url=URL.createObjectURL(new Blob([data],{type})),a=document.createElement('a');a.href=url;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000)}
 function recordFrame(f){if(!recording)return;const stamp=new Date().toISOString(),rows=f.kind===16?[['status','json',JSON.stringify(decodeStatus(f))]]:f.kind===32?[['configuration','json',JSON.stringify(decodeReply(f))]]:f.kind===33?[['diagnostic','json',JSON.stringify(decodeRow(f))]]:(f.values||channels(f));const quote=s=>'"'+String(s).replaceAll('"','""')+'"';let text='';for(const [key,unit,n]of rows)text+=[stamp,f.ms,f.sequence,f.epoch,f.kind,key,unit,n===null?'':typeof n==='string'?quote(n):n].join(',')+'\r\n';
  if(recordWriter){if(recordQueuedBytes+text.length>1024*1024){recording=false;$('error').textContent='文件写入速度落后，已停止记录；请结束记录保存已有数据';return}const sink=recordWriter,n=text.length;recordQueuedBytes+=n;txRecord=txRecord.then(()=>sink.write(text)).catch(e=>{recording=false;$('error').textContent='记录失败：'+e.message}).finally(()=>{recordQueuedBytes-=n});return}
@@ -80,14 +602,163 @@ function recordFrame(f){if(!recording)return;const stamp=new Date().toISOString(
 }
 let txRecord=Promise.resolve(),recordQueuedBytes=0,recordEpoch=0,seenParserEpoch=0;
 async function toggleRecord(){if(recordOpening)return;recordOpening=true;try{if(recording||recordWriter||recordChunks.length){recording=false;await txRecord;if(recordWriter){const sink=recordWriter;try{await sink.close()}finally{recordWriter=null}}else download('motor-'+Date.now()+'.csv',recordChunks.join(''),'text/csv;charset=utf-8');recordChunks=[];recordBytes=0;return}const header='\ufeffhost_time,board_ms,sequence,epoch,packet_kind,field,unit,value\r\n';if(typeof showSaveFilePicker==='function'){const handle=await showSaveFilePicker({suggestedName:'motor-'+Date.now()+'.csv',types:[{description:'CSV',accept:{'text/csv':['.csv']}}]});recordWriter=await handle.createWritable();await recordWriter.write(header);recordPath=handle.name}else{recordChunks=[header];recordBytes=header.length;recordPath='浏览器内存 · 16 MiB 自动导出'}recording=true}finally{recordOpening=false}}
-function consume(f){received++;lastRx=performance.now();if(f.epoch!==lastEpoch){lastEpoch=f.epoch;failPending('板端已重启，命令结果未知；请重新读取');boardConfig=null;log('检测到板端重启');}try{recordFrame(f)}catch(e){recording=false;$('error').textContent='记录失败：'+e.message}if(f.kind===33){consumeRow(f);return}if(f.kind===16)status(decodeStatus(f));else if(f.kind===32){const r=decodeReply(f);if(!pending.has(r.id))return;const p=pending.get(r.id);pending.delete(r.id);clearTimeout(p.timer);if(!((r.schema===1&&r.firmware===87)||(r.schema===2&&r.firmware>=88&&r.firmware<=100))){p.reject(Error('配置协议不匹配'));return}if((p.command.startsWith('GetRow:')&&r.result===1)||(boardConfig&&r.source!==boardConfig.source)){p.reject(Error('回执类型／来源不匹配'));return}r.read_at=new Date().toISOString();boardConfig=r;renderConfig();if(p.command==='Get'&&r.result===1){populateControls(r);populateSettings()}if(r.result===1)p.resolve(r);else p.reject(Error('板端拒绝 #'+r.id+'：'+({[-1]:'当前状态不允许／检查轴与停机条件',[-2]:'参数或命令格式错误',[-3]:'忙／来源冲突',[-4]:'请求取消／过期，请重新确认状态'}[r.result]||r.result)));}else if(!replaying){f.values=channels(f);if(f.values.length)add(f)}}
-async function connect(){if(demo)throw Error('请先退出离线演示');if(connecting||port||connected||closing)throw Error('请先断开当前连接');if(!globalThis.isSecureContext||!navigator.serial)throw Error('请用支持 Web Serial 的桌面 Chrome／Edge 打开此文件');connecting=true;const token=++sessionToken;let selectedPort;try{selectedPort=await navigator.serial.requestPort();await selectedPort.open({baudRate:115200,dataBits:8,stopBits:1,parity:'none',flowControl:'none',bufferSize:8192});}finally{connecting=false}if(token!==sessionToken){await selectedPort.close();return}port=selectedPort;connected=true;parser=new WireParser();received=0;lastRx=0;seenParserEpoch=0;lastEpoch=++recordEpoch;boardConfig=null;lastStatus={};status(lastStatus);clear();replaying=false;$('replay').textContent='';writer=port.writable.getWriter();reader=port.readable.getReader();readTask=(async()=>{try{while(connected){const r=await reader.read();if(r.done)break;for(const frame of parser.feed(r.value)){if(frame.epoch!==seenParserEpoch){seenParserEpoch=frame.epoch;++recordEpoch}frame.epoch=recordEpoch;consume(frame)}}}catch(e){if(!closing)$('error').textContent='通信中断：'+e.message}finally{reader.releaseLock();reader=null;connected=false;boardConfig=null;renderConfig();failPending('连接已断开，命令结果未知');}})();log('已连接，仅查询配置，不自动运行');await send('Get')}
+function consume(f){received++;lastRx=performance.now();if(f.epoch!==lastEpoch){lastEpoch=f.epoch;failPending('板端已重启，命令结果未知；请重新读取');boardConfig=null;renderConfig();log('检测到板端重启');}try{recordFrame(f)}catch(e){recording=false;$('error').textContent='记录失败：'+e.message}if(f.kind===33){consumeRow(f);return}if(f.kind===16)status(decodeStatus(f));else if(f.kind===32){const r=decodeReply(f);if(!pending.has(r.id))return;const p=pending.get(r.id);pending.delete(r.id);clearTimeout(p.timer);if(!((r.schema===1&&r.firmware===87)||(r.schema===2&&r.firmware>=88&&r.firmware<=101))){p.reject(Error('配置协议不匹配'));return}if((p.command.startsWith('GetRow:')&&r.result===1)||(boardConfig&&r.source!==boardConfig.source)){p.reject(Error('回执类型／来源不匹配'));return}r.read_at=new Date().toISOString();if(p.command==='Get'&&r.result===1){setOutputFormat('Native');formatProbe.reset()}const previous=boardConfig;boardConfig=r;renderConfig();controlReply(p.command,r,previous);if(r.result===1)p.resolve(r);else p.reject(Error('板端拒绝 #'+r.id+'：'+({[-1]:'当前状态不允许／检查轴与停机条件',[-2]:'参数或命令格式错误',[-3]:'忙／来源冲突',[-4]:'请求取消／过期，请重新确认状态'}[r.result]||r.result)));}else if(!replaying){f.values=channels(f);if(f.values.length)add(f)}}
+async function connect(){if(demo)throw Error('请先退出离线演示');if(connecting||port||connected||closing)throw Error('请先断开当前连接');if(!globalThis.isSecureContext||!navigator.serial)throw Error('请用支持 Web Serial 的桌面 Chrome／Edge 打开此文件');connecting=true;const token=++sessionToken;let selectedPort;try{selectedPort=await navigator.serial.requestPort();await selectedPort.open({baudRate:115200,dataBits:8,stopBits:1,parity:'none',flowControl:'none',bufferSize:8192});}finally{connecting=false}if(token!==sessionToken){await selectedPort.close();return}port=selectedPort;connected=true;parser=new WireParser();received=0;lastRx=0;seenParserEpoch=0;lastEpoch=++recordEpoch;boardConfig=null;lastStatus={};status(lastStatus);clear();replaying=false;$('replay').textContent='';writer=port.writable.getWriter();reader=port.readable.getReader();readTask=(async()=>{try{while(connected){const r=await reader.read();if(r.done)break;const frames=parser.feed(r.value);if(frames.length)formatProbe.reset();else if((outputFormat==='Native'||outputFormat==='JustFloat')&&formatProbe.feed(r.value)){noticeJustFloat()}for(const frame of frames){if(frame.epoch!==seenParserEpoch){seenParserEpoch=frame.epoch;++recordEpoch}frame.epoch=recordEpoch;consume(frame)}}}catch(e){if(!closing)$('error').textContent='通信中断：'+e.message}finally{reader.releaseLock();reader=null;connected=false;boardConfig=null;setOutputFormat('Unknown');formatProbe.reset();renderConfig();failPending('连接已断开，命令结果未知');}})();log('已连接，先切换 Native 再查询配置，不自动运行');await selectOutputFormat('Native')}
 async function disconnect(){if(closing)return;++sessionToken;closing=true;connected=false;failPending('连接已断开，命令结果未知');try{if(reader)await reader.cancel();if(readTask)await readTask;if(writer){await writer.abort().catch(()=>{});await txChain.catch(()=>{});writer.releaseLock();writer=null}if(port){await port.close();port=null}}finally{closing=false;boardConfig=null;renderConfig();log('已断开通信')}}
 async function transmit(text){if(!connected||!writer)throw Error('尚未连接串口');const bytes=new TextEncoder().encode(text+'\n'),sink=writer;const job=txChain.catch(()=>{}).then(()=>{if(sink!==writer||!connected)throw Error('连接已改变');return sink.write(bytes)});txChain=job;return job}
-async function send(command){command=String(command);if(replaying&&command!=='Stop'&&command!=='Get'&&!command.startsWith('GetRow:'))throw Error('当前为历史回放，请先返回实时');if(!/^[\x20-\x7e]+$/.test(command)||command.includes('@')||command.length>52)throw Error('命令须为 1～52 个 ASCII 字符，不能包含换行或 @');if(!connected)throw Error('尚未连接串口');if(command!=='Get'&&command!=='Stop'&&!boardConfig)throw Error('请先读取配置并核对固件');if(pending.size&&!/^(?:M[12]:)?Stop$/.test(command))throw Error('请等待上一条命令回执');if(/^(?:M[12]:)?Stop$/.test(command))++batchEpoch;if(/^(?:M[12]:)?Stop$/.test(command))failPending('已发送停止，先前命令结果请重新查询');const id=nextRequest;nextRequest=nextRequest%65535+1;let resolve,reject;const reply=new Promise((a,b)=>{resolve=a;reject=b});reply.catch(()=>{});const timer=setTimeout(()=>{pending.delete(id);reject(Error('#'+id+' 等待回执超时；结果未知，不自动重发，请读取确认'))},2500);pending.set(id,{resolve,reject,timer,command});log('TX #'+id+' '+command);if(!boardConfig&&/^(?:M[12]:)?Stop$/.test(command))transmit('\n'+command).catch(()=>{});transmit('@'+id+':'+command).catch(e=>{if(pending.has(id)){clearTimeout(timer);pending.delete(id);reject(e)}});const r=await reply;log('ACK #'+id+' '+command+' · 板端已受理，实际目标见实时曲线');return r}
-function populateControls(r){$('workMode').value=WORK_COMMANDS[r.work];$('axis').value='M'+(r.focus+1);$('motorAxis').value=$('axis').value;$('motorModel').value=r.profiles[r.focus]?'4015':'2804';if(r.focus===0&&r.settings.control_config&32768)$('motorModel').value='ESC';$('driveMode').value=['Encoder','HSO','SixStep'][r.drive]}
+async function send(command){command=String(command);if(replaying&&command!=='Stop'&&command!=='Get'&&!command.startsWith('GetRow:'))throw Error('当前为历史回放，请先返回实时');if(!/^[\x20-\x7e]+$/.test(command)||command.includes('@')||command.length>52)throw Error('命令须为 1～52 个 ASCII 字符，不能包含换行或 @');if(!connected)throw Error('尚未连接串口');if(command==='Format:Native')return selectOutputFormat('Native');if(command==='Format:JustFloat')return selectOutputFormat('JustFloat');if(outputFormat==='JustFloat'){if(/^(?:M[12]:)?Stop$/.test(command)){++batchEpoch;failPending('已发送停止');await transmit(command);log('TX '+command+' · JustFloat 无命令回执，请核对电机状态');return null}throw Error('板端为 JustFloat，请先切换 Native 使用控制台')}if(command!=='Get'&&command!=='Stop'&&!boardConfig)throw Error('请先读取配置并核对固件');if(pending.size&&!/^(?:M[12]:)?Stop$/.test(command))throw Error('请等待上一条命令回执');if(/^(?:M[12]:)?Stop$/.test(command))++batchEpoch;if(/^(?:M[12]:)?Stop$/.test(command))failPending('已发送停止，先前命令结果请重新查询');const id=nextRequest;nextRequest=nextRequest%65535+1;let resolve,reject;const reply=new Promise((a,b)=>{resolve=a;reject=b});reply.catch(()=>{});const timer=setTimeout(()=>{pending.delete(id);refreshControlChoices();reject(Error('#'+id+' 等待回执超时；结果未知，不自动重发，请读取确认'))},2500);pending.set(id,{resolve,reject,timer,command});refreshControlChoices();log('TX #'+id+' '+command);if(!boardConfig&&/^(?:M[12]:)?Stop$/.test(command))transmit('\n'+command).catch(()=>{});transmit('@'+id+':'+command).catch(e=>{if(pending.has(id)){clearTimeout(timer);pending.delete(id);refreshControlChoices();reject(e)}});const r=await reply;log('ACK #'+id+' '+command+' · 板端已受理，实际目标见实时曲线');return r}
+function setOutputFormat(format,verified=true){
+ outputFormat=format;formatVerified=verified;
+ if(format==='Native'||format==='JustFloat')$('wireFormat').value=format;
+ $('formatState').textContent=format==='Native'?'Native 已确认 · 完整控制台':format==='JustFloat'?(verified?'JustFloat 数据已确认；切回 Native 使用完整控制台。':'已请求 JustFloat，等待数据确认；USB／USART 同时切换。'):format==='Unknown'?'未连接；连接时先切换 Native。':'正在切换 Native，等待板端配置回执…';
+}
+function noticeJustFloat(){
+ lastRx=performance.now();if(outputFormat==='JustFloat'&&formatVerified)return;
+ ++batchEpoch;failPending('板端已切换 JustFloat；先前命令结果未知，请切回 Native 读取确认');
+ boardConfig=null;lastStatus={};status({});clear();setOutputFormat('JustFloat');renderConfig();
+ log('检测到 JustFloat 输出，已暂停 Native 控制／查询；未发送格式切换或运动命令');
+}
+async function selectOutputFormat(format){
+ if(!connected)throw Error('尚未连接串口');
+ if(!['Native','JustFloat'].includes(format))throw Error('发送格式无效');
+ if(pending.size)throw Error('请等待上一条命令回执');
+ if(replaying)throw Error('请先返回实时再切换发送格式');
+ if(format==='JustFloat'&&(!boardConfig||boardConfig.firmware<101))throw Error('切换 JustFloat 需要先读取 R101 或更新固件');
+ ++batchEpoch;formatProbe.reset();
+ if(format==='Native'){
+  setOutputFormat('Switching');boardConfig=null;
+  parser=new WireParser();seenParserEpoch=0;lastEpoch=++recordEpoch;clear();renderConfig();
+  await transmit('Format:Native');return send('Get');
+ }
+ await transmit('Format:JustFloat');
+ boardConfig=null;lastStatus={};status({});clear();setOutputFormat('JustFloat',false);renderConfig();
+ log('TX Format:JustFloat · 已发送请求，无 Native 回执；切回 Native 后可读取实际设置');
+ return null;
+}
+const WORK_LABELS=['单电机 M1','单电机 M2','双机独立','双机同步速度','双机同步位置','M1 主机 → M2 从机','M2 主机 → M1 从机'];
+const DRIVE_COMMANDS=['Encoder','HSO','SixStep'];
+const DRIVE_LABELS={Encoder:'编码器 FOC',HSO:'HSO 无感',SixStep:'六步无感'};
+const ACTION_LABELS={Speed:'Speed · 速度',Angle:'Angle · 位置',Torque:'Torque · 转矩',Throttle:'Throttle · 油门'};
+function controlRules(work,motorAxis,drive,model){
+ const axes=work===0?['M1']:work===1?['M2']:['M1','M2'],follow=work===5||work===6;
+ return {axes,runAxes:follow?[work===5?'M2':'M1']:axes,follow,
+  drives:work===0&&motorAxis==='M1'?DRIVE_COMMANDS:['Encoder'],
+  models:work===0&&motorAxis==='M1'&&drive==='SixStep'?['2804','4015','ESC']:['2804','4015'],
+  actions:follow?[]:work===3?['Speed']:work===4?['Angle']:work===0&&drive==='HSO'?['Speed']:
+   work===0&&drive==='SixStep'?(model==='ESC'?['Throttle']:['Speed','Throttle']):['Speed','Angle','Torque']};
+}
+function selectChoices(id,values,labels={},preferred){
+ const select=$(id),signature=JSON.stringify(values.map(value=>[value,labels[value]||value]));
+ const chosen=preferred===undefined?select.value:String(preferred);
+ if(select.dataset.choices!==signature){
+  select.replaceChildren(...values.map(value=>{const option=document.createElement('option');option.value=value;option.textContent=labels[value]||value;return option}));
+  select.dataset.choices=signature;
+ }
+ select.value=values.includes(chosen)?chosen:values[0]||'';
+}
+function confirmedModel(r,axis){
+ if(!r)return '2804';
+ return axis==='M1'&&r.work===0&&r.drive===2&&(r.settings.control_config&32768)?'ESC':r.profiles[axis==='M2'?1:0]?'4015':'2804';
+}
+function controlSelection(){
+ const work=WORK_COMMANDS.indexOf($('workMode').value),motorAxis=$('motorAxis').value,axis=$('axis').value,drive=$('driveMode').value,model=$('motorModel').value;
+ const rules=controlRules(work,motorAxis,drive,model),r=boardConfig;
+ const workApplied=!!r&&work===r.work,driveApplied=work!==0||drive===DRIVE_COMMANDS[r?.drive];
+ const motorApplied=!!r&&model===confirmedModel(r,motorAxis);
+ const runModelApplied=motorApplied||(work===2&&motorAxis!==axis);
+ return {work,motorAxis,axis,drive,model,rules,workApplied,driveApplied,motorApplied,runModelApplied};
+}
+function refreshControlChoices({readMotor=false,readDrive=false,focus}={}){
+ const r=boardConfig,work=WORK_COMMANDS.indexOf($('workMode').value);
+ let rules=controlRules(work,$('motorAxis').value,$('driveMode').value,$('motorModel').value);
+ selectChoices('motorAxis',rules.axes,{},focus);selectChoices('axis',rules.runAxes,{},focus);
+ if(readDrive)$('driveMode').value=work===0&&r?.work===0?DRIVE_COMMANDS[r.drive]:'Encoder';
+ rules=controlRules(work,$('motorAxis').value,$('driveMode').value,$('motorModel').value);
+ selectChoices('driveMode',rules.drives,DRIVE_LABELS);
+ rules=controlRules(work,$('motorAxis').value,$('driveMode').value,$('motorModel').value);
+ let confirmed=confirmedModel(r,$('motorAxis').value);
+ if(!rules.models.includes(confirmed))confirmed=r?.profiles[$('motorAxis').value==='M2'?1:0]?'4015':'2804';
+ selectChoices('motorModel',rules.models,{ESC:'ESC 通用'},readMotor||!rules.models.includes($('motorModel').value)?confirmed:undefined);
+ const state=controlSelection();rules=state.rules;
+ const oldAction=$('action').value;
+ selectChoices('action',rules.actions,ACTION_LABELS);
+ if(oldAction&&oldAction!==$('action').value)$('target').value='0';
+ const ready=!!r&&connected&&!replaying&&!demo&&!closing,busy=pending.size>0;$('setFormat').disabled=!connected||busy||replaying||demo;
+ const motionReady=ready&&!busy&&state.workApplied&&state.driveApplied&&state.runModelApplied;
+ $('setWork').disabled=!ready||busy||state.workApplied;
+ $('setMotor').disabled=!ready||busy||!state.workApplied||!state.driveApplied;
+ $('setDrive').hidden=work!==0;
+ $('setDrive').disabled=!ready||busy||!state.workApplied||state.driveApplied;
+ $('driveMode').disabled=rules.drives.length===1;
+ $('driveLabel').textContent=$('motorAxis').value+' 驱动';
+ $('workState').textContent=!r?'尚未读取板端配置':state.workApplied?'板端当前：'+WORK_LABELS[r.work]:'板端当前：'+WORK_LABELS[r.work]+'；所选模式尚未应用';
+ $('workState').className='context-note '+(r&&!state.workApplied?'pending':'muted');
+ $('motorNote').textContent=work===0?(state.driveApplied?'M1 支持编码器 FOC、HSO 和六步；ESC 通用只用于六步油门。':'所选驱动尚未应用，请先应用驱动。'):
+  work===1?'M2 固定使用编码器 FOC。':'双机均使用编码器 FOC，可分别设置 M1、M2 型号。';
+ $('runContext').textContent=WORK_LABELS[work]||'请选择工作模式';
+ $('runTargetRow').hidden=rules.follow;$('follow').hidden=!rules.follow;
+ $('follow').textContent=work===5?'启动跟随 · M1 → M2':'启动跟随 · M2 → M1';
+ $('follow').disabled=!motionReady;$('apply').disabled=!motionReady||!rules.actions.length;
+ $('setFocus').disabled=!ready||busy||!state.workApplied;
+ const actualAxes=r?controlRules(r.work,'M1','Encoder','2804').axes:[];
+ $('axisStop').disabled=!ready||!actualAxes.includes(state.axis);
+ $('axisStop').textContent=work>=3?'停止双机':'停止 '+state.axis;
+ let note=!r?'连接并读取配置后可运行。':!state.workApplied?'请先应用工作模式，再设置电机与运行目标。':!state.driveApplied?'请先应用驱动，再发送运行目标。':!state.runModelApplied?'所选电机型号尚未应用，请先应用型号。':
+  rules.follow?'手动转动主机，按下“启动跟随”后从机按板端齿轮比例与偏移跟随。':work===3?'向任一轴发送速度目标，两台电机同步运行。':work===4?'向任一轴发送位置目标，两台电机同步运行。':
+   state.drive==='HSO'?'HSO 使用速度控制，由板端执行无感启动和速度限幅。':state.drive==='SixStep'?'六步使用反电势换相；ESC 通用仅提供油门控制。':'选中轴独立执行目标，发送后板端进入 Run 页面。';
+ $('runNote').textContent=note;$('runNote').className='context-note '+(r&&(!state.workApplied||!state.driveApplied||!state.runModelApplied)?'pending':'muted');
+ const action=$('action').value,flags=r?.settings[state.axis==='M2'?'axis2_flags':'flags']||0;
+ $('targetUnit').textContent=action==='Speed'?'rad/s':action==='Angle'?'rad':action==='Throttle'?'%':flags&1?'A（电流）':'V（电压）';
+ $('target').min=action==='Throttle'?'0':'';$('target').max=action==='Throttle'?'100':'';
+ $('target').setAttribute('aria-label',ACTION_LABELS[action]||'目标值');
+}
+function requireControl(kind){
+ const s=controlSelection();
+ if(!boardConfig)throw Error('请先连接并读取板端配置');
+ if(!s.workApplied)throw Error('请先应用工作模式');
+ if(kind==='drive'){
+  if(s.work!==0||s.motorAxis!=='M1'||!s.rules.drives.includes(s.drive))throw Error('仅单 M1 可切换无感驱动');
+ }else if(kind==='motor'){
+  if(!s.rules.axes.includes(s.motorAxis)||!s.rules.models.includes(s.model))throw Error('当前工作模式不支持该电机型号');
+  if(!s.driveApplied)throw Error('请先应用驱动');
+ }else{
+  if(!s.rules.runAxes.includes(s.axis))throw Error('当前工作模式不支持该运行轴');
+  if(!s.driveApplied)throw Error('请先应用驱动');
+  if(!s.runModelApplied)throw Error('请先应用电机型号');
+  if((kind==='follow')!==s.rules.follow)throw Error(s.rules.follow?'主从模式请使用 Follow 启动':'当前不是主从模式');
+ }
+ return s;
+}
+async function sendRunTarget(){
+ const s=requireControl('run'),action=$('action').value,text=$('target').value.trim(),target=Number(text);
+ if(!s.rules.actions.includes(action))throw Error('当前模式不支持该运行指令');
+ if(!text||!Number.isFinite(target)||(action==='Throttle'&&(target<0||target>100)))throw Error('目标数值无效');
+ return send(s.axis+':'+action+':'+target);
+}
+async function applyWorkMode(){
+ const work=WORK_COMMANDS.indexOf($('workMode').value);if(work<0)throw Error('工作模式无效');
+ return send('Work:'+WORK_COMMANDS[work]);
+}
+async function applyMotorModel(){const s=requireControl('motor');return send('Motor'+s.motorAxis[1]+':'+s.model)}
+async function applyDriveMode(){const s=requireControl('drive');return send('Feedback:'+s.drive)}
+async function startFollow(){requireControl('follow');return send('Follow')}
+function populateControls(r){
+ $('workMode').value=WORK_COMMANDS[r.work];
+ refreshControlChoices({readMotor:true,readDrive:true,focus:'M'+(r.focus+1)});
+}
+function controlReply(command,r,previous){
+ if(command==='Get'&&r.result===1){populateControls(r);populateSettings()}
+ else if(r.result===1&&/^(?:Work:|App:0,11,0$)/i.test(command))populateControls(r);
+ else {
+  const feedback=r.result===1&&/^Feedback:/i.test(command);
+  // A drive ACK may change the board's ESC preference. Keep a model that the
+  // user explicitly selected but has not applied yet, when it is still legal.
+  const readMotor=r.result===1&&/^Motor[12]:/i.test(command)||feedback&&$('motorModel').value===confirmedModel(previous,$('motorAxis').value);
+  refreshControlChoices({readMotor,readDrive:feedback});
+ }
+}
 function appendConfig(label,value){const row=document.createElement('div'),name=document.createElement('span'),n=document.createElement('b');row.className='config-row';name.textContent=label;n.textContent=value;row.append(name,n);$('configValues').append(row)}
-function renderConfig(){refreshSettingsCapabilities();const box=$('configValues');box.replaceChildren();if(!boardConfig){box.textContent='连接后读取板端当前配置';return}const r=boardConfig,s=r.settings;appendConfig('读回时间',r.read_at||'--');appendConfig('通信来源',r.source===1?'USB CDC':'USART1');appendConfig('固件／配置接口','UI-R'+r.firmware+'-PC / '+r.schema);appendConfig('工作模式',at(WORK,r.work));appendConfig('M1 / M2 型号',r.profiles.map(x=>at(['2804','4015'],x)).join(' / '));appendConfig('M1 驱动',r.drive===2&&(s.control_config&32768)?'6STEP ESC':at(DRIVE,r.drive));appendConfig('板端 View','M'+(r.focus+1));appendConfig('保存状态',at(SAVE_STATES,r.save));for(let a=0;a<2;a++){const flags=(a?s.axis2_flags:s.flags)>>>0,p=a?'axis2_':'';const speed=(flags>>>14)&1023;const pos=((flags>>>8)&63)|(((flags>>>25)&15)<<6);appendConfig('M'+(a+1)+' Curr Loop',(a===0&&r.drive===1)?'ON（HSO）':(a===0&&r.drive===2)?'OFF（六步）':flags&1?'ON':'OFF');appendConfig('M'+(a+1)+' Speed Limit / Pos Speed',(speed||100)+' / '+(pos||30)+' rad/s');appendConfig('M'+(a+1)+' 保存的 Speed / Uq / Position',s[p+'speed_x10']/10+' rad/s · '+s[p+'voltage_x100']/100+' V · '+s[p+'position_x100']/100+' rad');appendConfig('M'+(a+1)+' 调节步长',s[p+'speed_step_x10']/10+' rad/s · '+s[p+'torque_step_x100']/100+' V/A · '+s[p+'position_step_x100']/100+' rad')}appendConfig('齿轮比例／偏移',s.gear_ratio_x100/100+' / '+s.gear_offset_x100/100+' rad');appendConfig('IBUS 阈值',(((s.control_config>>>8)&63)||30)/10+' A');appendConfig('LED',((s.flags&2)?'ON':'OFF')+' · '+s.led_brightness+'%');appendConfig('保存的油门',(s.control_config>>>16&127)+'%');appendConfig('辨识结果','PP '+(s.motor_detect<<24>>24)+' · R '+((s.motor_detect>>>8)&65535)/1000+' Ω · L '+s.motor_detect_l_uh+' µH · Flux '+s.motor_detect_flux_uwb+' µWb');}
+function renderConfig(){refreshSettingsCapabilities();refreshControlChoices();const box=$('configValues');box.replaceChildren();if(!boardConfig){box.textContent='连接后读取板端当前配置';return}const r=boardConfig,s=r.settings;appendConfig('读回时间',r.read_at||'--');appendConfig('通信来源',r.source===1?'USB CDC':'USART1');appendConfig('固件／配置接口','R'+r.firmware+' / '+r.schema);appendConfig('工作模式',at(WORK,r.work));appendConfig('M1 / M2 型号',r.profiles.map(x=>at(['2804','4015'],x)).join(' / '));appendConfig('M1 驱动',r.drive===2&&(s.control_config&32768)?'6STEP ESC':at(DRIVE,r.drive));appendConfig('板端 View','M'+(r.focus+1));appendConfig('保存状态',at(SAVE_STATES,r.save));for(let a=0;a<2;a++){const flags=(a?s.axis2_flags:s.flags)>>>0,p=a?'axis2_':'';const speed=(flags>>>14)&1023;const pos=((flags>>>8)&63)|(((flags>>>25)&15)<<6);appendConfig('M'+(a+1)+' Curr Loop',(a===0&&r.drive===1)?'ON（HSO）':(a===0&&r.drive===2)?'OFF（六步）':flags&1?'ON':'OFF');appendConfig('M'+(a+1)+' Speed Limit / Pos Speed',(speed||100)+' / '+(pos||30)+' rad/s');appendConfig('M'+(a+1)+' 保存的 Speed / Uq / Position',s[p+'speed_x10']/10+' rad/s · '+s[p+'voltage_x100']/100+' V · '+s[p+'position_x100']/100+' rad');appendConfig('M'+(a+1)+' 调节步长',s[p+'speed_step_x10']/10+' rad/s · '+s[p+'torque_step_x100']/100+' V/A · '+s[p+'position_step_x100']/100+' rad')}appendConfig('齿轮比例／偏移',s.gear_ratio_x100/100+' / '+s.gear_offset_x100/100+' rad');appendConfig('IBUS 阈值',(((s.control_config>>>8)&63)||30)/10+' A');appendConfig('LED',((s.flags&2)?'ON':'OFF')+' · '+s.led_brightness+'%');appendConfig('保存的油门',(s.control_config>>>16&127)+'%');appendConfig('辨识结果','PP '+(s.motor_detect<<24>>24)+' · R '+((s.motor_detect>>>8)&65535)/1000+' Ω · L '+s.motor_detect_l_uh+' µH · Flux '+s.motor_detect_flux_uwb+' µWb');}
 function toggleDemo(){if(port||connecting||connected||closing)throw Error('请先断开串口');if(recording||recordWriter||recordChunks.length)throw Error('请先结束记录');demo=!demo;clear();lastStatus={};boardConfig=null;status({});renderConfig();demoStart=performance.now();demoSequence=0;log(demo?'离线模拟数据，不连接开发板':'已退出离线演示')}
 function demoFrame(){const t=(performance.now()-demoStart)/1000,frame={kind:1,ms:Math.round(t*1000),sequence:demoSequence++&65535,epoch:-1,values:[['m1.target_speed','rad/s',50],['m1.feedback_speed','rad/s',50+5*Math.sin(t)],['m1.target_position','rad',null],['m1.position','rad',50*t+5-5*Math.cos(t)],['m1.iq','A',.2+.05*Math.sin(4*t)],['vbus','V',20]]};if(!replaying)add(frame);try{recordFrame(frame)}catch(e){recording=false;$('error').textContent='记录失败：'+e.message}$('connection').textContent='离线演示 · 模拟数据';$('connection').className='bad';$('demo').textContent='退出离线演示';$('metrics').textContent='模拟数据，不连接串口、不控制电机';}
 function updateMetrics(){$('pending').textContent=pending.size?'等待板端回执：'+[...pending].map(([id,p])=>'#'+id+' '+p.command).join('；'):'';$('connection').textContent=connected?'串口已连接':'未连接';$('connection').className=connected?(lastRx&&performance.now()-lastRx<500?'good':'bad'):'';$('metrics').textContent='收到 '+received+' 帧 · 数据年龄 '+(lastRx?Math.round(performance.now()-lastRx):'--')+' ms\nCRC 错误 '+parser.crc_errors+' · 序号丢帧 '+parser.lost+'\n板端重启 '+parser.resets+' · 控制峰值 '+(lastStatus.max_us??'--')+' µs';$('record').textContent=recording||recordWriter||recordChunks.length?'结束记录并保存 CSV':'开始记录 CSV';$('recordPath').textContent=recording?recordPath:'';if(demo)demoFrame();else $('demo').textContent='离线演示';if(!paused)draw();setTimeout(updateMetrics,100)}
@@ -100,7 +771,7 @@ function statusBanner(s){
 }
 function inactiveAxisLabel(index){return 'M'+(index+1)+' 未启用'}
 async function loadCsv(file){
-  clear();replaying=true;let pending='',header=false,current=null,currentId='',start=null;
+  clear();replaying=true;refreshControlChoices();let pending='',header=false,current=null,currentId='',start=null;
   const flush=()=>{if(!current)return;if(epoch!==null&&(epoch!==current.epoch||lastKind!==current.kind))start=null;add(current);if(start===null)start=current.ms/1000;current=null};
   const line=text=>{const r=csvRows(text.replace(/^\uFEFF/,'')+'\n')[0];if(!r)return;
     if(!header){if(r.join(',')!=='host_time,board_ms,sequence,epoch,packet_kind,field,unit,value')throw Error('不是本工具的 CSV 格式');header=true;return}
@@ -136,13 +807,13 @@ const EDITORS=[
  [5,'ibusLimit','M1 IBUS 阈值','A',.5,4,.1]
 ];
 let batchEpoch=0;
-function requireExtensions(){if(!boardConfig||boardConfig.schema!==2||(boardConfig.firmware<88||boardConfig.firmware>100))throw Error('此操作需要 UI-R88-PC；请升级固件后重新读取设置')}
+function requireExtensions(){if(!boardConfig||boardConfig.schema!==2||(boardConfig.firmware<88||boardConfig.firmware>101))throw Error('此操作需要 UI-R88-PC；请升级固件后重新读取设置')}
 function axisOptions(r,a){const s=r.settings,p=a?'axis2_':'',f=(a?s.axis2_flags:s.flags)>>>0;return {posSpeed:((f>>>8)&63)|(((f>>>25)&15)<<6)||30,speedLimit:(f>>>14)&1023||100,currentLoop:f&1,speedStep:s[p+'speed_step_x10']/10,torqueStep:s[p+'torque_step_x100']/100,positionStep:s[p+'position_step_x100']/100}}
 function editableConfig(r){const s=r.settings;return {work:r.work,profiles:r.profiles.slice(),drive:r.drive,esc:!!(s.control_config&32768),focus:r.focus,axes:[axisOptions(r,0),axisOptions(r,1)],ledBrightness:s.led_brightness,ledEnable:(s.flags>>>1)&1,gearRatio:s.gear_ratio_x100/100,gearOffset:s.gear_offset_x100/100,ibusLimit:(((s.control_config>>>8)&63)||30)/10}}
 function editorScope(k){return k===1||k===2||k===6||k>=8}
 for(const [key,id,title,unit,min,max,step]of EDITORS){const label=document.createElement('label'),input=document.createElement('input');label.className='row';label.append(document.createTextNode(title+' '));input.id=id;input.type=(key===6||key===7)?'checkbox':'number';input.min=min;input.max=max;input.step=step;input.setAttribute?.('aria-label',title);label.append(input,document.createTextNode(' '+unit));$(editorScope(key)?'axisEditors':'globalEditors').append(label)}
 function refreshSettingsCapabilities(){
- const r=boardConfig,a=Number($('settingsAxis').value||1)-1,enabled=r?.schema===2&&r?.firmware>=88&&r?.firmware<=100;
+ const r=boardConfig,a=Number($('settingsAxis').value||1)-1,enabled=r?.schema===2&&r?.firmware>=88&&r?.firmware<=101;
  for(const id of ['pauseMotors','applySettings','saveSettings','clearIbus','resetSettings','startDetect','saveDetect','readDiag','importConfig'])$(id).disabled=!enabled;
  if(!r){$('settingsNote').textContent='连接并读取 UI-R88-PC 设置后可编辑。';return}
  const forced=a===0&&r.drive!==0,wasForced=$('currentLoop').disabled;
@@ -187,25 +858,31 @@ $('file').onchange=()=>act(async()=>{const file=$('file').files[0];if(file)await
 $('demo').onclick=()=>act(async()=>toggleDemo());
 $('connect').onclick=()=>act(connect);
 $('disconnect').onclick=()=>act(disconnect);
+$('setFormat').onclick=()=>act(()=>selectOutputFormat($('wireFormat').value));
 $('applyStream').onclick=()=>act(()=>send('Stream:'+$('stream').value));
 $('send').onclick=()=>act(()=>send($('command').value));
 $('command').onkeydown=e=>{if(e.key==='Enter')$('send').click()};
-$('apply').onclick=()=>act(()=>send($('axis').value+':'+$('action').value+':'+$('target').value));
+$('apply').onclick=()=>act(sendRunTarget);
 $('stop').onclick=()=>act(()=>send('Stop'));
 $('axisStop').onclick=()=>act(()=>send($('axis').value+':Stop'));
-$('follow').onclick=()=>act(()=>send('Follow'));
+$('follow').onclick=()=>act(startFollow);
 $('setFocus').onclick=()=>act(()=>send('Focus:'+$('axis').value));
-$('setWork').onclick=()=>act(()=>send('Work:'+$('workMode').value));
-$('setMotor').onclick=()=>act(()=>send('Motor'+$('motorAxis').value[1]+':'+$('motorModel').value));
-$('setDrive').onclick=()=>act(()=>send('Feedback:'+$('driveMode').value));
+$('setWork').onclick=()=>act(applyWorkMode);
+$('setMotor').onclick=()=>act(applyMotorModel);
+$('setDrive').onclick=()=>act(applyDriveMode);
+$('workMode').onchange=()=>refreshControlChoices({readMotor:true,readDrive:true});
+$('motorAxis').onchange=()=>{if(controlSelection().rules.runAxes.includes($('motorAxis').value))$('axis').value=$('motorAxis').value;refreshControlChoices({readMotor:true,readDrive:true});$('target').value='0'};
+$('axis').onchange=()=>{$('motorAxis').value=$('axis').value;refreshControlChoices({readMotor:true,readDrive:true});$('target').value='0'};
+$('driveMode').onchange=()=>refreshControlChoices();
+$('motorModel').onchange=()=>refreshControlChoices();
+$('action').onchange=()=>{$('target').value='0';refreshControlChoices()};
 $('readConfig').onclick=()=>act(()=>send('Get'));
 $('exportConfig').onclick=()=>act(async()=>{if(!boardConfig)throw Error('请先读取配置');download('motor-config-'+Date.now()+'.json',JSON.stringify({format:'FOC-console-settings',version:1,time:new Date().toISOString(),editable:editableConfig(boardConfig),configuration:boardConfig,status:lastStatus},null,2),'application/json')});
 $('record').onclick=()=>act(toggleRecord);
-$('pause').onclick=()=>{paused=!paused;$('pause').textContent=paused?'继续绘图':'暂停绘图';if(!paused)draw()};
-$('window').onchange=draw;$('scrub').oninput=draw;
-$('live').onclick=()=>{replaying=false;$('replay').textContent='';clear()};
+$('pause').onclick=pauseAllPlots;
+$('live').onclick=()=>{replaying=false;$('replay').textContent='';clear();refreshControlChoices()};
 addEventListener('resize',draw);
 if(!globalThis.isSecureContext||!navigator.serial)$('error').textContent='当前浏览器不支持串口访问，请用桌面 Chrome／Edge 打开这个 HTML 文件。';
-if(globalThis.location?.hash==='#demo')toggleDemo();
-updateMetrics();renderConfig();
+$('workMode').value='SingleM1';refreshControlChoices({readMotor:true,readDrive:true});
+bindPlot();if(globalThis.location?.hash==='#demo')toggleDemo();updateMetrics();renderConfig();
 </script></html>

@@ -29,6 +29,7 @@ suites = {
     "hso": ["mycode/st_hso.c", "mycode/motor_params.c", "tests/motor_host/test_hso.c"],
     "protocol": ["mycode/protocol.c", "mycode/number_parse.c", "mycode/motor_params.c", "tests/motor_host/test_protocol.c"],
     "telemetry": ["mycode/protocol.c", "mycode/number_parse.c", "mycode/motor_params.c", "tests/motor_host/test_telemetry.c"],
+    "justfloat": ["mycode/protocol.c", "mycode/number_parse.c", "mycode/motor_params.c", "tests/motor_host/test_justfloat.c"],
     "number_parse": ["mycode/number_parse.c", "tests/motor_host/test_number_parse.c"],
 }
 selected=set(sys.argv[1:])
@@ -39,9 +40,9 @@ for name, sources in suites.items():
     sources += ["tests/diag_stub.c"]
     if "mycode/protocol.c" in sources: sources += ["tests/motor_host/app_stub.c"]
     if name in ("detect","control","sensorless"): sources += ["mycode/motor_sixstep.c","mycode/motor_detect.c"]
-    if name in ("foc","protocol","telemetry"):
+    if name in ("foc","protocol","telemetry","justfloat"):
         sources += ["tests/motor_host/control_stub.c"]
-    if name in ("protocol","telemetry"): sources += ["tests/motor_host/telemetry_stubs.c"]
+    if name in ("protocol","telemetry","justfloat"): sources += ["tests/motor_host/telemetry_stubs.c"]
     if name in ("foc","control","sensorless","detect"):
         sources += ["mycode/motor_math.c"]
     command = [compiler, "-std=c11", "-Wall", "-Wextra", "-Werror", "-O1",

@@ -151,13 +151,13 @@ __attribute__((noinline,noclone)) bool Protocol_RequestCurrent(void)
 
 enum { CONFIG_WORK,CONFIG_MOTOR1,CONFIG_MOTOR2,CONFIG_FEEDBACK,
        CONFIG_GEAR,CONFIG_ALIGN,CONFIG_FOCUS,CONFIG_COUNT,
-       CMD_SPEED=CONFIG_COUNT,CMD_ANGLE,CMD_TORQUE,CMD_THROTTLE,CMD_OPEN,CMD_HSO,CMD_STREAM,CMD_APP,CMD_ROW,CMD_COUNT };
+       CMD_SPEED=CONFIG_COUNT,CMD_ANGLE,CMD_TORQUE,CMD_THROTTLE,CMD_OPEN,CMD_HSO,CMD_STREAM,CMD_APP,CMD_ROW,CMD_FORMAT,CMD_COUNT };
 /* One source for names and lengths; no per-name NUL/padding in Flash. */
 #define COMMAND_PREFIXES(X) \
     X("Work:",5) X("Motor1:",7) X("Motor2:",7) X("Feedback:",9) \
     X("Gear:",5) X("Align:",6) X("Focus:",6) X("Speed:",6) \
     X("Angle:",6) X("Torque:",7) X("Throttle:",9) X("OpenLoop:",9) \
-    X("HSO:",4) X("Stream:",7) X("App:",4) X("GetRow:",7)
+    X("HSO:",4) X("Stream:",7) X("App:",4) X("GetRow:",7) X("Format:",7)
 #define PREFIX_NAME(name,length) name
 static const char command_names[]=COMMAND_PREFIXES(PREFIX_NAME);
 #undef PREFIX_NAME
@@ -268,7 +268,7 @@ void Protocol_Service(void)
         if(HAL_GetTick()-request.at>500U || (!request.stopped && MotorSampling_IsGlobalStopped())) result=-4;
         else if(strcmp(request.text,"Get")) result=handle_line(request.text,(MotorInput)request.input);
         control_result=result;
-        if(request.id) {
+        if(request.id && Telemetry_IsNative()) {
             reply_id=request.id; reply_source=request.input==MOTOR_INPUT_USB ? PROTO_SRC_USB : PROTO_SRC_USART;
             reply_result=result;
             reply_at=HAL_GetTick(); reply_built=false; reply_pending=true;
@@ -290,6 +290,13 @@ __attribute__((noinline,noclone)) static int8_t handle_line(char *line,MotorInpu
         axis=line[1]=='1' ? MOTOR_AXIS_1 : MOTOR_AXIS_2; line+=3; explicit_axis=true;
     }
     unsigned kind=command_kind(line);
+    if(kind==CMD_FORMAT) {
+        if(explicit_axis) return -2;
+        if(!strcmp(line+7,"Native")) Telemetry_SetNative(true);
+        else if(!strcmp(line+7,"JustFloat")) Telemetry_SetNative(false);
+        else return -2;
+        return 1;
+    }
     if (kind==CMD_APP || kind==CMD_ROW) {
         float v[3];
         if (explicit_axis || !parse_hso_values(line+command_lengths[kind],v,3)) return -2;
@@ -463,15 +470,27 @@ _Static_assert(sizeof(TelemetryPacket)==USB_TX_BUF_SIZE && sizeof(TelemetryEncod
 enum { STREAM_AUTO,STREAM_M1,STREAM_M2,STREAM_FOC1,STREAM_FOC2,STREAM_ENC1,
        STREAM_ENC2,STREAM_HSO,STREAM_SIX,STREAM_OFF,STREAM_COUNT };
 static volatile uint8_t telemetry_stream;
+static bool telemetry_native; /* BSS/reset: standard JustFloat, never persisted. */
 static uint16_t telemetry_sequence;
 static uint32_t telemetry_tick,telemetry_status_tick;
 static uint32_t telemetry_diagnostic_tick;
 static bool telemetry_have_status;
 static TelemetryStatus telemetry_previous;
+bool Telemetry_IsNative(void) { return telemetry_native; }
+const char *Telemetry_FormatText(void) { return telemetry_native ? "Native" : "JustFloat"; }
+void Telemetry_SetNative(bool native)
+{
+    if(telemetry_native==native) return;
+    telemetry_native=native;
+    /* Active USB/UART buffers own complete copies through completion. */
+    usb_tx_pending_len=0;reply_pending=false;telemetry_have_status=false;
+    if(!native && (telemetry_stream==STREAM_ENC1 || telemetry_stream==STREAM_ENC2)) telemetry_stream=STREAM_AUTO;
+}
 bool Telemetry_Select(const char *name)
 {
     static const char names[][5]={"Auto","M1","M2","FOC1","FOC2","ENC1","ENC2","HSO","Six","Off"};
     for(unsigned i=0;i<STREAM_COUNT;++i) if(!strcmp(name,names[i])) {
+        if(!telemetry_native && (i==STREAM_ENC1 || i==STREAM_ENC2)) return false;
         telemetry_stream=(uint8_t)i; return true;
     }
     return false;
@@ -513,7 +532,7 @@ static void telemetry_reply(void)
             TelemetryReply *r=&telemetry_packet.payload.reply;
             _Static_assert(sizeof(TelemetryReply)==92 && offsetof(AppSettings,crc)-offsetof(AppSettings,speed_x10)==84,"RPC settings layout");
             r->id=reply_id; r->result=reply_result; r->source=reply_source;
-            r->schema=2; r->firmware=100; r->save=(uint8_t)App_SaveState(); r->focus=(uint8_t)MotorControl_GetFocus();
+            r->schema=2; r->firmware=101; r->save=(uint8_t)App_SaveState(); r->focus=(uint8_t)MotorControl_GetFocus();
             memcpy(r->settings,&AppStorage_Get()->speed_x10,sizeof(r->settings));
         }
         (void)telemetry_frame(reply_kind,reply_kind==33 ? sizeof(TelemetryRow) : sizeof(TelemetryReply),HAL_GetTick());
@@ -574,14 +593,14 @@ static void telemetry_curves(uint8_t stream,const MotorAxisSnapshot axis[2],uint
 {
     float *data=telemetry_packet.payload.curves; unsigned count=6; uint8_t kind=1; uint16_t format_flags=0;
     float bus=MotorSampling_IsBusFresh() ? MotorSampling_GetBusVoltage() : NAN;
-    if(stream==STREAM_AUTO && MotorControl_HsoAllowed()) {
+    if((stream==STREAM_AUTO && telemetry_native && MotorControl_HsoAllowed()) || (!telemetry_native && stream==STREAM_HSO)) {
         StHsoSnapshot h; StHso_GetSnapshot(&h); kind=4; count=9;
         bool moving=StHso_IsRunning();
         data[0]=axis[0].target_velocity; data[1]=StHso_ControlVelocity(); data[2]=moving ? axis[0].velocity : NAN;
         data[3]=moving && h.reference_flux_wb>0 ? h.velocity_rad_s : NAN;
         data[4]=axis[0].ready && moving ? axis[0].iq : NAN; data[5]=bus;
         data[6]=h.angle_error_rad; data[7]=h.flux_wb; data[8]=h.position_valid ? h.mechanical_position : NAN;
-    } else if(stream==STREAM_AUTO && MotorControl_SixStepAllowed()) {
+    } else if((stream==STREAM_AUTO && telemetry_native && MotorControl_SixStepAllowed()) || (!telemetry_native && stream==STREAM_SIX)) {
         SixStepSnapshot s; SixStep_GetSnapshot(&s); kind=5;
         format_flags=(s.speed_control ? 0x8000U : 0U)|(SixStep_IsGeneric() ? 0x4000U : 0U);
         data[0]=s.target; data[1]=s.state==SIX_RUN ? s.velocity : NAN; data[2]=s.reference;
@@ -598,14 +617,24 @@ static void telemetry_curves(uint8_t stream,const MotorAxisSnapshot axis[2],uint
         data[2]=valid ? s->id : NAN; data[3]=raw ? phase[0] : NAN; data[4]=raw ? phase[1] : NAN;
         data[5]=valid ? s->velocity : NAN; data[6]=bus;
     } else {
-        bool dual=stream==STREAM_AUTO && MotorControl_GetWork()>=MOTOR_WORK_INDEPENDENT;
-        unsigned a=stream==STREAM_M2 || (stream==STREAM_AUTO && MotorControl_GetWork()==MOTOR_WORK_SINGLE_M2);
+        /* JustFloat Auto has a fixed 12-channel layout even in Single/HSO/Six.
+         * Select HSO/Six explicitly for their dedicated float-only curves. */
+        bool dual=stream==STREAM_AUTO && (!telemetry_native || MotorControl_GetWork()>=MOTOR_WORK_INDEPENDENT);
+        unsigned a=!dual && (stream==STREAM_M2 || (stream==STREAM_AUTO && MotorControl_GetWork()==MOTOR_WORK_SINGLE_M2));
         kind=dual ? 3 : (uint8_t)(1+a);
         motion_values(data,(MotorAxis)a,&axis[a]);
         if(dual) { motion_values(data+5,MOTOR_AXIS_2,&axis[1]); data[10]=bus;
             data[11]=MotorControl_IsCoupled() ? MotorControl_GroupError() : NAN; count=12;
             if(MotorControl_GetWork()==MOTOR_WORK_SYNC_SPEED) format_flags=0x8000U; }
         else data[5]=bus;
+    }
+    if(!telemetry_native) {
+        /* +Inf is the JustFloat delimiter. Canonical NaN preserves invalid
+         * samples without creating a false tail or claiming a zero reading. */
+        for(unsigned i=0;i<count;++i) if(!isfinite(data[i])) data[i]=NAN;
+        const uint32_t tail=0x7F800000U;
+        memcpy(telemetry_packet.payload.bytes+count*4U,&tail,4);
+        Telemetry_Send((const uint8_t *)data,(uint16_t)(count*4U+4U));return;
     }
     uint16_t valid=format_flags;
     for(unsigned i=0;i<count;++i) if(isfinite(data[i])) valid|=(uint16_t)(1U<<i);
@@ -620,6 +649,11 @@ static void telemetry_produce(void)
     telemetry_tick=now;
     MotorAxisSnapshot axis[2];
     MotorControl_GetAxis(MOTOR_AXIS_1,&axis[0]); MotorControl_GetAxis(MOTOR_AXIS_2,&axis[1]);
+    uint8_t stream=telemetry_stream;
+    if(!telemetry_native) {
+        if(stream!=STREAM_OFF) telemetry_curves(stream,axis,now);
+        return; /* Never interleave Native heartbeats, diagnostics or RPC. */
+    }
     TelemetryStatus *status=&telemetry_packet.payload.status; telemetry_status(status,axis);
     /* Coalesce rapid state chatter so it cannot starve all curve slots. */
     if(!telemetry_have_status || now-telemetry_status_tick>=100U ||
@@ -627,7 +661,6 @@ static void telemetry_produce(void)
         telemetry_previous=*status; telemetry_have_status=true; telemetry_status_tick=now;
         telemetry_emit(0x10,sizeof(*status),now); return;
     }
-    uint8_t stream=telemetry_stream;
     if(stream==STREAM_OFF) return;
     if(stream>=STREAM_ENC1) {
         if(now-telemetry_diagnostic_tick<100U) return;

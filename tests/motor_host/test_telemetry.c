@@ -27,6 +27,7 @@ static void packet(void) {
 }
 static void pump(void) { for(unsigned i=0;i<25;++i) packet(); }
 int main(void) {
+    command("Format:Native");assert(Telemetry_IsNative());
     uart_busy=false;usb_connected=true;complete_early=true;
     trace=fopen("build/telemetry-r86/wire-fixture.bin","wb");assert(trace);
     assert(MotorControl_SelectWork(MOTOR_WORK_SINGLE_M1));pump();assert(observed[1] && observed[16]);

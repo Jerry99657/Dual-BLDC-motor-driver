@@ -119,7 +119,7 @@
     X(text_keyrpt,"KeyRpt") \
     X(text_disperr,"DispErr") \
     X(text_fw,"FW") \
-    X(text_firmware,"UI-R100-SET") \
+    X(text_firmware,"UI-R101-FMT") \
     X(text_clear_diag,"Clear diag") \
     X(text_mcu,"MCU") \
     X(text_stm32g431,"STM32G431") \
@@ -463,7 +463,7 @@ enum {
     EVT_RESET_CANCELLED=1,EVT_RUN_STEPS_CHANGED,
     EVT_MOTOR_2804_CONFIRMED,EVT_MOTOR_4015_CONFIRMED,
     EVT_FOCUS_M1,EVT_FOCUS_M2,EVT_FEEDBACK,EVT_ALIGN,EVT_IBUS_STATUS,
-    EVT_SIXSTEP,EVT_MOTOR_ESC,EVT_WORK_BASE=32,EVT_SETTING_BASE=40,
+    EVT_SIXSTEP,EVT_MOTOR_ESC,EVT_TX_FORMAT,EVT_WORK_BASE=32,EVT_SETTING_BASE=40,
     EVT_LED_BRIGHT_CHANGED=EVT_SETTING_BASE+APP_SET_LED_BRIGHTNESS,
     EVT_POSITION_SPEED_CHANGED=EVT_SETTING_BASE+APP_SET_POSITION_SPEED,
     EVT_SPEED_LIMIT_CHANGED=EVT_SETTING_BASE+APP_SET_SPEED_LIMIT,
@@ -499,6 +499,7 @@ static uint8_t s_detect_page;
 static uint8_t settings_states[3]={[2]=KK_UI_ITEM_DISABLED<<2U};
 static uint8_t protection_states[1]={[0]=KK_UI_ITEM_DISABLED<<4U};
 static int32_t s_ibus_limit_ma;
+static char s_tx_format[24];
 /* 下标与 JerryFOC_ControlMode 对应：Torque、Speed、Position。 */
 static int32_t s_step_drafts[3];
 static uint8_t s_step_selected;
@@ -840,6 +841,7 @@ static void refresh_info(unsigned mask)
         strcpy(TEXT(align),state.aligning ? ui_strings.text_aligning : state.aligned ? "YES" : "NO");
     }
     if (!text_query) {
+        UiText_Format(s_tx_format,sizeof(s_tx_format),"TX Format: %s",Telemetry_FormatText());
         s_hso_choice=MotorControl_HsoAllowed();
         s_six_choice=MotorControl_SixStepAllowed();
         axis_title(TEXT(motor_menu),ui_strings.text_motor);
@@ -1262,7 +1264,7 @@ _Static_assert(sizeof(MenuItemRef)==3,"Compact menu references");
 enum {
     settings_items_START=0, settings_items_COUNT=11,
     motor_items_START=settings_items_START+settings_items_COUNT, motor_items_COUNT=4,
-    system_items_START=motor_items_START+motor_items_COUNT, system_items_COUNT=8,
+    system_items_START=motor_items_START+motor_items_COUNT, system_items_COUNT=9,
     sensorless_items_START=system_items_START+system_items_COUNT, sensorless_items_COUNT=2,
     work_items_START=sensorless_items_START+sensorless_items_COUNT, work_items_COUNT=7,
     status_items_START=work_items_START+work_items_COUNT, status_items_COUNT=9,
@@ -1296,6 +1298,7 @@ static const MenuItemRef menu_refs[]={
     MENU_ROW(INFO_LITERAL(text_gear_offset),KK_UI_MENU_INT,INT_GEAR_OFFSET),
     MENU_ROW(INFO_LITERAL(text_align_retry),KK_UI_MENU_ACTION,EVT_ALIGN),
     MENU_ROW(INFO_LITERAL(text_clear_diag),KK_UI_MENU_ACTION,EVT_DIAG_CLEAR),
+    MENU_ROW(INFO_LITERAL(text_system),KK_UI_MENU_ACTION,EVT_TX_FORMAT), /* RAM label rebound below. */
     /* sensorless_items */
     MENU_ROW(INFO_LITERAL(text_hso_feedback),KK_UI_MENU_BOOL,BOOL_HSO),
     MENU_ROW(INFO_LITERAL(text_six_step),KK_UI_MENU_BOOL,BOOL_SIXSTEP),
@@ -1337,6 +1340,7 @@ __attribute__((noinline,noclone)) static void init_menu_items(void)
         menu_items[i].type=(KK_UI_MenuItemType)((packed>>15U)&7U);
         menu_items[i].ref=(uint16_t)(packed>>18U);
     }
+    menu_items[system_items_START+system_items_COUNT-1U].label=s_tx_format;
 }
 static const KK_UI_MenuPage menu_pages[] = {
     {texts.settings, &menu_items[settings_items_START], settings_states,
@@ -1842,6 +1846,10 @@ static bool apply_event(KK_UI_EventId evt)
         return ok;
     }
     switch (evt) {
+    case EVT_TX_FORMAT:
+        Telemetry_SetNative(!Telemetry_IsNative());
+        refresh_texts();KK_UI_Invalidate();
+        break;
     case EVT_FOCUS_M1: case EVT_FOCUS_M2:
         focus_axis(evt==EVT_FOCUS_M1 ? MOTOR_AXIS_1 : MOTOR_AXIS_2);
         s_pending_toast=s_view_axis==MOTOR_AXIS_1 ? ui_strings.text_axis_m1 : ui_strings.text_axis_m2;

@@ -89,6 +89,13 @@ class Hub:
         link.dtr = link.rts = False
         link.port = port
         link.open()
+        # R101 boots into JustFloat. The legacy bridge still consumes Native.
+        try:
+            if link.write(b"Format:Native\n") != len(b"Format:Native\n"):
+                raise OSError("Format:Native write incomplete")
+        except Exception:
+            link.close()
+            raise
         with self.lock:
             self.serial = link
             self.parser = Parser()

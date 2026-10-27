@@ -253,7 +253,7 @@ static void check_rpc(void) {
     telemetry_host_tick=100;assert(Telemetry_Select("Off"));
     command("@1:Get");Telemetry_Service();
     assert(inflight_len==106 && inflight[3]==32 && inflight[12]==1 && inflight[14]==1 && inflight[15]==PROTO_SRC_USB);
-    assert(inflight[16]==2 && inflight[17]==100);
+    assert(inflight[16]==2 && inflight[17]==101);
     assert(inflight[18]==APP_SAVE_PENDING); /* Dirty config must not claim an older save completed. */
     int32_t saved;memcpy(&saved,inflight+20,4);assert(saved==123);
     assert(fwrite(inflight,1,inflight_len,trace)==inflight_len);
@@ -306,6 +306,7 @@ static void check_rpc(void) {
     puts("PASS: real RPC schema/settings bytes, IDs, exact results, USB/UART reply routing, BUSY retry, immediate Stop, queue cancellation, disconnected reply timeout, stale-motion and KEY1 cancellation");
 }
 int main(void) {
+    Telemetry_SetNative(true); /* Legacy suites explicitly select Native. */
     const char *trace=getenv("PROTO_NUMBER_TRACE");
     if(trace) { number_trace=fopen(trace,"wb");assert(number_trace); }
     check_usb_telemetry();

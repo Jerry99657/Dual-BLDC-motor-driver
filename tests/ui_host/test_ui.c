@@ -17,6 +17,11 @@
 #include "ui_fonts.h"
 #include "motor_sixstep.h"
 #include "motor_detect.h"
+#include "protocol.h"
+static bool native_format;
+bool Telemetry_IsNative(void) { return native_format; }
+void Telemetry_SetNative(bool native) { native_format=native; }
+const char *Telemetry_FormatText(void) { return native_format ? "Native" : "JustFloat"; }
 /* Count RAM snapshot getter calls, independent of simulated UI time. */
 static struct { unsigned adc,hso,six,enc1,enc2,probe,bus; } query_reads;
 extern unsigned control_stub_axis_reads;
@@ -1336,8 +1341,27 @@ static void check_setting_routes(void) {
     }
     puts("PASS: R100 real local editors route brightness/enable and ratio/offset independently through the shared settings adapter");
 }
+static void check_tx_format(void) {
+    MotorControl_SelectWork(MOTOR_WORK_SINGLE_M1);MotorControl_SetFocus(MOTOR_AXIS_1);reset();MotorControl_StopAll();
+    assert(KK_UI_GoTo(UI_PAGE_SETTINGS,tick)==KK_UI_OK);settle();
+    select_setting("System");press(KK_UI_KEY_OK);settle();
+    const KK_UI_MenuPage *menu=&ui_app_get()->menu_pages[2];unsigned i=0;
+    while(i<menu->item_count && strncmp(menu->items[i].label,"TX Format:",10)) ++i;
+    assert(i<menu->item_count && !strcmp(menu->items[i].label,"TX Format: JustFloat"));
+    while(kk_ui.current.selected!=i) press(KK_UI_KEY_DOWN);
+    AppSettings_ResetSave(tick);unsigned count=save_requests;AppSettings before=settings;
+    press(KK_UI_KEY_OK);settle();assert(Telemetry_IsNative() && !strcmp(menu->items[i].label,"TX Format: Native"));
+    probe_frame();assert(drew("TX Format: Native"));snapshot("r101-tx-native");
+    press(KK_UI_KEY_OK);settle();assert(!Telemetry_IsNative() && !strcmp(menu->items[i].label,"TX Format: JustFloat"));
+    probe_frame();assert(drew("TX Format: JustFloat"));snapshot("r101-tx-justfloat");
+    step(0,2600);assert(save_requests==count && !memcmp(&before,&settings,sizeof(settings)));
+    Telemetry_SetNative(true);step(0,600);assert(!strcmp(menu->items[i].label,"TX Format: Native")); /* 500 ms live refresh. */
+    ui_app_reset(tick);assert(KK_UI_Init(ui_app_get())==KK_UI_OK);assert(Telemetry_IsNative());
+    Telemetry_SetNative(false);
+    puts("PASS: R101 System TX Format apply/readback, UART/USB-owned state refresh, no target changes, UI reconstruction retains RAM selection and no storage/save changes");
+}
 int main(int argc,char **argv) {
-    if(argc>1 && !strcmp(argv[1],"settings")) { check_settings_service_ui();check_setting_routes();return 0; }
+    if(argc>1 && !strcmp(argv[1],"settings")) { check_settings_service_ui();check_setting_routes();check_tx_format();return 0; }
     if(argc>1 && !strcmp(argv[1],"align")) { check_run_alignment();return 0; }
     if(argc>1 && !strcmp(argv[1],"metrics")) { query_metrics();return 0; }
     if(argc>1 && !strcmp(argv[1],"queries")) { check_query_rows();return 0; }

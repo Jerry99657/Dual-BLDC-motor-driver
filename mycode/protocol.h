@@ -29,7 +29,12 @@ int8_t Protocol_GetControlResult(void);
 /* Main-loop only: USART1 nonblocking TX; USB latest-frame mailbox/service. */
 void Telemetry_Send(const uint8_t *data, uint16_t len);
 void Telemetry_Service(void);
-/* R86 binary v1, shared by USB CDC and USART1. Stream selection is volatile. */
+/* Both ports share this RAM-only output format. Reset defaults to JustFloat.
+ * Main-loop changes finish active frames and discard unsent old-format data. */
+bool Telemetry_IsNative(void);
+void Telemetry_SetNative(bool native);
+const char *Telemetry_FormatText(void);
+/* Stream selection is volatile; Native retains the R86 diagnostic groups. */
 bool Telemetry_Select(const char *name);
 
 #endif /* __PROTOCOL_H */

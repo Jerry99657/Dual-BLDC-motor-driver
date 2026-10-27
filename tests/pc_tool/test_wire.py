@@ -107,7 +107,7 @@ class ServerTests(unittest.TestCase):
             def close(self): pass
         port = Port()
         self.hub.serial, self.hub.connected = port, "TEST"
-        self.assertIn(b"R100", urlopen(self.url).read())
+        self.assertIn(b"R101", urlopen(self.url).read())
         self.assertEqual(port.sent, [])  # Opening the UI sends nothing to a motor.
         self.post("/api/send", {"command": "M2:Speed:10"}).close()
         self.post("/api/send", {"command": "Stop"}).close()
@@ -128,6 +128,24 @@ class ServerTests(unittest.TestCase):
         self.assertIsNotNone(response["status"].get("work"))
         self.assertIn("16777217", self.hub.record.getvalue())
         self.assertIn("status,json", self.hub.record.getvalue())
+
+    def test_bridge_native_first(self):
+        from types import SimpleNamespace
+        from unittest.mock import patch
+        class Port:
+            in_waiting=0
+            def __init__(self): self.sent=[];self.closed=False
+            def open(self): pass
+            def read(self,n): threading.Event().wait(.005);return b""
+            def write(self,data): self.sent.append(data);return len(data)
+            def close(self): self.closed=True
+        port=Port()
+        module=SimpleNamespace(Serial=lambda **kw:port,SerialException=OSError)
+        with patch.dict('sys.modules',{'serial':module}):
+            self.hub.connect('TEST')
+            self.assertEqual(port.sent,[b'Format:Native\n'])
+            self.hub.disconnect()
+            self.assertTrue(port.closed)
 
 
 if __name__ == "__main__":
