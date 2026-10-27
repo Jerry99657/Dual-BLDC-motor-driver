@@ -271,6 +271,7 @@ static void press(uint8_t key) { step(key,30); step(0,30); }
 static void settle(void) { step(0,600); }
 static void back(void) { press(KK_UI_KEY_BACK); settle(); }
 static void reset(void) {
+    AppSettings_ResetSave(tick); /* Simulated MCU boot, separate from rebuilding UI. */
     align_request_allowed=true;align_requests=0;
     ControlStub_SetOptionsAllowed(true); ControlStub_ResetInput();
     global_stopped=false;
@@ -1283,7 +1284,60 @@ static void check_run_alignment(void) {
     press(KK_UI_KEY_OK);settle();press(KK_UI_KEY_OK);assert(!align_requests && !output_requested);
     puts("PASS: R97 Run distinguishes global stop/aligning, held-key align denial, explicit align/second-confirm start, no automatic restart and unhealthy/ADC gates");
 }
+static void check_settings_service_ui(void) {
+    MotorControl_SelectWork(MOTOR_WORK_SINGLE_M1);MotorControl_SetFocus(MOTOR_AXIS_1);reset();MotorControl_StopAll();
+    assert(MotorControl_CommandFrom(MOTOR_AXIS_1,JERRYFOC_MODE_VELOCITY,30,0,false,MOTOR_INPUT_USB));
+    App_RemoteMotion(MOTOR_AXIS_1,false);settle();
+    assert(settings.speed_x10==300 && KK_UI_GetCurrentPage()==UI_PAGE_RUN);
+    press(KK_UI_KEY_UP);probe_frame();assert(drew("30.5") && JerryFOC_Target_Velocity==30);
+    assert(App_Control(2,APP_SET_POSITION_SPEED,1000)==-1);
+    probe_frame();assert(drew("30.5") && MotorControl_GetFocus()==MOTOR_AXIS_1);
+    assert(App_Control(2,APP_SET_SPEED_LIMIT,180)==1);
+    probe_frame();assert(drew("30.5") && settings.speed_x10==300 && JerryFOC_Target_Velocity==30);
+    assert(App_Control(0,APP_ACTION_SAVE,0)==1);App_SaveService(tick);
+    assert(saved_settings.speed_x10==300); /* Never persist the unconfirmed 30.5 draft. */
+    back();
+    reset();MotorControl_StopAll();
+    press(KK_UI_KEY_OK);settle();press(KK_UI_KEY_RIGHT);
+    KK_UI_CustomOnInput(UI_PAGE_RUN,(KK_UI_InputEvent){KK_UI_INPUT_UP,KK_UI_INPUT_ENCODER,24});
+    press(KK_UI_KEY_OK);settle();assert(output_requested && JerryFOC_Target_Velocity==12);
+    assert(App_SelectMotor(MOTOR_AXIS_1,MotorParams_GetAxisProfile(MOTOR_AXIS_1)));
+    App_ConfigChanged();
+    assert(output_requested && JerryFOC_Target_Velocity==12);
+    probe_frame();assert(drew("12.0"));back();
+    reset();MotorControl_StopAll();press(KK_UI_KEY_OK);settle();press(KK_UI_KEY_UP);press(KK_UI_KEY_OK);
+    assert(output_requested);ibus_trip=true;output_requested=false;
+    assert(App_Control(0,APP_ACTION_CLEAR_IBUS,0)==1);settle();
+    assert(!output_requested && !strcmp(status_value("Run Stop"),"--"));back();
+    reset();MotorControl_StopAll();
+    assert(App_Control(0,APP_SET_LED_BRIGHTNESS,64)==1 && App_SaveState()==APP_SAVE_PENDING);
+    unsigned count=save_requests;
+    ui_app_reset(tick);assert(KK_UI_Init(ui_app_get())==KK_UI_OK);
+    assert(App_SaveState()==APP_SAVE_PENDING && settings.led_brightness==64);
+    step(0,2600);assert(save_requests==count+1 && saved_settings.led_brightness==64);
+    puts("PASS: R99 settings service publication preserves foreign-axis Run drafts, saves only confirmed targets, keeps same-profile running state and survives UI reconstruction");
+}
+static void check_setting_routes(void) {
+    MotorControl_SelectWork(MOTOR_WORK_SINGLE_M1);MotorControl_SetFocus(MOTOR_AXIS_1);reset();MotorControl_StopAll();
+    assert(KK_UI_GoTo(UI_PAGE_SETTINGS,tick)==KK_UI_OK);settle();
+    select_setting("LED Bright");press(KK_UI_KEY_OK);settle();press(KK_UI_KEY_DOWN);press(KK_UI_KEY_OK);press(KK_UI_KEY_OK);settle();
+    assert(settings.led_brightness==95 && !(settings.flags & APP_FLAG_LED_ENABLE));
+    select_setting("Status LED");press(KK_UI_KEY_OK);settle();press(KK_UI_KEY_RIGHT);press(KK_UI_KEY_OK);press(KK_UI_KEY_OK);settle();
+    assert(settings.led_brightness==95 && (settings.flags & APP_FLAG_LED_ENABLE));
+    assert(App_Control(0,APP_SET_GEAR_RATIO,100)==1 && App_Control(0,APP_SET_GEAR_OFFSET,23)==1);
+    select_setting("System");press(KK_UI_KEY_OK);settle();assert(KK_UI_GetCurrentPage()==UI_PAGE_SYSTEM);
+    const KK_UI_MenuPage *menu=&ui_app_get()->menu_pages[ui_app_get()->routes[UI_PAGE_SYSTEM-1U].index];
+    const char *names[]={"Gear Ratio","Gear Offset"};const int delta[]={250,-4};
+    for(unsigned n=0;n<2;++n) {
+        unsigned i=0;while(i<menu->item_count && strcmp(menu->items[i].label,names[n])) ++i;
+        assert(i<menu->item_count);while(kk_ui.current.selected!=i) press(KK_UI_KEY_DOWN);
+        press(KK_UI_KEY_OK);settle();adjust_editor((int16_t)delta[n]);press(KK_UI_KEY_OK);press(KK_UI_KEY_OK);settle();
+        assert(settings.gear_ratio_x100==-150 && settings.gear_offset_x100==(n ? 43 : 23));
+    }
+    puts("PASS: R100 real local editors route brightness/enable and ratio/offset independently through the shared settings adapter");
+}
 int main(int argc,char **argv) {
+    if(argc>1 && !strcmp(argv[1],"settings")) { check_settings_service_ui();check_setting_routes();return 0; }
     if(argc>1 && !strcmp(argv[1],"align")) { check_run_alignment();return 0; }
     if(argc>1 && !strcmp(argv[1],"metrics")) { query_metrics();return 0; }
     if(argc>1 && !strcmp(argv[1],"queries")) { check_query_rows();return 0; }
@@ -1296,6 +1350,12 @@ int main(int argc,char **argv) {
         App_SaveService(tick+2001);assert(save_requests>0);
         char label[24],value[32];assert(App_ReadRow(1,4,0,label,value)>0);
         assert(KK_UI_GetCurrentPage()==0);
+        save_state=APP_SAVE_SAVED;AppSettings_ResetSave(tick);unsigned count=save_requests;
+        assert(MotorControl_CommandFrom(MOTOR_AXIS_1,JERRYFOC_MODE_VELOCITY,13.4f,0,false,MOTOR_INPUT_USB));
+        App_RemoteMotion(MOTOR_AXIS_1,false);assert(settings.speed_x10==134);
+        tick+=2500;App_SaveService(tick);assert(save_requests==count);
+        MotorControl_StopAll();tick+=2500;App_SaveService(tick);
+        assert(save_requests==count+1 && saved_settings.speed_x10==134 && KK_UI_GetCurrentPage()==0);
         puts("PASS: R88 headless Settings, save service and diagnostic model before any LCD/UI initialization");return 0;
     }
     ui_input_init(); assert(ui_input_poll()==0);

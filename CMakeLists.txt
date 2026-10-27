@@ -58,6 +58,10 @@ add_dependencies(${CMAKE_PROJECT_NAME} cubemx_config_check)
 target_sources(${CMAKE_PROJECT_NAME} PRIVATE mycode/board_diag.c)
 set_source_files_properties(mycode/board_diag.c PROPERTIES COMPILE_OPTIONS "-Oz;-flto")
 
+# Settings business is independent of the LCD/application presentation.
+target_sources(${CMAKE_PROJECT_NAME} PRIVATE mycode/app_settings.c)
+set_source_files_properties(mycode/app_settings.c PROPERTIES COMPILE_OPTIONS "-Oz;-flto")
+
 # SPI runtime and its five dedicated DMA channels; HAL still owns setup.
 target_sources(${CMAKE_PROJECT_NAME} PRIVATE mycode/spi_port.c)
 set_source_files_properties(mycode/spi_port.c PROPERTIES COMPILE_OPTIONS "-Os;-flto")

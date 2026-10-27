@@ -300,11 +300,16 @@ bool MotorControl_SelectSixStep(bool enable)
 static void clear_saved_axis(MotorAxis axis)
 {
     AppSettings *s=AppStorage_Get();
-    uint32_t defaults=(30UL<<APP_POSITION_SPEED_SHIFT)|((uint32_t)APP_SPEED_LIMIT_DEFAULT<<APP_SPEED_LIMIT_SHIFT);
+    unsigned position=(unsigned)MotorParams_GetAxis(axis)->pos_limit;
+    if(position<1U) position=1U;
+    if(position>APP_SPEED_LIMIT_DEFAULT) position=APP_SPEED_LIMIT_DEFAULT;
+    uint32_t defaults=(s->flags & APP_FLAG_LED_ENABLE)|AppSettings_EncodePositionSpeed(position)|
+        ((uint32_t)APP_SPEED_LIMIT_DEFAULT<<APP_SPEED_LIMIT_SHIFT)|
+        (MotorParams_GetAxisProfile(axis)==MOTOR_PROFILE_4015 ? APP_FLAG_MOTOR_4015 : 0U);
     if (axis==MOTOR_AXIS_1) {
         s->speed_x10=s->voltage_x100=s->position_x100=0;
         s->control_config&=~APP_CONFIG_THROTTLE_MASK;
-        s->flags=(s->flags & (APP_FLAG_LED_ENABLE|APP_FLAG_MOTOR_4015)) | defaults;
+        s->flags=defaults;
     } else {
         s->axis2_speed_x10=s->axis2_voltage_x100=s->axis2_position_x100=0;
         s->axis2_flags=defaults;

@@ -1,5 +1,9 @@
 # 电机驱动板 UI 操作与验证
 
+当前固件 **UI-R100-SET**：合并独立设置服务与 UI 的重复校验、提交和结果回读，型号默认值与目标清零仅执行一次。Debug／Release Flash 占 **129728 B**，较 R99 减少 **504 B**，余 **1344 B**；RAM 总分配 **29424 B** 不变。原功能、ST 官方库、编译选项与 CubeMX 配置保持，详见 [R100 设置路径压缩](Settings_compact_R100.md)。
+
+当前固件 **UI-R99-SET**：完成第 5 项，新增独立 `app_settings` 设置业务服务，集中参数校验／发布、默认值、辨识结果和保存调度；UI 保留草稿、提示和显示同步，远程设置不再借菜单绑定提交。支持不链接 UI／LCD 的业务回归。Debug／Release Flash 余 **840 B**（增加 1096 B），RAM 总分配 **29424 B** 不变。原功能、ST 官方库与 CubeMX 配置保持，详见 [R99 设置业务分离](Settings_service_R99.md)。
+
 当前固件 **UI-R98-BOOT**：严格识别 F5 下载期间的低地址 RAM 调试异常记录，避免它在 Reset 后误触发启动 GLOBAL STOP；真实应用异常、KEY1 和功率保护保持。Debug／Release Flash 余 **1936 B**（增加 112 B），RAM 总分配 **29424 B** 不变。无需修改 CubeMX。现场、匹配条件与验证见 [R98 下载期调试记录](Loader_debug_stop_R98.md)。
 
 当前固件 **UI-R97-ALIGN**：Run 未对齐时 OK 明确申请对齐，完成后再次确认才运行；GLOBAL STOP／ALIGNING 优先显示，保留 KEY1 与保护准入。Status 原 `System` 诊断入口统一改名 `Diagnostics`，CPU 字段实际叫 `CPU Fault`。Debug／Release Flash 余 **2048 B**（增加 196 B）、RAM 总分配 **29424 B**。无需修改 CubeMX。见 [R97 对齐恢复说明](Alignment_resume_R97.md)。

@@ -619,6 +619,33 @@ static void check_six_control(void)
     assert(!(settings.control_config & APP_CONFIG_THROTTLE_MASK));
     puts("PASS: real six-step integration: encoder absent, throttle + Speed, strict protocol/axis/unit admission, zero coast, HSO mutual exclusion/persistence, untouched dual encoder modes, KEY1 and explicit restart, live mode/reverse/open-loop refusal");
 }
+static void check_profile_settings(void)
+{
+    for(unsigned a=0;a<2;++a) for(unsigned p=0;p<2;++p) {
+        boot(MOTOR_WORK_INDEPENDENT);
+        MotorAxis axis=(MotorAxis)a;MotorProfile target=(MotorProfile)p;
+        assert(MotorControl_SelectProfile(axis,(MotorProfile)(1U-p)));
+        settings.flags|=APP_FLAG_LED_ENABLE;
+        settings.speed_x10=300;settings.axis2_speed_x10=400;
+        settings.voltage_x100=20;settings.axis2_voltage_x100=30;
+        settings.position_x100=10;settings.axis2_position_x100=11;
+        settings.speed_step_x10=17;settings.axis2_speed_step_x10=23;
+        settings.control_config|=37UL<<APP_CONFIG_THROTTLE_SHIFT;
+        assert(MotorControl_SelectProfile(axis,target));
+        uint32_t flags=a ? settings.axis2_flags : settings.flags;
+        assert(flags==MotorControl_GetOptions(axis) && (flags & APP_FLAG_LED_ENABLE));
+        assert(((flags & APP_FLAG_MOTOR_4015)!=0)==(p!=0) && !(flags & APP_FLAG_CURRENT_LOOP));
+        assert(AppSettings_GetPositionSpeed(flags)==30 && ((flags & APP_SPEED_LIMIT_MASK)>>APP_SPEED_LIMIT_SHIFT)==100);
+        assert((a ? settings.axis2_speed_x10 : settings.speed_x10)==0);
+        assert((a ? settings.axis2_voltage_x100 : settings.voltage_x100)==0);
+        assert((a ? settings.axis2_position_x100 : settings.position_x100)==0);
+        assert((a ? settings.speed_x10 : settings.axis2_speed_x10)==(a ? 300 : 400));
+        assert(settings.speed_step_x10==17 && settings.axis2_speed_step_x10==23);
+        assert(((settings.control_config & APP_CONFIG_THROTTLE_MASK)!=0)==(a!=0));
+        assert(!output_requested && !output2);
+    }
+    puts("PASS: real controller owns M1/M2 profile target reset, published defaults, LED/model flags, retained steps and peer/throttle isolation");
+}
 static void transport_command(uint8_t source,const char *line)
 {
     Protocol_Feed(source,(const uint8_t *)line,(uint32_t)strlen(line));
@@ -715,6 +742,7 @@ int main(int argc,char **argv)
 {
     if (argc>1 && !strcmp(argv[1],"follow-model")) { follow_models(false); return 0; }
     if (argc>1 && !strcmp(argv[1],"follow-current")) { follow_current_models(false); return 0; }
+    check_profile_settings();
     check_global_control_stop();
     check_six_profile_switch();
     check_six_control();

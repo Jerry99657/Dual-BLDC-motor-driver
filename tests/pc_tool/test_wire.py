@@ -107,7 +107,7 @@ class ServerTests(unittest.TestCase):
             def close(self): pass
         port = Port()
         self.hub.serial, self.hub.connected = port, "TEST"
-        self.assertIn(b"R98", urlopen(self.url).read())
+        self.assertIn(b"R100", urlopen(self.url).read())
         self.assertEqual(port.sent, [])  # Opening the UI sends nothing to a motor.
         self.post("/api/send", {"command": "M2:Speed:10"}).close()
         self.post("/api/send", {"command": "Stop"}).close()

@@ -33,6 +33,8 @@ parser.add_argument("--allow-native-ll-init", action="store_true",
                     help="Permit R93 native CubeMX LL USART, its unchanged official sources, and SPI3 NSSP configuration")
 parser.add_argument("--allow-diagnostics-user-code",action="store_true",
                     help="Permit only R95 CPU-vector/main USER CODE hooks and diagnostics module addition")
+parser.add_argument("--allow-settings-user-build",action="store_true",
+                    help="Permit only the exact R99 user settings service CMake source/flags addition")
 args = parser.parse_args()
 OUT = ROOT / args.directory
 LABEL = args.label
@@ -317,7 +319,16 @@ else:
     if baseline["protected"] != report["protected"]:
         changed = [name for name in set(baseline["protected"]) | set(report["protected"])
                    if baseline["protected"].get(name) != report["protected"].get(name)]
-        if args.allow_diagnostics_user_code:
+        if args.allow_settings_user_build:
+            assert changed==["CMakeLists.txt"],changed
+            addition=('\n# Settings business is independent of the LCD/application presentation.\n'
+                      'target_sources(${CMAKE_PROJECT_NAME} PRIVATE mycode/app_settings.c)\n'
+                      'set_source_files_properties(mycode/app_settings.c PROPERTIES COMPILE_OPTIONS "-Oz;-flto")\n')
+            current=(ROOT/"CMakeLists.txt").read_text(encoding="utf-8")
+            assert current.count(addition)==1
+            assert current.replace(addition,"")==(OUT/"CMakeLists.txt").read_text(encoding="utf-8"),"Unexpected build configuration change"
+            report["permitted_user_changes"]=changed
+        elif args.allow_diagnostics_user_code:
             verify_diagnostics_user_changes(changed)
             report["permitted_user_changes"]=sorted(changed)
         elif args.allow_native_ll_init:

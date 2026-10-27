@@ -172,6 +172,18 @@ bool MotorControl_SelectFeedback(bool e) {
     AppStorage_Get()->control_config=(AppStorage_Get()->control_config & ~8U) | (e ? 8U : 0U);
     return true;
 }
+/* Model the real controller's successful profile/generic reset contract. */
+static void clear_profile_settings(MotorAxis a)
+{
+    AppSettings *s=AppStorage_Get();
+    uint32_t flags=(s->flags & APP_FLAG_LED_ENABLE)|AppSettings_EncodePositionSpeed(30)|
+        (APP_SPEED_LIMIT_DEFAULT<<APP_SPEED_LIMIT_SHIFT)|
+        (MotorParams_GetAxisProfile(a)==MOTOR_PROFILE_4015 ? APP_FLAG_MOTOR_4015 : 0U);
+    if(a==MOTOR_AXIS_1) {
+        s->flags=flags;s->speed_x10=s->voltage_x100=s->position_x100=0;
+        s->control_config&=~APP_CONFIG_THROTTLE_MASK;
+    } else { s->axis2_flags=flags;s->axis2_speed_x10=s->axis2_voltage_x100=s->axis2_position_x100=0; }
+}
 bool MotorControl_SelectProfile(MotorAxis a,MotorProfile p)
 {
     bool ok=a==MOTOR_AXIS_1 && JerryFOC_selectMotor ? JerryFOC_selectMotor(p)!=0 : MotorParams_SelectAxis(a,p)!=0;
@@ -179,12 +191,14 @@ bool MotorControl_SelectProfile(MotorAxis a,MotorProfile p)
         AppStorage_Get()->control_config&=~APP_CONFIG_ESC;
         SixStep_SetGeneric(false);
     }
+    if(ok) clear_profile_settings(a);
     return ok;
 }
 bool MotorControl_SelectGeneric(void) {
     if(!MotorControl_SixStepAllowed() || MotorSampling_IsOutputRequested()) return false;
     AppStorage_Get()->control_config|=APP_CONFIG_ESC;
     SixStep_SetGeneric(true);
+    clear_profile_settings(MOTOR_AXIS_1);
     return true;
 }
 bool MotorControl_SetGear(int32_t r,int32_t o) {

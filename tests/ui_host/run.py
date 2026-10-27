@@ -16,7 +16,7 @@ subprocess.run([str(output / "test_ui_text.exe")], cwd=repo, check=True)
 sources = list((repo / "mycode/kk_ui/src").glob("*.c"))
 sources += list((repo / "mycode/kk_oled/graphics").glob("*.c"))
 sources += [repo / p for p in ("mycode/ui_app.c", "mycode/ui_text.c", "mycode/ui_input.c", "mycode/ui_fonts.c", "mycode/motor_params.c", "tests/ui_host/test_ui.c", "tests/motor_host/control_stub.c")]
-sources += [repo / "mycode/motor_math.c"]
+sources += [repo / "mycode/motor_math.c",repo / "mycode/app_settings.c"]
 sources += [repo / "tests/diag_stub.c"]
 includes = ["tests/ui_host", "mycode", "mycode/kk_ui/include", "mycode/kk_ui/src", "mycode/kk_oled/include", "mycode/kk_oled/graphics", "mycode/kk_oled/driver"]
 command = [shutil.which("gcc") or "gcc", "-std=c11", "-Wall", "-Wextra", "-Werror", "-O1", "-DKK_OLED_TEST", "-DCONTROL_STUB_UI"]
@@ -27,11 +27,20 @@ subprocess.run([str(output / "test_ui.exe")], cwd=repo, check=True)
 subprocess.run([str(output / "test_ui.exe"),"headless"], cwd=repo, check=True)
 subprocess.run([str(output / "test_ui.exe"),"queries"], cwd=repo, check=True)
 subprocess.run([str(output / "test_ui.exe"),"align"], cwd=repo, check=True)
+subprocess.run([str(output / "test_ui.exe"),"settings"], cwd=repo, check=True)
 metrics=subprocess.check_output([str(output / "test_ui.exe"),"metrics"],cwd=repo,text=True)
 (output/"query-metrics-current.txt").write_text(metrics)
 if args.query_baseline:
     baseline_command=command.copy()
-    baseline_command[baseline_command.index(str(repo/"mycode/ui_app.c"))]=str(args.query_baseline.resolve())
+    baseline_path=args.query_baseline.resolve()
+    # Old UI owned App_SaveState. Link its row formatter alongside the new
+    # service without two public definitions; metrics do not exercise saving.
+    legacy=baseline_path.read_text(encoding='utf-8')
+    legacy=legacy.replace('unsigned App_SaveState(void)','unsigned Baseline_SaveState(void)')
+    resources=(baseline_path.parent/'ui_resources_packed.h').as_posix()
+    legacy=legacy.replace('#include "ui_resources_packed.h"',f'#include "{resources}"')
+    baseline_source=output/'query-baseline-ui.c';baseline_source.write_text(legacy,encoding='utf-8')
+    baseline_command[baseline_command.index(str(repo/"mycode/ui_app.c"))]=str(baseline_source)
     baseline_command[-1]=str(output/"test_ui_baseline.exe")
     subprocess.run(baseline_command,cwd=repo,check=True)
     previous=subprocess.check_output([baseline_command[-1],"metrics"],cwd=repo,text=True)
