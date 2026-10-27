@@ -29,13 +29,13 @@ extern SPI_HandleTypeDef hspi1, hspi2, hspi3;
 #define SPI_PHASE_2EDGE SPI_CR1_CPHA
 #define SPI_BAUDRATEPRESCALER_8 (2U << 3)
 #define SPI_BAUDRATEPRESCALER_256 SPI_CR1_BR
-HAL_StatusTypeDef HAL_SPI_TransmitReceive_DMA(SPI_HandleTypeDef *, const uint8_t *, uint8_t *, uint16_t);
-HAL_StatusTypeDef HAL_SPI_TransmitReceive(SPI_HandleTypeDef *, const uint8_t *, uint8_t *, uint16_t, uint32_t);
-HAL_StatusTypeDef HAL_SPI_Transmit(SPI_HandleTypeDef *, const uint8_t *, uint16_t, uint32_t);
-HAL_StatusTypeDef HAL_SPI_Receive(SPI_HandleTypeDef *, uint8_t *, uint16_t, uint32_t);
-HAL_StatusTypeDef HAL_SPI_DMAStop(SPI_HandleTypeDef *);
-HAL_StatusTypeDef HAL_SPI_Abort(SPI_HandleTypeDef *);
-uint32_t HAL_SPI_GetError(const SPI_HandleTypeDef *);
+HAL_StatusTypeDef SpiPort_ExchangeDMA(SPI_HandleTypeDef *, const uint8_t *, uint8_t *, uint16_t);
+HAL_StatusTypeDef SpiPort_Exchange(SPI_HandleTypeDef *, const uint8_t *, uint8_t *, uint16_t, uint32_t);
+HAL_StatusTypeDef SpiPort_Write(SPI_HandleTypeDef *, const uint8_t *, uint16_t, uint32_t);
+HAL_StatusTypeDef SpiPort_Read(SPI_HandleTypeDef *, uint8_t *, uint16_t, uint32_t);
+HAL_StatusTypeDef SpiPort_DMAStop(SPI_HandleTypeDef *);
+HAL_StatusTypeDef SpiPort_Abort(SPI_HandleTypeDef *);
+uint32_t SpiPort_GetError(const SPI_HandleTypeDef *);
 HAL_StatusTypeDef HAL_SPI_Init(SPI_HandleTypeDef *);
 void Host_SPI1_ForceReset(void);
 void Host_SPI1_ReleaseReset(void);

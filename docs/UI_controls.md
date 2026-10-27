@@ -1,5 +1,9 @@
 # 电机驱动板 UI 操作与验证
 
+当前固件 **UI-R91-SPI**：完成HAL＋LL第6批，SPI1／SPI2／SPI3运行时收发与五个专用DMA通道迁移到用户模块；保留HAL初始化、编码器重连、SPI2／W25Q64互斥及LCD刷新。相对R90净节省2452 B，Debug／Release Flash均余4836 B；RAM不增加，无需修改CubeMX。边界与复测见 [R91 SPI／DMA迁移](HAL_LL_SPI_R91.md)。
+
+当前固件 **UI-R90-UART**：完成HAL＋LL第5批，USART1运行时收发／中断及错误恢复迁移到用户LL模块，保留HAL初始化和115200、8N1。Debug／Release均净节省2384 B，Flash余量2384 B；无需修改CubeMX。界面与控制功能沿用，说明见 [R90 USART1迁移](HAL_LL_USART_R90.md)。
+
 当前固件 **UI-R89-ESC**：ESC Auto 启动电流和允许升频速度随电流跟踪／电压余量调整，保留真实过零接管和保护。Status → Six Step 新增 `6S Start I`／`6S Ramp Hz/s`；单文件上位机兼容 R89。CubeMX 无需调整，Debug／Release Flash 余 **0 B**，实现、模型对照及复测见 [R89 自适应启动](Six_step_adaptive_R89.md)。
 
 当前固件 **UI-R88-PC**：完成上位机第 4～6 批：可编辑 Settings 共用校验／保存、远程 Run 页面和目标同步、参数辨识／校准／专题诊断、带差异确认的配置导入。原有板端功能、字号和字模保留，ST 官方源码与编译命令保持，CubeMX 无需调整。详见 [R88 实施记录](PC_console_R88.md) 和 [上位机使用](../pc_tool/README.md)。

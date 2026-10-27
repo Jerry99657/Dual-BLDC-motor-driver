@@ -6,6 +6,7 @@
 #include "kk_oled_internal.h"
 GPIO_TypeDef host_gpio;
 SPI_HandleTypeDef hspi3={SPI3};
+void SpiPort_Service(SPI_HandleTypeDef *h) { (void)h; }
 static uint32_t tick;
 static bool immediate=true,dma_pending;
 static unsigned starts,fail_start;
@@ -22,7 +23,7 @@ static uint16_t x0,x1,y0,y1,cursor_x,cursor_y;
 static uint32_t pixels_written,window_pixels;
 static uint8_t command;
 static bool display_on;
-static uint8_t *dma_data;
+static const uint8_t *dma_data;
 static uint16_t dma_length;
 
 static void receive_bytes(const uint8_t *data,uint16_t length) {
@@ -76,17 +77,17 @@ void HAL_GPIO_WritePin(GPIO_TypeDef *port,uint16_t pin,GPIO_PinState state) {
 }
 void HAL_Delay(uint32_t delay) { tick+=delay; }
 uint32_t HAL_GetTick(void) { return tick; }
-HAL_StatusTypeDef HAL_SPI_Transmit(SPI_HandleTypeDef *spi,uint8_t *data,uint16_t length,uint32_t timeout) {
+HAL_StatusTypeDef SpiPort_Write(SPI_HandleTypeDef *spi,const uint8_t *data,uint16_t length,uint32_t timeout) {
     (void)timeout; assert(spi==&hspi3); receive_bytes(data,length); return HAL_OK;
 }
-HAL_StatusTypeDef HAL_SPI_Transmit_DMA(SPI_HandleTypeDef *spi,uint8_t *data,uint16_t length) {
+HAL_StatusTypeDef SpiPort_WriteDMA(SPI_HandleTypeDef *spi,const uint8_t *data,uint16_t length) {
     assert(length>0); ++starts;
     if(starts==fail_start) return HAL_ERROR;
     dma_pending=true; dma_data=data; dma_length=length;
     if(immediate) { dma_pending=false; receive_bytes(data,length); HAL_SPI_TxCpltCallback(spi); }
     return HAL_OK;
 }
-HAL_StatusTypeDef HAL_SPI_Abort(SPI_HandleTypeDef *spi) {
+HAL_StatusTypeDef SpiPort_Abort(SPI_HandleTypeDef *spi) {
     (void)spi;dma_pending=false;return HAL_OK;
 }
 static void complete(void) {

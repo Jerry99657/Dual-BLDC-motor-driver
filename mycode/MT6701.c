@@ -1,4 +1,5 @@
 #include "MT6701.h"
+#include "spi_port.h"
 #include "kk_oled_driver.h"
 #include <stdint.h>
 
@@ -108,7 +109,7 @@ static uint8_t MT6701_RequestSample(void)
     mt6701_transfer_age=0U;
     mt6701_transfer_at=HAL_GetTick();
     CS_Enable;
-    HAL_StatusTypeDef status = HAL_SPI_TransmitReceive_DMA(
+    HAL_StatusTypeDef status = SpiPort_ExchangeDMA(
         &hspi1, MT6701_Data, MT6701_Data, 3);
     if (status != HAL_OK) {
         MT6701_Fault(MT6701_ERROR_SPI);
@@ -180,7 +181,7 @@ void MT6701_StartContinuous(void)
 void MT6701_StopContinuous(void)
 {
     mt6701_continuous = 0U;
-    HAL_SPI_DMAStop(&hspi1);
+    SpiPort_DMAStop(&hspi1);
     CS_Disable;
     mt6701_transfer_active = 0U;
     mt6701_sample_valid = 0U;
@@ -189,6 +190,7 @@ void MT6701_StopContinuous(void)
 
 void MT6701_MainService(void)
 {
+    SpiPort_Service(&hspi1);
     /* Wall-clock fallback also covers a stopped ADC scheduler. The short
      * critical section prevents a completion/new frame racing this decision. */
     uint32_t mask=__get_PRIMASK(); __disable_irq();
@@ -199,8 +201,8 @@ void MT6701_MainService(void)
     /* All potentially blocking work belongs to main; interrupts stay enabled.
      * Abort can fail with BSY stuck. Quiesce both DMA channels, then reset only
      * SPI1 and reapply its existing Init settings before releasing ownership. */
-    (void)HAL_SPI_Abort(&hspi1);
-    (void)HAL_SPI_DMAStop(&hspi1);
+    (void)SpiPort_Abort(&hspi1);
+    (void)SpiPort_DMAStop(&hspi1);
     CS_Disable;
     __HAL_RCC_SPI1_FORCE_RESET();
     __HAL_RCC_SPI1_RELEASE_RESET();
@@ -214,6 +216,7 @@ uint8_t MT6701_IsContinuous(void)
 
 void MT6701_Service(void)
 {
+    SpiPort_Service(&hspi1);
     if (!mt6701_continuous) return;
 
     if (mt6701_sample_age_cycles < UINT16_MAX) {
@@ -440,6 +443,7 @@ static void second_complete(bool error)
 }
 void MT6701_2_FastService(void)
 {
+    SpiPort_Service(&hspi2);
     if (!second_realtime) return;
     if (second_age<UINT16_MAX) {
         ++second_age;
@@ -459,13 +463,14 @@ void MT6701_2_FastService(void)
     second_transfer_age=0U;
     second_transfer_at=HAL_GetTick();
     second_prepare();
-    if (HAL_SPI_TransmitReceive_DMA(&hspi2,second_tx,second_rx,3U)!=HAL_OK) {
+    if (SpiPort_ExchangeDMA(&hspi2,second_tx,second_rx,3U)!=HAL_OK) {
         MT6701_2_RecordFailure(MT6701_ERROR_SPI);
         MT6701_2_BusFault();
     }
 }
 void MT6701_2_Service(uint32_t now_ms)
 {
+    SpiPort_Service(&hspi2);
     uint32_t mask=__get_PRIMASK(); __disable_irq();
     /* Still runs if the ADC scheduler stops or M2 is disabled mid-frame. */
     if (second_active && second_dma && !second_recover && HAL_GetTick()-second_transfer_at>1U) {
@@ -481,8 +486,8 @@ void MT6701_2_Service(uint32_t now_ms)
         /* Hold ownership through abort/reset/init, including stale callbacks.
          * Abort alone can return READY with BSY/FIFO still dirty. Never restore
          * a pre-fault snapshot after reset. All blocking work stays in main. */
-        (void)HAL_SPI_Abort(&hspi2);
-        (void)HAL_SPI_DMAStop(&hspi2);
+        (void)SpiPort_Abort(&hspi2);
+        (void)SpiPort_DMAStop(&hspi2);
         HAL_GPIO_WritePin(W25_NSS_GPIO_Port,W25_NSS_Pin,GPIO_PIN_SET);
         second_restore();
         __HAL_RCC_SPI2_FORCE_RESET();
@@ -511,7 +516,7 @@ void MT6701_2_Service(uint32_t now_ms)
     second_prepare();
     __set_PRIMASK(mask);
     uint8_t rx[3];
-    HAL_StatusTypeDef result=HAL_SPI_TransmitReceive(&hspi2,second_tx,rx,3U,1U);
+    HAL_StatusTypeDef result=SpiPort_Exchange(&hspi2,second_tx,rx,3U,1U);
     if (result==HAL_OK) second_publish(rx);
     else {
         MT6701_2_RecordFailure(MT6701_ERROR_SPI);

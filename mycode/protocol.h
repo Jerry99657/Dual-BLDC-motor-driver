@@ -11,6 +11,9 @@ bool Protocol_RequestCurrent(void);
 
 /* 命令行输入：USART1 和 USB CDC 共用 */
 void Protocol_Feed(uint8_t source, const uint8_t *data, uint32_t len);
+/* Transport fault: discard the partial line through the next clean newline.
+ * Called from that transport's RX context, never cancels the other source. */
+void Protocol_DiscardLine(uint8_t source);
 /* Direct legacy calls are UART-owned. Feed retains each transport's identity.
  * Dual motion requires M1:/M2:; bare Stop remains global, Follow is a group action. */
 void Protocol_HandleLine(char *line);

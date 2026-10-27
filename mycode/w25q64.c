@@ -2,6 +2,7 @@
 
 #include "main.h"
 #include "spi.h"
+#include "spi_port.h"
 #include "MT6701.h"
 
 #define W25_CS_LOW()  HAL_GPIO_WritePin(W25_NSS_GPIO_Port, W25_NSS_Pin, GPIO_PIN_RESET)
@@ -31,7 +32,7 @@ static bool w25_result(unsigned op,HAL_StatusTypeDef result)
     if (result==HAL_OK) return true;
     /* Capture before Abort clears the HAL error. SR1 is the last successful
      * status read, not a claim that it was sampled at the moment of failure. */
-    s_failure=(op<<24)|((uint32_t)result<<16)|((HAL_SPI_GetError(&hspi2)&255U)<<8)|s_sr1;
+    s_failure=(op<<24)|((uint32_t)result<<16)|((SpiPort_GetError(&hspi2)&255U)<<8)|s_sr1;
     return false;
 }
 
@@ -40,7 +41,7 @@ static bool w25_send(unsigned op,const uint8_t *data,uint16_t len)
     /* SPI2 is physically full duplex. Drain RX while sending commands and
      * page data; do not deliberately overflow RX with HAL_SPI_Transmit and
      * defer FIFO/OVR cleanup until after a high-priority control interrupt. */
-    return w25_result(op,HAL_SPI_TransmitReceive(&hspi2,data,s_discard,len,W25_SPI_TIMEOUT_MS));
+    return w25_result(op,SpiPort_Exchange(&hspi2,data,s_discard,len,W25_SPI_TIMEOUT_MS));
 }
 
 static bool w25_end(bool ok)
@@ -91,7 +92,7 @@ static bool w25_read_status(uint8_t *status)
     if (!MT6701_2_FlashBegin()) return w25_result(11,HAL_BUSY);
     W25_CS_LOW();
     bool ok = w25_send(2,&cmd,1);
-    if (ok) ok=w25_result(3,HAL_SPI_Receive(&hspi2,samples,sizeof(samples),W25_SPI_TIMEOUT_MS));
+    if (ok) ok=w25_result(3,SpiPort_Read(&hspi2,samples,sizeof(samples),W25_SPI_TIMEOUT_MS));
     if (ok) {
         /* SR1 repeats under the same CS. Require both samples idle, and both
          * WEL bits set; a transitioning/single bad byte must not admit a write.
@@ -145,7 +146,7 @@ uint32_t W25Q_ReadID(void)
     W25_CS_LOW();
     bool ok = w25_send(8,&cmd,1);
     if (ok) {
-        ok=w25_result(9,HAL_SPI_Receive(&hspi2,id,sizeof(id),W25_SPI_TIMEOUT_MS));
+        ok=w25_result(9,SpiPort_Read(&hspi2,id,sizeof(id),W25_SPI_TIMEOUT_MS));
     }
     if (!w25_end(ok)) {
         return 0U;
@@ -165,7 +166,7 @@ bool W25Q_Read(uint32_t addr, uint8_t *buf, uint32_t len)
     W25_CS_LOW();
     bool ok = w25_send_cmd_addr(8,W25_CMD_READ_DATA, addr);
     if (ok) {
-        ok=w25_result(9,HAL_SPI_Receive(&hspi2,buf,(uint16_t)len,W25_SPI_TIMEOUT_MS));
+        ok=w25_result(9,SpiPort_Read(&hspi2,buf,(uint16_t)len,W25_SPI_TIMEOUT_MS));
     }
     return w25_end(ok);
 }

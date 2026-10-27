@@ -23,6 +23,10 @@ parser.add_argument("--allow-irq-user-code", action="store_true",
                     help="Permit only the R82 IRQ USER CODE blocks and the exact user-module CMake addition")
 parser.add_argument("--allow-console-user-build",action="store_true",
                     help="Permit only the exact R88 link-section and four cold user-source Oz changes")
+parser.add_argument("--allow-uart-user-code",action="store_true",
+                    help="Permit only the exact R90 main/USART IRQ USER CODE routing and UART module addition")
+parser.add_argument("--allow-spi-user-code",action="store_true",
+                    help="Permit only R91 SPI/DMA USER CODE routing, user LCD transport calls and SPI module addition")
 args = parser.parse_args()
 OUT = ROOT / args.directory
 LABEL = args.label
@@ -84,6 +88,75 @@ def verify_irq_user_changes(changed):
         assert current.replace(addition,"")==(OUT/"CMakeLists.txt").read_text(encoding="utf-8")
 
 
+def verify_uart_user_changes(changed):
+    allowed={"Core/Src/main.c","Core/Src/stm32g4xx_it.c","CMakeLists.txt"}
+    assert set(changed)<=allowed,changed
+    def replace_once(text,old,new):
+        assert text.count(old)==1,old
+        return text.replace(old,new)
+    for name in allowed:
+        before=(OUT/name).read_text(encoding="utf-8")
+        assert sha(OUT/name)==baseline["protected"][name],"Invalid baseline copy: "+name
+        expected=before
+        if name=="Core/Src/main.c":
+            expected=replace_once(expected,'#include "protocol.h"\n','#include "protocol.h"\n#include "uart_port.h"\n')
+            expected=replace_once(expected,'static uint8_t rx_byte;\n','')
+            callbacks=re.search(r'void HAL_UART_RxCpltCallback\(UART_HandleTypeDef \*huart\)\n\{.*?\n\}\n\nvoid HAL_UART_ErrorCallback\(UART_HandleTypeDef \*huart\)\n\{.*?\n\}\n\n',expected,re.S)
+            assert callbacks and callbacks[0].count('HAL_UART_Receive_IT')==2
+            expected=replace_once(expected,callbacks[0],'')
+            expected=replace_once(expected,'  HAL_UART_Receive_IT(&huart1, &rx_byte, 1U);','  Uart1_Init();')
+        elif name=="Core/Src/stm32g4xx_it.c":
+            expected=replace_once(expected,'#include "motor_irq.h"\n','#include "motor_irq.h"\n#include "uart_port.h"\n')
+            expected=replace_once(expected,'  /* USER CODE BEGIN USART1_IRQn 0 */\n\n','  /* USER CODE BEGIN USART1_IRQn 0 */\n  Uart1_IRQHandler();\n  return;\n')
+        else:
+            anchor='set_source_files_properties(mycode/motor_irq.c PROPERTIES COMPILE_OPTIONS "-Os;-flto")\n'
+            addition=('\n# USART1 runtime transport; generated HAL setup and ST sources stay intact.\n'
+                'target_sources(${CMAKE_PROJECT_NAME} PRIVATE mycode/uart_port.c)\n'
+                'set_source_files_properties(mycode/uart_port.c PROPERTIES COMPILE_OPTIONS "-Os;-flto")\n')
+            expected=replace_once(expected,anchor,anchor+addition)
+        assert (ROOT/name).read_text(encoding="utf-8")==expected,"Unexpected protected change: "+name
+
+
+def verify_spi_user_changes(changed):
+    allowed={"Core/Src/stm32g4xx_it.c","CMakeLists.txt","mycode/kk_oled/driver/kk_oled_driver.c"}
+    assert set(changed)<=allowed,changed
+    def once(text,old,new):
+        assert text.count(old)==1,old
+        return text.replace(old,new)
+    for name in allowed:
+        before=(OUT/name).read_text(encoding="utf-8")
+        assert sha(OUT/name)==baseline["protected"][name],"Invalid baseline copy: "+name
+        expected=before
+        if name=="Core/Src/stm32g4xx_it.c":
+            expected=once(expected,'#include "uart_port.h"\n','#include "uart_port.h"\n#include "spi_port.h"\n')
+            for vector,call in {
+                'DMA1_Channel1':'SpiPort_DMAIRQ(&hspi1,1U);',
+                'DMA1_Channel2':'SpiPort_DMAIRQ(&hspi1,2U);',
+                'DMA1_Channel4':'SpiPort_DMAIRQ(&hspi3,4U);',
+                'DMA2_Channel1':'SpiPort_DMAIRQ(&hspi2,1U);',
+                'DMA2_Channel2':'SpiPort_DMAIRQ(&hspi2,2U);',
+                'SPI1':'SpiPort_IRQHandler(&hspi1);',
+                'SPI2':'SpiPort_IRQHandler(&hspi2);',
+                'SPI3':'SpiPort_IRQHandler(&hspi3);',
+            }.items():
+                block='  /* USER CODE BEGIN '+vector+'_IRQn 0 */\n'
+                expected=once(expected,block+'\n',block+'  '+call+'\n  return;\n')
+        elif name=="CMakeLists.txt":
+            anchor='set_source_files_properties(mycode/uart_port.c PROPERTIES COMPILE_OPTIONS "-Os;-flto")\n'
+            addition=('\n# SPI runtime and its five dedicated DMA channels; HAL still owns setup.\n'
+                'target_sources(${CMAKE_PROJECT_NAME} PRIVATE mycode/spi_port.c)\n'
+                'set_source_files_properties(mycode/spi_port.c PROPERTIES COMPILE_OPTIONS "-Os;-flto")\n')
+            expected=once(expected,anchor,anchor+addition)
+        else:
+            expected=once(expected,'#include "spi.h"','#include "spi.h"\n#include "spi_port.h"')
+            for old,new in [('HAL_SPI_Transmit_DMA','SpiPort_WriteDMA'),('HAL_SPI_Transmit','SpiPort_Write'),('HAL_SPI_Abort','SpiPort_Abort')]:
+                expected=expected.replace(old,new)
+            expected=once(expected,'void OLED_DriverService(void)\n{','void OLED_DriverService(void)\n{\n    SpiPort_Service(&hspi3);')
+            expected=once(expected,' * SpiPort_Abort() 内部可能回调错误处理，因此这里允许重复调用。',
+                          ' * 仅在主循环调用；底层复位 SPI3，丢弃尚未发送完的字节。')
+        assert (ROOT/name).read_text(encoding="utf-8")==expected,"Unexpected protected change: "+name
+
+
 def image(mode):
     folder = ROOT / "build" / mode
     elf, binary = folder / "FOC_two.elf", folder / "FOC_two.bin"
@@ -123,7 +196,7 @@ if LABEL == "baseline":
         destination = OUT / "mycode" / path.name
         destination.parent.mkdir(exist_ok=True)
         shutil.copy2(path, destination)
-    for name in ("Core/Src/stm32g4xx_it.c","CMakeLists.txt"):
+    for name in ("Core/Src/main.c","Core/Src/stm32g4xx_it.c","CMakeLists.txt","mycode/kk_oled/driver/kk_oled_driver.c"):
         destination=OUT/name
         destination.parent.mkdir(parents=True,exist_ok=True)
         shutil.copy2(ROOT/name,destination)
@@ -145,6 +218,12 @@ else:
             expected=expected.replace(anchor,anchor+'set_source_files_properties(mycode/app_storage.c mycode/w25q64.c mycode/ws2812.c mycode/number_parse.c\n    PROPERTIES COMPILE_OPTIONS "-Oz;-flto")\n')
             assert (ROOT/"CMakeLists.txt").read_text(encoding="utf-8")==expected,"Unexpected build configuration change"
             report["permitted_user_changes"]=changed
+        elif args.allow_spi_user_code:
+            verify_spi_user_changes(changed)
+            report["permitted_user_changes"]=sorted(changed)
+        elif args.allow_uart_user_code:
+            verify_uart_user_changes(changed)
+            report["permitted_user_changes"]=sorted(changed)
         elif args.allow_irq_user_code:
             verify_irq_user_changes(changed)
             report["permitted_user_changes"]=sorted(changed)

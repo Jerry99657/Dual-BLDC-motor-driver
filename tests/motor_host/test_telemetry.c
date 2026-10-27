@@ -27,13 +27,13 @@ static void packet(void) {
 }
 static void pump(void) { for(unsigned i=0;i<25;++i) packet(); }
 int main(void) {
-    huart1.gState=HAL_UART_STATE_READY;usb_connected=true;complete_early=true;
+    uart_busy=false;usb_connected=true;complete_early=true;
     trace=fopen("build/telemetry-r86/wire-fixture.bin","wb");assert(trace);
     assert(MotorControl_SelectWork(MOTOR_WORK_SINGLE_M1));pump();assert(observed[1] && observed[16]);
     uint8_t saved[128];unsigned saved_length=uart_capture_length;memcpy(saved,uart_inflight,saved_length);
-    huart1.gState=HAL_UART_STATE_READY^1U;
+    uart_busy=true;
     uint8_t replacement[12]={0};Telemetry_Send(replacement,sizeof(replacement));
-    assert(!memcmp(saved,uart_inflight,saved_length));huart1.gState=HAL_UART_STATE_READY;
+    assert(!memcmp(saved,uart_inflight,saved_length));uart_busy=false;
     unsigned curves_before=curve_frames;
     for(unsigned i=0;i<40;++i) { ready=!ready;packet(); }
     assert(curve_frames>curves_before);ready=true; /* Chattering status cannot starve every curve. */

@@ -2,6 +2,8 @@
 #include <stdio.h>
 #include <string.h>
 #include "MT6701.h"
+#include "spi_port.h"
+void SpiPort_Service(SPI_HandleTypeDef *h) { (void)h; }
 #include "w25q64.h"
 #include "app_storage.h"
 
@@ -60,7 +62,7 @@ void HAL_GPIO_WritePin(GPIO_TypeDef *p,uint16_t pin,GPIO_PinState state) {
     } else p->pins |= pin;
 }
 static void receive_frame(uint8_t *p) { p[0]=payload>>16; p[1]=payload>>8; p[2]=payload; }
-HAL_StatusTypeDef HAL_SPI_TransmitReceive_DMA(SPI_HandleTypeDef *h,const uint8_t *tx,uint8_t *rx,uint16_t n) {
+HAL_StatusTypeDef SpiPort_ExchangeDMA(SPI_HandleTypeDef *h,const uint8_t *tx,uint8_t *rx,uint16_t n) {
     (void)tx; assert(n==3);
     if (h==&hspi2) {
         assert(!(gpio_b.pins & MT6701_CSN2_Pin) && (gpio_b.pins & W25_NSS_Pin));
@@ -77,7 +79,7 @@ HAL_StatusTypeDef HAL_SPI_TransmitReceive_DMA(SPI_HandleTypeDef *h,const uint8_t
     }
     return dma_result;
 }
-HAL_StatusTypeDef HAL_SPI_TransmitReceive(SPI_HandleTypeDef *h,const uint8_t *tx,uint8_t *rx,uint16_t n,uint32_t timeout) {
+HAL_StatusTypeDef SpiPort_Exchange(SPI_HandleTypeDef *h,const uint8_t *tx,uint8_t *rx,uint16_t n,uint32_t timeout) {
     if (!(gpio_b.pins & W25_NSS_Pin)) {
         assert(h==&hspi2 && n<=256 && timeout==100 && host_primask==0);
         ++flash_duplex_sends;memset(rx,0,n);
@@ -148,12 +150,12 @@ static HAL_StatusTypeDef flash_send(SPI_HandleTypeDef *h,const uint8_t *p,uint16
     }
     return HAL_OK;
 }
-HAL_StatusTypeDef HAL_SPI_Transmit(SPI_HandleTypeDef *h,const uint8_t *p,uint16_t n,uint32_t timeout) {
+HAL_StatusTypeDef SpiPort_Write(SPI_HandleTypeDef *h,const uint8_t *p,uint16_t n,uint32_t timeout) {
     (void)h;(void)p;(void)n;(void)timeout;
     assert(!"Flash must drain RX in full duplex instead of TX-only polling");return HAL_ERROR;
 }
-uint32_t HAL_SPI_GetError(const SPI_HandleTypeDef *h) { assert(h==&hspi2);return flash_hal_error; }
-HAL_StatusTypeDef HAL_SPI_Receive(SPI_HandleTypeDef *h,uint8_t *p,uint16_t n,uint32_t timeout) {
+uint32_t SpiPort_GetError(const SPI_HandleTypeDef *h) { assert(h==&hspi2);return flash_hal_error; }
+HAL_StatusTypeDef SpiPort_Read(SPI_HandleTypeDef *h,uint8_t *p,uint16_t n,uint32_t timeout) {
     (void)timeout; assert(h==&hspi2);
     flash_finish();
     memset(p,0,n); if(command==0x9FU) {
@@ -174,14 +176,14 @@ HAL_StatusTypeDef HAL_SPI_Receive(SPI_HandleTypeDef *h,uint8_t *p,uint16_t n,uin
     } else assert(0);
     return HAL_OK;
 }
-HAL_StatusTypeDef HAL_SPI_DMAStop(SPI_HandleTypeDef *h) {
+HAL_StatusTypeDef SpiPort_DMAStop(SPI_HandleTypeDef *h) {
     assert(!fast_context && (h==&hspi1 || h==&hspi2));
     if (h==&hspi1) ++stops1;
     else ++stops2;
     h->State=HAL_SPI_STATE_READY;
     return HAL_OK;
 }
-HAL_StatusTypeDef HAL_SPI_Abort(SPI_HandleTypeDef *h) {
+HAL_StatusTypeDef SpiPort_Abort(SPI_HandleTypeDef *h) {
     assert(!fast_context && host_primask==0);
     if (h==&hspi1) {
         ++aborts1;

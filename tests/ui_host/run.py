@@ -26,7 +26,7 @@ subprocess.run([shutil.which("gcc") or "gcc", "-std=c11", "-Wall", "-Wextra", "-
 subprocess.run([str(output / "test_storage.exe")], cwd=repo, check=True)
 
 # Run the actual ST7735 driver; model an interrupt before DMA-start returns.
-command = [shutil.which("gcc") or "gcc", "-std=c11", "-Wall", "-Wextra", "-Werror", "-O1", "-DKK_OLED_TEST", "-Itests/oled_driver_host", "-Imycode/kk_oled/include", "-Imycode/kk_oled/graphics", "-Imycode/kk_oled/driver"]
+command = [shutil.which("gcc") or "gcc", "-std=c11", "-Wall", "-Wextra", "-Werror", "-O1", "-DKK_OLED_TEST", "-Itests/oled_driver_host", "-Imycode", "-Imycode/kk_oled/include", "-Imycode/kk_oled/graphics", "-Imycode/kk_oled/driver"]
 command += [str(p) for p in (repo / "mycode/kk_oled/graphics").glob("*.c")]
 command += ["mycode/kk_oled/driver/kk_oled_driver.c", "tests/oled_driver_host/test_driver.c", "-lm", "-o", str(output / "test_driver.exe")]
 subprocess.run(command, cwd=repo, check=True)

@@ -10,12 +10,11 @@
 #include "motor_control.h"
 #include "app_storage.h"
 #include "st_hso.h"
-#include "usart.h"
+#include "uart_port.h"
 #include "usb_device.h"
 #include "usbd_cdc_if.h"
 
 uint32_t host_primask;
-UART_HandleTypeDef huart1;
 USBD_HandleTypeDef hUsbDeviceFS;
 volatile uint8_t g_usb_cdc_ready;
 volatile float JerryFOC_Target_Iq, JerryFOC_Target_Position;
@@ -31,10 +30,13 @@ static bool observer_enabled=true;
 static uint8_t uart_capture[128];
 static uint16_t uart_capture_length;
 static uint8_t *uart_inflight;
-HAL_StatusTypeDef HAL_UART_Transmit_IT(UART_HandleTypeDef *h,uint8_t *p,uint16_t n) {
+static uint8_t uart_active[128];
+static bool uart_busy;
+bool Uart1_TrySend(const uint8_t *p,uint16_t n) {
+    if(uart_busy) return false;
     assert(n<=sizeof(uart_capture)); memcpy(uart_capture,p,n); uart_capture_length=n;
-    uart_inflight=p;
-    (void)h; (void)p; (void)n; return HAL_OK;
+    memcpy(uart_active,p,n); uart_inflight=uart_active;
+    return true;
 }
 static bool usb_connected, usb_busy, complete_early, publish_during_submit;
 static uint8_t submit_result;
@@ -217,6 +219,26 @@ static void check_numbers(void) {
     command("Speed:20");
     printf("PASS: compact finite-number parser: decimal/exponent/hex/sign/whitespace, malformed/overflow rejection, subnormals and 20000 decimal + hex round trips; digest %08lx\n",(unsigned long)number_digest);
 }
+static void check_transport_resync(void) {
+    command("Speed:7");assert(target==7);
+    Protocol_Feed(PROTO_SRC_USART,(const uint8_t *)"Speed:1",7);
+    Protocol_Feed(PROTO_SRC_USB,(const uint8_t *)"Speed:",6);
+    Protocol_DiscardLine(PROTO_SRC_USART);
+    Protocol_DiscardLine(255); /* Invalid source cannot affect either line. */
+    Protocol_Feed(PROTO_SRC_USART,(const uint8_t *)"00\n",3);
+    Protocol_Service();assert(target==7); /* Never execute truncated Speed:100. */
+    Protocol_Feed(PROTO_SRC_USB,(const uint8_t *)"9\n",2);
+    Protocol_Service();assert(target==9); /* USB partial input survives UART fault. */
+    Protocol_Feed(PROTO_SRC_USART,(const uint8_t *)"Speed:12\n",9);
+    Protocol_Service();assert(target==12);
+    Protocol_Feed(PROTO_SRC_USART,(const uint8_t *)"Speed:",6);
+    Protocol_DiscardLine(PROTO_SRC_USART);
+    Protocol_Feed(PROTO_SRC_USART,(const uint8_t *)"200\n",4);
+    Protocol_Service();assert(target==12);
+    Protocol_Feed(PROTO_SRC_USART,(const uint8_t *)"Stop\n",5);
+    assert(target==0); /* Clean Stop still executes in RX without service. */
+    puts("PASS: transport error drops incomplete motion through newline, preserves other-source fragments, restores clean UART commands and immediate Stop");
+}
 static void check_rpc(void) {
     extern uint32_t telemetry_host_tick;
     extern bool telemetry_host_stopped;
@@ -231,7 +253,7 @@ static void check_rpc(void) {
     telemetry_host_tick=100;assert(Telemetry_Select("Off"));
     command("@1:Get");Telemetry_Service();
     assert(inflight_len==106 && inflight[3]==32 && inflight[12]==1 && inflight[14]==1 && inflight[15]==PROTO_SRC_USB);
-    assert(inflight[16]==2 && inflight[17]==89);
+    assert(inflight[16]==2 && inflight[17]==91);
     assert(inflight[18]==APP_SAVE_PENDING); /* Dirty config must not claim an older save completed. */
     int32_t saved;memcpy(&saved,inflight+20,4);assert(saved==123);
     assert(fwrite(inflight,1,inflight_len,trace)==inflight_len);
@@ -241,8 +263,8 @@ static void check_rpc(void) {
     command("@4:Work:bad");Telemetry_Service();assert((int8_t)inflight[14]==-1);
     unsigned before=submissions;
     Protocol_Feed(PROTO_SRC_USART,(const uint8_t *)"@5:Get\n",7);Protocol_Service();
-    huart1.gState=HAL_UART_STATE_READY^1U;Telemetry_Service();assert(submissions==before);
-    huart1.gState=HAL_UART_STATE_READY;Telemetry_Service();
+    uart_busy=true;Telemetry_Service();assert(submissions==before);
+    uart_busy=false;Telemetry_Service();
     assert(submissions==before && uart_capture_length==106 && uart_capture[12]==5 && uart_capture[15]==PROTO_SRC_USART);
     assert(fwrite(uart_capture,1,uart_capture_length,trace)==uart_capture_length);
     /* Failed USB submission retains the complete reply, not the next curve. */
@@ -288,6 +310,7 @@ int main(void) {
     if(trace) { number_trace=fopen(trace,"wb");assert(number_trace); }
     check_usb_telemetry();
     check_configuration_queue();
+    check_transport_resync();
     MotorControl_SelectFeedback(true);
     command("HSO:Motor:2.3,0.00086,0.003");
     assert(Protocol_GetHsoResult()==1 && configurations==1 && config.flux_wb==0.003f);

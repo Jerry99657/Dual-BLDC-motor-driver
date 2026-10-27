@@ -1,5 +1,9 @@
 # R82：HAL＋LL 第一轮迁移（第 1～4 批）
 
+第6批已在 `UI-R91-SPI` 完成：三路SPI运行时及五个专用DMA通道迁移到用户LL模块，相对R90净节省2452 B，Flash余量4836 B，见 [R91 SPI／DMA迁移](HAL_LL_SPI_R91.md)。
+
+后续第5批已在 `UI-R90-UART` 完成：USART1运行时收发／中断使用用户LL模块，初始化保留HAL，Debug／Release均净节省2384 B。具体边界、验证和实板复测见 [R90 USART1迁移](HAL_LL_USART_R90.md)。下文为R82历史记录。
+
 固件 `UI-R82-LL`。完成基线保存、KEY1 GPIO／EXTI、TIM 和 ADC 中断迁移。初始化、校准、HAL 时基、DMA、SPI、USART、USB 等继续使用既有实现；本轮无需修改 CubeMX。
 
 ## 完成范围

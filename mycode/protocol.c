@@ -5,7 +5,7 @@
 #include "protocol.h"
 #include "number_parse.h"
 #include "main.h"
-#include "usart.h"
+#include "uart_port.h"
 #include "JerryFOC.h"
 #include "st_hso.h"
 #include "motor_control.h"
@@ -88,11 +88,9 @@ static void handle_hso(const char *command,MotorInput input)
     } else hso_result = -1;
 }
 
-/* UART buffer is reused only after HAL reports READY. USB has a separate
+/* USART owns its copied active frame through TC. USB has a separate
  * latest-frame mailbox and immutable active buffer. Main-loop producer only. */
 #define USB_TX_BUF_SIZE 128U
-
-static uint8_t usart_tx_buf[USB_TX_BUF_SIZE];
 
 /* Main-loop mailbox. Pending data may be replaced by a newer sample, but
  * the active buffer belongs to USB until TxState is idle. */
@@ -102,6 +100,10 @@ static volatile uint16_t usb_tx_pending_len;
 
 static int8_t handle_line(char *line,MotorInput input);
 static void receive_line(char *line,MotorInput input);
+void Protocol_DiscardLine(uint8_t source)
+{
+    if(source<=PROTO_SRC_USB) { ctx[source].len=0; ctx[source].overflow=true; }
+}
 void Protocol_Feed(uint8_t source, const uint8_t *data, uint32_t len)
 {
     if (source > PROTO_SRC_USB) {
@@ -405,12 +407,8 @@ void Telemetry_Send(const uint8_t *data, uint16_t len)
         return;
     }
 
-    /* USART1：复制到静态缓冲后非阻塞发送，忙时跳过本帧。
-     * 不能直接把调用者栈上的帧交给 HAL_UART_Transmit_IT。 */
-    if (huart1.gState == HAL_UART_STATE_READY) {
-        memcpy(usart_tx_buf, data, len);
-        (void)HAL_UART_Transmit_IT(&huart1, usart_tx_buf, len);
-    }
+    /* The USART transport copies before publishing; busy skips this curve. */
+    (void)Uart1_TrySend(data,len);
 
     /* Keep only the latest unsent telemetry frame. Never touch active data. */
     memcpy(usb_tx_pending, data, len);
@@ -515,7 +513,7 @@ static void telemetry_reply(void)
             TelemetryReply *r=&telemetry_packet.payload.reply;
             _Static_assert(sizeof(TelemetryReply)==92 && offsetof(AppSettings,crc)-offsetof(AppSettings,speed_x10)==84,"RPC settings layout");
             r->id=reply_id; r->result=reply_result; r->source=reply_source;
-            r->schema=2; r->firmware=89; r->save=(uint8_t)App_SaveState(); r->focus=(uint8_t)MotorControl_GetFocus();
+            r->schema=2; r->firmware=91; r->save=(uint8_t)App_SaveState(); r->focus=(uint8_t)MotorControl_GetFocus();
             memcpy(r->settings,&AppStorage_Get()->speed_x10,sizeof(r->settings));
         }
         (void)telemetry_frame(reply_kind,reply_kind==33 ? sizeof(TelemetryRow) : sizeof(TelemetryReply),HAL_GetTick());
@@ -526,10 +524,7 @@ static void telemetry_reply(void)
         if(!CDC_TxReady_FS()) return;
         memcpy(usb_tx_active,&telemetry_packet,len);
         if(CDC_Transmit_FS(usb_tx_active,len)==USBD_OK) reply_pending=false;
-    } else if(huart1.gState==HAL_UART_STATE_READY) {
-        memcpy(usart_tx_buf,&telemetry_packet,len);
-        if(HAL_UART_Transmit_IT(&huart1,usart_tx_buf,len)==HAL_OK) reply_pending=false;
-    }
+    } else if(Uart1_TrySend((const uint8_t *)&telemetry_packet,len)) reply_pending=false;
 }
 static uint8_t axis_flags(MotorAxis axis,const MotorAxisSnapshot *s)
 {

@@ -41,6 +41,7 @@
 #include "st_hso.h"
 #include "ws2812.h"
 #include "protocol.h"
+#include "uart_port.h"
 #include "app_storage.h"
 #include "kk_oled.h"
 #include "kk_oled_driver.h"
@@ -69,7 +70,6 @@
 /* Private variables ---------------------------------------------------------*/
 
 /* USER CODE BEGIN PV */
-static uint8_t rx_byte;
 static volatile uint8_t g_need_align = 0U;
 static uint8_t ui_ok = 0U;
 static uint8_t g_aligning = 0U;
@@ -88,21 +88,6 @@ void SystemClock_Config(void);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
-{
-    if (huart->Instance == USART1) {
-        Protocol_Feed(PROTO_SRC_USART, &rx_byte, 1U);
-        HAL_UART_Receive_IT(&huart1, &rx_byte, 1U);
-    }
-}
-
-void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
-{
-    if (huart->Instance == USART1) {
-        HAL_UART_Receive_IT(&huart1, &rx_byte, 1U);
-    }
-}
-
 /* 单颗 WS2812 只显示状态：
  *   红   = 编码器或 ADC/母线采样异常
  *   黄   = 编码器正常但尚未完成零点标定
@@ -226,7 +211,7 @@ int main(void)
 
   /* 2. MT6701 定频采样与串口接收 */
   MT6701_StartContinuous();
-  HAL_UART_Receive_IT(&huart1, &rx_byte, 1U);
+  Uart1_Init();
 
   /* Load the selected motor before ADC protection, alignment or FOC starts.
    * This also works when LCD initialization fails. */

@@ -10,19 +10,17 @@
 #include "protocol.h"
 #include "MT6701.h"
 #include "motor_sixstep.h"
-#include "usart.h"
+#include "uart_port.h"
 #include "usb_device.h"
 #include "app_storage.h"
 AppSaveState AppStorage_GetSaveState(void) { return APP_SAVE_IDLE; }
 
-UART_HandleTypeDef huart1;
 USBD_HandleTypeDef hUsbDeviceFS;
 volatile uint8_t g_usb_cdc_ready;
 static float telemetry_reference;
-HAL_StatusTypeDef HAL_UART_Transmit_IT(UART_HandleTypeDef *h,uint8_t *p,uint16_t n) {
-    (void)h;
+bool Uart1_TrySend(const uint8_t *p,uint16_t n) {
     if(n==104) memcpy(&telemetry_reference,p+7*sizeof(float),sizeof(float));
-    return HAL_OK;
+    return true;
 }
 uint8_t CDC_Transmit_FS(uint8_t *p,uint16_t n) { (void)p; (void)n; return 0; }
 uint8_t CDC_TxReady_FS(void) { return 0; }

@@ -41,6 +41,14 @@ add_subdirectory(cmake/stm32cubemx)
 target_sources(${CMAKE_PROJECT_NAME} PRIVATE mycode/motor_irq.c)
 set_source_files_properties(mycode/motor_irq.c PROPERTIES COMPILE_OPTIONS "-Os;-flto")
 
+# USART1 runtime transport; generated HAL setup and ST sources stay intact.
+target_sources(${CMAKE_PROJECT_NAME} PRIVATE mycode/uart_port.c)
+set_source_files_properties(mycode/uart_port.c PROPERTIES COMPILE_OPTIONS "-Os;-flto")
+
+# SPI runtime and its five dedicated DMA channels; HAL still owns setup.
+target_sources(${CMAKE_PROJECT_NAME} PRIVATE mycode/spi_port.c)
+set_source_files_properties(mycode/spi_port.c PROPERTIES COMPILE_OPTIONS "-Os;-flto")
+
 # Keep debug symbols and useful stepping in application code. HAL and USB
 # drivers use size optimization so the Debug image fits the real 128 KiB Flash.
 target_compile_options(${CMAKE_PROJECT_NAME} PRIVATE $<$<CONFIG:Debug>:-Og>)

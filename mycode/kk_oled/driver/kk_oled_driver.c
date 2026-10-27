@@ -3,6 +3,7 @@
 
 #include "main.h"
 #include "spi.h"
+#include "spi_port.h"
 
 #include <string.h>
 
@@ -106,12 +107,12 @@ static uint16_t s_dma_rows;
 
 static bool tft_write_cmd(uint8_t cmd)
 {
-    return HAL_SPI_Transmit(&hspi3, &cmd, 1, TFT_SPI_TIMEOUT_MS) == HAL_OK;
+    return SpiPort_Write(&hspi3, &cmd, 1, TFT_SPI_TIMEOUT_MS) == HAL_OK;
 }
 
 static bool tft_write_data(const uint8_t *data, uint16_t len)
 {
-    return HAL_SPI_Transmit(&hspi3, (uint8_t *)data, len,
+    return SpiPort_Write(&hspi3, (uint8_t *)data, len,
                             TFT_SPI_TIMEOUT_MS) == HAL_OK;
 }
 
@@ -227,7 +228,7 @@ static bool start_next_dma(void)
     s_dma_rows = rows;
 
     uint16_t bytes = (uint16_t)((s_rect_x1 - s_rect_x0 + 1U) * rows * 2U);
-    return HAL_SPI_Transmit_DMA(&hspi3, (uint8_t *)s_chunk, bytes) == HAL_OK;
+    return SpiPort_WriteDMA(&hspi3, (uint8_t *)s_chunk, bytes) == HAL_OK;
 }
 
 /* ================= 驱动接口 ================= */
@@ -357,6 +358,7 @@ bool OLED_DriverIsBusy(void)
 
 void OLED_DriverService(void)
 {
+    SpiPort_Service(&hspi3);
     if (s_completion_pending != 0U) {
         OLED_Status status = s_completion_status;
         s_completion_pending = 0U;
@@ -365,14 +367,14 @@ void OLED_DriverService(void)
 }
 
 /* 显示刷新超时后的兜底：终止 SPI/DMA，释放片选和忙标志。
- * HAL_SPI_Abort() 内部可能回调错误处理，因此这里允许重复调用。 */
+ * 仅在主循环调用；底层复位 SPI3，丢弃尚未发送完的字节。 */
 void OLED_DriverAbort(void)
 {
     if (!OLED_DriverIsBusy()) {
         return;
     }
 
-    if (s_dma_active != 0U) (void)HAL_SPI_Abort(&hspi3);
+    if (s_dma_active != 0U) (void)SpiPort_Abort(&hspi3);
     TFT_CS_HIGH();
     s_dma_active = 0U;
     s_completion_pending = 0U;

@@ -118,7 +118,7 @@
     X(text_keyrpt,"KeyRpt") \
     X(text_disperr,"DispErr") \
     X(text_fw,"FW") \
-    X(text_firmware,"UI-R89-ESC") \
+    X(text_firmware,"UI-R91-SPI") \
     X(text_mcu,"MCU") \
     X(text_stm32g431,"STM32G431") \
     X(text_control,"Control") \
