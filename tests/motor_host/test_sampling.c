@@ -621,7 +621,24 @@ static int check_six_outputs(void) {
     puts("PASS: actual TIM1 six-step gate masks/modes, driven-low floating pair, two-frame arm, OFF/ON rank timestamp/window and 2kHz bus/reference including stopped output/late ISR, spare TIM7 dispatch, KEY1/IBUS immediate shutdown and full PWM1 restoration");
     return 0;
 }
+static int check_diag_optional_axis(void) {
+    extern unsigned diag_host_faults;
+    reset();assert(MotorSampling_Start());
+    unsigned before=diag_host_faults;
+    for(unsigned ms=0;ms<302;++ms) {
+        ++tick;publish(1354);
+        for(unsigned n=0;n<10;++n) {frame(0);adc1.JDR4=adc2.JDR4=0;assert(MotorSampling_Capture());}
+        MotorSampling_Service();
+    }
+    assert(MotorSampling_IsReady() && !MotorSampling_IsAxisReady(MOTOR_AXIS_2));
+    assert(diag_host_faults==before); /* Readiness remains strict, first record stays free. */
+    frame(0);adc1.JDR1=4095;assert(MotorSampling_Capture());
+    assert(diag_host_faults>before);
+    puts("PASS: unused M2 zero faults preserve readiness protection without consuming the first diagnostic fault; active M1 fault still records");
+    return 0;
+}
 int main(int argc,char **argv) {
+    if(argc>1 && !strcmp(argv[1],"diag-optional")) return check_diag_optional_axis();
     if(argc>1 && !strcmp(argv[1],"six-outputs")) return check_six_outputs();
     if(argc>1 && !strncmp(argv[1],"global",6)) return check_global_stop(!strcmp(argv[1],"global-wrap"));
     if(argc>1) return check_ibus(argv[1]);

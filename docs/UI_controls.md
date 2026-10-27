@@ -1,5 +1,19 @@
 # 电机驱动板 UI 操作与验证
 
+当前固件 **UI-R98-BOOT**：严格识别 F5 下载期间的低地址 RAM 调试异常记录，避免它在 Reset 后误触发启动 GLOBAL STOP；真实应用异常、KEY1 和功率保护保持。Debug／Release Flash 余 **1936 B**（增加 112 B），RAM 总分配 **29424 B** 不变。无需修改 CubeMX。现场、匹配条件与验证见 [R98 下载期调试记录](Loader_debug_stop_R98.md)。
+
+当前固件 **UI-R97-ALIGN**：Run 未对齐时 OK 明确申请对齐，完成后再次确认才运行；GLOBAL STOP／ALIGNING 优先显示，保留 KEY1 与保护准入。Status 原 `System` 诊断入口统一改名 `Diagnostics`，CPU 字段实际叫 `CPU Fault`。Debug／Release Flash 余 **2048 B**（增加 196 B）、RAM 总分配 **29424 B**。无需修改 CubeMX。见 [R97 对齐恢复说明](Alignment_resume_R97.md)。
+
+当前固件 **UI-R96-QUERY**：完成第 4 项诊断查询减负。按请求轴和专题直接生成信息行，避免两次全量 UI 刷新及临时 View 切换；保留全部诊断字段和 USB／USART 协议，查询不触碰编辑草稿。Debug／Release Flash 余 **2244 B**、RAM 总分配 **29408 B**；本轮可装下，未额外压缩。无需修改 CubeMX，ST 官方库不变。实现与对照测试见 [R96 查询优化](Diagnostics_query_R96.md)。
+
+当前固件 **UI-R95-DIAG**：完成 CPU 异常双桥关断与保留记录、完整控制路径耗时／抖动和首次故障快照。Status → Diagnostics 查询；Settings → System → Clear diag 仅停机后清除，上位机同步支持。无需修改 CubeMX。Debug／Release Flash 余 **2820 B**，RAM 总分配 **29408 B**。字段与验证见 [R95 诊断说明](Diagnostics_R95.md)。
+
+当前固件 **UI-R94-LED**：清理按键 GPIO 重复初始化，全部模式／上下拉由 CubeMX 生成；WS2812 的 PWM／DMA 发送与中断迁移到用户 LL 路径，保留 HAL 初始化和动态 DMA 映射，增加截断帧复位重试。I2C3 保持现状。Debug／Release 净省 **236 B**，Flash 余 **6012 B**、RAM 总分配不变。详见 [R94 GPIO／WS2812](HAL_LL_WS2812_R94.md)。
+
+当前固件 **UI-R93-INIT**：完成第 7 批初始化与依赖收尾，USART1 使用 CubeMX 原生 LL 初始化，SPI／DMA 保留 HAL 初始化及恢复。删除启动时 SPI NSSP 覆盖，由 `.ioc` 配置 SPI3 NSSP；已实际验证重生成与串口参数变更。Debug／Release Flash 均余 **5776 B**，本批净省 **856 B**、RAM 净减 **144 B**。详见 [R93 初始化收尾](HAL_LL_INIT_R93.md)。
+
+当前固件 **UI-R92-CMX**：SPI DMA/KEY1 中断跟随 CubeMX 生成映射；每次构建检查驱动/算法配置边界。修复 WS2812 缓冲与生成 DMA 内存宽度不一致。Debug／Release Flash 均余 4920 B，RAM 不增加；外设初始化继续 HAL，本轮无需修改 CubeMX。详见 [R92 配置适配](CUBEMX_COMPAT_R92.md)。
+
 当前固件 **UI-R91-SPI**：完成HAL＋LL第6批，SPI1／SPI2／SPI3运行时收发与五个专用DMA通道迁移到用户模块；保留HAL初始化、编码器重连、SPI2／W25Q64互斥及LCD刷新。相对R90净节省2452 B，Debug／Release Flash均余4836 B；RAM不增加，无需修改CubeMX。边界与复测见 [R91 SPI／DMA迁移](HAL_LL_SPI_R91.md)。
 
 当前固件 **UI-R90-UART**：完成HAL＋LL第5批，USART1运行时收发／中断及错误恢复迁移到用户LL模块，保留HAL初始化和115200、8N1。Debug／Release均净节省2384 B，Flash余量2384 B；无需修改CubeMX。界面与控制功能沿用，说明见 [R90 USART1迁移](HAL_LL_USART_R90.md)。

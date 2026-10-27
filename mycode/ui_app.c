@@ -1,4 +1,5 @@
 #include "ui_app.h"
+#include "board_diag.h"
 #include "app_control.h"
 
 #include <math.h>
@@ -118,7 +119,8 @@
     X(text_keyrpt,"KeyRpt") \
     X(text_disperr,"DispErr") \
     X(text_fw,"FW") \
-    X(text_firmware,"UI-R91-SPI") \
+    X(text_firmware,"UI-R98-BOOT") \
+    X(text_clear_diag,"Clear diag") \
     X(text_mcu,"MCU") \
     X(text_stm32g431,"STM32G431") \
     X(text_control,"Control") \
@@ -200,6 +202,8 @@
     X(fmt_lu_uwb,"%lu uWb") \
     X(fmt_lu_us_lu,"%lu us / %lu") \
     X(text_aligning,"ALIGNING") \
+    X(text_align,"Align") \
+    X(text_diagnostics,"Diagnostics") \
     X(text_near,"NEAR") \
     X(text_high,"HIGH") \
     X(text_ibus_tripped,"IBUS: TRIPPED") \
@@ -465,7 +469,7 @@ enum {
     EVT_MOTOR_2804_CONFIRMED,
     EVT_MOTOR_4015_CONFIRMED,
     EVT_FOCUS_M1, EVT_FOCUS_M2, EVT_FEEDBACK, EVT_GEAR, EVT_ALIGN, EVT_SAVE_STATUS,
-    EVT_IBUS_LIMIT, EVT_IBUS_CLEAR, EVT_IBUS_STATUS,
+    EVT_IBUS_LIMIT, EVT_IBUS_CLEAR, EVT_IBUS_STATUS, EVT_DIAG_CLEAR,
     EVT_SIXSTEP, EVT_MOTOR_ESC,
     EVT_WORK_BASE=32,
 };
@@ -522,6 +526,26 @@ static uint32_t s_settings_save_at;
 static const char *s_pending_toast;
 
 static MotorAxis s_view_axis;
+/* Main-loop-only, synchronous row formatting. No heap or page-sized cache. */
+typedef struct {
+    MotorAxis axis;
+    unsigned field;
+    char *value,*name;
+    char scratch[32];
+} TextQuery;
+static TextQuery *text_query;
+static MotorAxis text_axis(void) { return text_query ? text_query->axis : s_view_axis; }
+__attribute__((noinline)) static char *text_destination(unsigned field)
+{
+    if (!text_query) return (char *)&texts+field;
+    if (field==text_query->field) return text_query->value;
+    if (field==offsetof(UiTexts,target_unit) && text_query->name) return text_query->name;
+    return text_query->scratch;
+}
+#define TEXT(field) (*(char (*)[sizeof(texts.field)])text_destination(offsetof(UiTexts,field)))
+/* Topic order is the existing GetRow group order, independent of page IDs. */
+enum { REF_DRIVE=1U, REF_ABOUT=2U, REF_MOTION=4U, REF_ENCODER=8U,
+       REF_ADC=16U, REF_HSO=32U, REF_DIAGNOSTICS=64U, REF_SIXSTEP=128U };
 /* UI reads run only in the main loop. Immediate field queries use one scratch
  * snapshot; callers needing a stable full value read into their own local.
  * Never retain this pointer across another ui_state() call. */
@@ -531,12 +555,12 @@ __attribute__((noinline)) static const MotorAxisSnapshot *ui_state(void)
 }
 static void ui_encoder_diag(MT6701Diagnostics *out)
 {
-    if (s_view_axis==MOTOR_AXIS_1) MT6701_GetDiagnostics(out);
+    if (text_axis()==MOTOR_AXIS_1) MT6701_GetDiagnostics(out);
     else MT6701_2_GetDiagnostics(out);
 }
 static uint16_t ui_encoder_raw(void)
 {
-    if (s_view_axis==MOTOR_AXIS_1) return MT6701_GetRawAngle();
+    if (text_axis()==MOTOR_AXIS_1) return MT6701_GetRawAngle();
     MT6701_2_Snapshot e; MT6701_2_GetSnapshot(&e); return e.raw_angle;
 }
 static uint32_t ui_encoder_errors(void)
@@ -615,7 +639,8 @@ static int32_t hso_max_x10(void)
 {
     int32_t limit=(int32_t)(400.0f*6.283185307f*10.0f/MotorParams_GetAxis(MOTOR_AXIS_1)->pole_pairs);
     if (MotorControl_SixStepAllowed()) limit=(int32_t)floorf(SixStep_MaxSpeed()*10.0f);
-    int32_t configured=(s_view_axis==MOTOR_AXIS_1 ? s_speed_limit : views[0].speed_limit)*10;
+    int32_t configured=(text_query ? (int32_t)MotorControl_LimitSpeed(MOTOR_AXIS_1,1.0e6f) :
+        s_view_axis==MOTOR_AXIS_1 ? s_speed_limit : views[0].speed_limit)*10;
     return configured < limit ? configured : limit;
 }
 
@@ -705,7 +730,9 @@ __attribute__((noinline)) static void refresh_values(const void *snapshot,const 
         const ValueRow *row=&rows[i];
         const char *source=(const char *)snapshot+row->offset;
         unsigned format=row->text_high_format>>4U;
-        char *destination=(char *)&texts+row->text_low+((row->text_high_format&15U)<<8U);
+        unsigned field=row->text_low+((row->text_high_format&15U)<<8U);
+        if (text_query && field!=text_query->field) continue;
+        char *destination=text_destination(field);
         if(format==VALUE_COUNT || format==VALUE_COUNT16) {
             uint32_t value=0;
             memcpy(&value,source,format==VALUE_COUNT ? sizeof(value) : sizeof(uint16_t));
@@ -718,7 +745,7 @@ __attribute__((noinline)) static void refresh_values(const void *snapshot,const 
             unsigned places=spec>>7U ? 2U : 1U;
             value*=multipliers[(spec>>4U)&7U];
             if ((format==VALUE_SIX_SPEED && SixStep_IsGeneric()) ||
-                (format==VALUE_AXIS_SPEED && esc_view())) unit="Hz";
+                (format==VALUE_AXIS_SPEED && text_axis()==MOTOR_AXIS_1 && SixStep_IsGeneric())) unit="Hz";
             UiText_Fixed(destination,unit ? 24U : 16U,
                 places==2 ? to_x100(value) : to_x10(value),places,unit);
         }
@@ -764,234 +791,256 @@ __attribute__((noinline)) static void axis_title(char *text,const char *suffix)
     UiText_Format(text,20U,ui_strings.fmt_m_u_s_s,(unsigned)s_view_axis+1U,texts.motor,suffix);
 }
 
-static void refresh_texts(void)
+/* Shared LCD/query formatter. A query routes only its requested field into
+ * the caller's buffer; other transient text stays in a 32-byte stack scratch.
+ * Topic masks avoid unrelated snapshots, menu updates and view changes. */
+static void refresh_info(unsigned mask)
 {
-    MotorAxisSnapshot state; MotorControl_GetAxis(s_view_axis,&state);
-    strcpy(texts.work,MotorControl_WorkText());
-    UiText_Format(texts.command,sizeof(texts.command),"%d",(int)Protocol_GetControlResult());
-    strcpy(texts.input,MotorControl_InputText(s_view_axis));
-    strcpy(texts.axis,s_view_axis==MOTOR_AXIS_1 ? "M1" : "M2");
-    strcpy(texts.m1,SixStep_IsGeneric() ? "ESC" : MotorParams_GetAxis(MOTOR_AXIS_1)->name);
-    strcpy(texts.m2,MotorParams_GetAxis(MOTOR_AXIS_2)->name);
-    fmt_fixed(texts.sync,sizeof(texts.sync),to_x100(MotorControl_GroupError()),100);
-    UiText_Format(texts.control_time,sizeof(texts.control_time),ui_strings.fmt_lu_us,(unsigned long)(MotorControl_MaxCycles()/170U));
-    strcpy(texts.save,AppStorage_IsDeferred() ? ui_strings.text_deferred : ui_strings.text_available);
-    strcpy(texts.save_result,AppStorage_SaveErrorText());
-    uint32_t flash_error=AppStorage_FlashError();
-    MT6701_2_BusDiagnostics bus_diag;
-    MT6701_2_GetBusDiagnostics(&bus_diag);
-    UiText_Format(texts.spi2_fault,sizeof(texts.spi2_fault),ui_strings.fmt_04x_04x_04x,
-             (unsigned)bus_diag.cr1,(unsigned)bus_diag.cr2,(unsigned)bus_diag.sr);
-    UiText_Format(texts.spi2_resets,sizeof(texts.spi2_resets),"%u",(unsigned)bus_diag.resets);
-    UiText_Format(texts.flash_error,sizeof(texts.flash_error),ui_strings.fmt_lu_lu_02lx_02lx,
-        (unsigned long)(flash_error>>24),(unsigned long)((flash_error>>16)&255U),
-        (unsigned long)((flash_error>>8)&255U),(unsigned long)(flash_error&255U));
-    s_hso_choice=MotorControl_HsoAllowed();
-    s_six_choice=MotorControl_SixStepAllowed();
-    strcpy(texts.motor,esc_view() ? "ESC" : MotorParams_GetAxis(s_view_axis)->name);
-    axis_title(texts.motor_menu,ui_strings.text_motor);
-    axis_title(texts.settings,ui_strings.text_settings);
-    axis_title(texts.steps,ui_strings.text_steps);
-    axis_title(texts.status,ui_strings.text_status);
-    for (unsigned i=0;i<4;++i) axis_title(texts.groups[i],group_names[i]);
-    UiText_Format(texts.groups[4],sizeof(texts.groups[4]),ui_strings.fmt_m1_s_hso,MotorParams_GetAxis(MOTOR_AXIS_1)->name);
-    fmt_unit(texts.hso_min,hso_min_x10(),10,ui_strings.text_rad_s);
-    fmt_unit(texts.hso_max,hso_max_x10(),10,ui_strings.text_rad_s);
-    if (hso_max_x10()<hso_min_x10()) strcpy(texts.hso_max,ui_strings.text_no_run_range);
-    axis_title(texts.loop_title,ui_strings.text_curr_loop);
-    UiText_Format(texts.system,sizeof(texts.system),ui_strings.fmt_system_s,MotorControl_WorkText());
-    UiText_Format(texts.work_menu,sizeof(texts.work_menu),ui_strings.fmt_mode_s,MotorControl_WorkText());
-    for (unsigned i=0;i<MOTOR_WORK_COUNT;++i)
-        s_txt_work_items[i][0]=i==(unsigned)MotorControl_GetWork() ? '*' : ' ';
-    for (unsigned i=0;i<2;++i)
-        s_txt_axes[i][8]=i==(unsigned)s_view_axis ? '*' : ' ';
-    s_current_loop_display=s_current_loop || (s_view_axis==MOTOR_AXIS_1 && MotorControl_HsoAllowed());
-    if (s_view_axis==MOTOR_AXIS_1 && MotorControl_SixStepAllowed()) s_current_loop_display=false;
-    refresh_save_state();
-    strcpy(texts.output,
-             !MotorSampling_IsAxisOutputRequested(s_view_axis) ? ui_strings.text_coast :
-             MotorSampling_IsAxisOutputEnabled(s_view_axis) ? "PWM" : "OFF");
-    fmt_counter(texts.repeat,s_input_repeats);
-    fmt_counter(texts.display_errors,s_display_errors);
-
-    bool oil=throttle_mode(state.mode);
-    strcpy(texts.mode,oil ? ui_strings.text_throttle : mode_name(state.mode));
-
-    switch (state.mode) {
-    case JERRYFOC_MODE_VELOCITY:
-        fmt_unit(texts.target, to_x10(state.target_velocity), 10, ui_strings.text_rad_s);
-        break;
-    case JERRYFOC_MODE_POSITION:
-        fmt_unit(texts.target, to_x100(state.target_position), 100, "rad");
-        break;
-    default:
-        fmt_unit(texts.target,to_x100(state.target_iq),100,oil ? "%" : s_current_loop ? "A" : "V");
-        break;
+    MotorAxis axis=text_axis();
+    MotorAxisSnapshot state;
+    bool oil=axis==MOTOR_AXIS_1 && MotorControl_SixStepAllowed();
+    if (mask&(REF_DRIVE|REF_MOTION|REF_ENCODER)) {
+        MotorControl_GetAxis(axis,&state); oil=oil && state.mode==JERRYFOC_MODE_TORQUE;
     }
-
-    if (state.mode==JERRYFOC_MODE_VELOCITY) {
-        strcpy(texts.target_unit,ui_strings.text_target_rpm);
-        fmt_unit(texts.target_aux,to_x10(state.target_velocity*9.5492966f),10,"rpm");
-    } else if (state.mode==JERRYFOC_MODE_POSITION) {
-        strcpy(texts.target_unit,ui_strings.text_tgt_0_360);
-        fmt_degrees(texts.target_aux,state.target_position);
-    } else {
-        strcpy(texts.target_unit,ui_strings.text_target_aux); strcpy(texts.target_aux,"--");
+    if (mask&(REF_DIAGNOSTICS)) {
+        UiText_Format(TEXT(command),sizeof(TEXT(command)),"%d",(int)Protocol_GetControlResult());
+        strcpy(TEXT(m1),SixStep_IsGeneric() ? "ESC" : MotorParams_GetAxis(MOTOR_AXIS_1)->name);
+        strcpy(TEXT(m2),MotorParams_GetAxis(MOTOR_AXIS_2)->name);
+        UiText_Format(TEXT(control_time),sizeof(TEXT(control_time)),ui_strings.fmt_lu_us,(unsigned long)(MotorControl_MaxCycles()/170U));
+        strcpy(TEXT(save),AppStorage_IsDeferred() ? ui_strings.text_deferred : ui_strings.text_available);
+        strcpy(TEXT(save_result),AppStorage_SaveErrorText());
+        uint32_t flash_error=AppStorage_FlashError();
+        MT6701_2_BusDiagnostics bus_diag;
+        MT6701_2_GetBusDiagnostics(&bus_diag);
+        UiText_Format(TEXT(spi2_fault),sizeof(TEXT(spi2_fault)),ui_strings.fmt_04x_04x_04x,
+                 (unsigned)bus_diag.cr1,(unsigned)bus_diag.cr2,(unsigned)bus_diag.sr);
+        UiText_Format(TEXT(spi2_resets),sizeof(TEXT(spi2_resets)),"%u",(unsigned)bus_diag.resets);
+        UiText_Format(TEXT(flash_error),sizeof(TEXT(flash_error)),ui_strings.fmt_lu_lu_02lx_02lx,
+            (unsigned long)(flash_error>>24),(unsigned long)((flash_error>>16)&255U),
+            (unsigned long)((flash_error>>8)&255U),(unsigned long)(flash_error&255U));
+        fmt_counter(TEXT(repeat),s_input_repeats);
+        fmt_counter(TEXT(display_errors),s_display_errors);
     }
-    fmt_degrees(texts.elec_deg,state.electrical_angle);
-    fmt_degrees(texts.mech_deg,state.position);
+    if (!text_query || (mask&REF_DRIVE))
+        strcpy(TEXT(motor),(axis==MOTOR_AXIS_1 && SixStep_IsGeneric()) ? "ESC" : MotorParams_GetAxis(axis)->name);
+    if (mask&(REF_DRIVE)) {
+        strcpy(TEXT(work),MotorControl_WorkText());
+        strcpy(TEXT(axis),axis==MOTOR_AXIS_1 ? "M1" : "M2");
+        fmt_fixed(TEXT(sync),sizeof(TEXT(sync)),to_x100(MotorControl_GroupError()),100);
+        strcpy(TEXT(output),
+                 !MotorSampling_IsAxisOutputRequested(axis) ? ui_strings.text_coast :
+                 MotorSampling_IsAxisOutputEnabled(axis) ? "PWM" : "OFF");
+        strcpy(TEXT(mode),oil ? ui_strings.text_throttle : mode_name(state.mode));
 
-    static const ValueRow motion_values[]={
-        VALUE_ROW(MotorAxisSnapshot,velocity,speed,VALUE_AXIS_SPEED),
-        VALUE_ROW(MotorAxisSnapshot,velocity,rpm,VALUE_RPM),
-        VALUE_ROW(MotorAxisSnapshot,iq,iq,VALUE_AMP),
-        VALUE_ROW(MotorAxisSnapshot,id,id,VALUE_AMP),
-        VALUE_ROW(MotorAxisSnapshot,ia,ia,VALUE_AMP),
-        VALUE_ROW(MotorAxisSnapshot,ib,ib,VALUE_AMP),
-        VALUE_ROW(MotorAxisSnapshot,electrical_angle,elec,VALUE_RAD),
-        VALUE_ROW(MotorAxisSnapshot,position,mech,VALUE_RAD),
-    };
-    refresh_values(&state,motion_values,sizeof(motion_values)/sizeof(motion_values[0]));
-    if(esc_view()) strcpy(texts.rpm,"--");
+        UiText_Format(TEXT(drive),sizeof(TEXT(drive)),"%s",state.status);
+        strcpy(TEXT(feedback),axis==MOTOR_AXIS_1 ? JerryFOC_getFeedbackText() : ui_strings.text_encoder_32);
+        strcpy(TEXT(align),state.aligning ? ui_strings.text_aligning : state.aligned ? "YES" : "NO");
+    }
+    if (!text_query) {
+        s_hso_choice=MotorControl_HsoAllowed();
+        s_six_choice=MotorControl_SixStepAllowed();
+        axis_title(TEXT(motor_menu),ui_strings.text_motor);
+        axis_title(TEXT(settings),ui_strings.text_settings);
+        axis_title(TEXT(steps),ui_strings.text_steps);
+        axis_title(TEXT(status),ui_strings.text_status);
+        for (unsigned i=0;i<4;++i) axis_title(TEXT(groups[i]),group_names[i]);
+        UiText_Format(TEXT(groups[4]),sizeof(TEXT(groups[4])),ui_strings.fmt_m1_s_hso,MotorParams_GetAxis(MOTOR_AXIS_1)->name);
+        axis_title(TEXT(loop_title),ui_strings.text_curr_loop);
+        UiText_Format(TEXT(system),sizeof(TEXT(system)),ui_strings.fmt_system_s,MotorControl_WorkText());
+        UiText_Format(TEXT(work_menu),sizeof(TEXT(work_menu)),ui_strings.fmt_mode_s,MotorControl_WorkText());
+        for (unsigned i=0;i<MOTOR_WORK_COUNT;++i)
+            s_txt_work_items[i][0]=i==(unsigned)MotorControl_GetWork() ? '*' : ' ';
+        for (unsigned i=0;i<2;++i)
+            s_txt_axes[i][8]=i==(unsigned)axis ? '*' : ' ';
+        s_current_loop_display=s_current_loop || (axis==MOTOR_AXIS_1 && MotorControl_HsoAllowed());
+        if (axis==MOTOR_AXIS_1 && MotorControl_SixStepAllowed()) s_current_loop_display=false;
+        refresh_save_state();
+    }
+    if (mask&(REF_MOTION)) {
+        strcpy(TEXT(input),MotorControl_InputText(axis));
+        switch (state.mode) {
+        case JERRYFOC_MODE_VELOCITY:
+            fmt_unit(TEXT(target), to_x10(state.target_velocity), 10, ui_strings.text_rad_s);
+            break;
+        case JERRYFOC_MODE_POSITION:
+            fmt_unit(TEXT(target), to_x100(state.target_position), 100, "rad");
+            break;
+        default:
+            fmt_unit(TEXT(target),to_x100(state.target_iq),100,oil ? "%" : (text_query ? state.current_loop : s_current_loop) ? "A" : "V");
+            break;
+        }
 
-    strcpy(texts.enc,
-             (s_view_axis==MOTOR_AXIS_1 ? MT6701_IsHealthy()!=0U : state.healthy) ? "OK" : ui_strings.text_error);
-    MT6701_2_Snapshot encoder2;
-    MT6701_2_GetSnapshot(&encoder2);
-    UiText_Format(texts.enc2, sizeof(texts.enc2), ui_strings.fmt_s_u,
-             encoder2.healthy ? "OK" : encoder2.stopped ? "OFF" : ui_strings.text_error, (unsigned)encoder2.raw_angle);
-    fmt_counter(texts.enc2_err,encoder2.errors);
-    UiText_Format(texts.drive, sizeof(texts.drive), "%s",
-             state.status);
-    StHsoSnapshot hso;
-    StHso_GetSnapshot(&hso);
-    strcpy(texts.feedback,(s_view_axis==MOTOR_AXIS_1 ? JerryFOC_getFeedbackText() : ui_strings.text_encoder_32));
-    SixStepSnapshot six; SixStep_GetSnapshot(&six);
-    UiText_Format(texts.six_quality,sizeof(texts.six_quality),ui_strings.fmt_u_12_c_u_u_c,six.quality,six.gate ? six.gate : '-',six.phase_pct,six.period_pct,'0'+six.period_fraction%10U);
-    static const char *const reject_text[]={"-",ui_strings.text_phase_early,ui_strings.text_phase_late,ui_strings.text_period_low,ui_strings.text_period_high};
-    strcpy(texts.six_reject,reject_text[six.reject<=SIX_REJECT_LONG ? six.reject : 0]);
-    strcpy(texts.six_sample,six.sampling_off ? "OFF" : "ON");
-    static const ValueRow six_values[]={
-        VALUE_ROW(SixStepSnapshot,duty,six_duty,VALUE_DUTY),
-        VALUE_ROW(SixStepSnapshot,bemf,six_bemf,VALUE_VOLT),
-        VALUE_ROW(SixStepSnapshot,velocity,six_speed,VALUE_SIX_SPEED),
-        VALUE_ROW(SixStepSnapshot,startup_emf,six_start_emf,VALUE_VOLT),
-        VALUE_ROW(SixStepSnapshot,startup_current,six_start_i,VALUE_AMP),
-        VALUE_ROW(SixStepSnapshot,ramp_hz_s,six_ramp,VALUE_TENTH),
-    };
-    refresh_values(&six,six_values,sizeof(six_values)/sizeof(six_values[0]));
-    UiText_Format(texts.six_start,sizeof(texts.six_start),ui_strings.fmt_u_500_ms,six.startup_ms);
-    /* All reason literals fit these 16-byte application buffers. */
-    strcpy(texts.hso_gate,StHso_ReasonText(JerryFOC_isHSOActive() ? hso.reason : hso.entry_reason));
-    UiText_Format(texts.hso_qual, sizeof(texts.hso_qual), ui_strings.fmt_lu_u_ms_lu_20,
-             (unsigned long)(hso.qualified_samples / 10U),
-             hso.state==ST_HSO_LEARNING || hso.reason==ST_HSO_REASON_LEARN_TIMEOUT ? 1000U : 200U,
-             (unsigned long)hso.bad_samples);
-    strcpy(texts.hso_lost,JerryFOC_getHSOFaultText());
-    strcpy(texts.hso_reject,StHso_ReasonText(hso.capture_reason));
-    static const ValueRow hso_values[]={
-        VALUE_ROW(StHsoSnapshot,velocity_rad_s,hso_speed,VALUE_SPEED),
-        VALUE_ROW(StHsoSnapshot,angle_error_rad,hso_error,VALUE_ERROR_DEG),
-        VALUE_ROW(StHsoSnapshot,capture_resets,hso_resets,VALUE_COUNT),
-        VALUE_ROW(StHsoSnapshot,capture_angle_rad,hso_rangle,VALUE_DEG),
-        VALUE_ROW(StHsoSnapshot,capture_frequency_error_hz,hso_rfreq,VALUE_TENTH),
-        VALUE_ROW(StHsoSnapshot,capture_emf_ratio,hso_remf,VALUE_PERCENT),
-        VALUE_ROW(StHsoSnapshot,capture_drift_rad,hso_rdrift,VALUE_DEG),
-        VALUE_ROW(StHsoSnapshot,emf_offset_v,hso_offset,VALUE_MV),
-        VALUE_ROW(StHsoSnapshot,emf_offset_limit_v,hso_olimit,VALUE_MV),
-        VALUE_ROW(StHsoSnapshot,flux_wb,hso_flux_actual,VALUE_MWB),
-    };
-    refresh_values(&hso,hso_values,sizeof(hso_values)/sizeof(hso_values[0]));
-    strcpy(texts.hso,
-             JerryFOC_hasHSOFault() ? ui_strings.text_lost : StHso_StateText(hso.state));
-    UiText_Format(texts.hso_flux, sizeof(texts.hso_flux), ui_strings.fmt_lu_uwb, (unsigned long)(hso.reference_flux_wb * 1000000.0f));
-    UiText_Format(texts.hso_time, sizeof(texts.hso_time), ui_strings.fmt_lu_us_lu, (unsigned long)(hso.max_control_cycles / 170U), (unsigned long)hso.overruns);
-    strcpy(texts.align,state.aligning ? ui_strings.text_aligning : state.aligned ? "YES" : "NO");
-    fmt_counter(texts.raw,ui_encoder_raw());
+        if (state.mode==JERRYFOC_MODE_VELOCITY) {
+            strcpy(TEXT(target_unit),ui_strings.text_target_rpm);
+            fmt_unit(TEXT(target_aux),to_x10(state.target_velocity*9.5492966f),10,"rpm");
+        } else if (state.mode==JERRYFOC_MODE_POSITION) {
+            strcpy(TEXT(target_unit),ui_strings.text_tgt_0_360);
+            fmt_degrees(TEXT(target_aux),state.target_position);
+        } else {
+            strcpy(TEXT(target_unit),ui_strings.text_target_aux); strcpy(TEXT(target_aux),"--");
+        }
+        fmt_degrees(TEXT(elec_deg),state.electrical_angle);
+        fmt_degrees(TEXT(mech_deg),state.position);
 
-    if (s_view_axis==MOTOR_AXIS_1 && MotorControl_SixStepAllowed()) {
-        char *unavailable[]={texts.iq,texts.id,texts.elec,texts.mech,texts.elec_deg,texts.mech_deg};
-        for (unsigned i=0;i<sizeof(unavailable)/sizeof(unavailable[0]);++i) strcpy(unavailable[i],"--");
-    }
+        static const ValueRow motion_values[]={
+            VALUE_ROW(MotorAxisSnapshot,velocity,speed,VALUE_AXIS_SPEED),
+            VALUE_ROW(MotorAxisSnapshot,velocity,rpm,VALUE_RPM),
+            VALUE_ROW(MotorAxisSnapshot,iq,iq,VALUE_AMP),
+            VALUE_ROW(MotorAxisSnapshot,id,id,VALUE_AMP),
+            VALUE_ROW(MotorAxisSnapshot,ia,ia,VALUE_AMP),
+            VALUE_ROW(MotorAxisSnapshot,ib,ib,VALUE_AMP),
+            VALUE_ROW(MotorAxisSnapshot,electrical_angle,elec,VALUE_RAD),
+            VALUE_ROW(MotorAxisSnapshot,position,mech,VALUE_RAD),
+        };
+        refresh_values(&state,motion_values,sizeof(motion_values)/sizeof(motion_values[0]));
+        if(axis==MOTOR_AXIS_1 && SixStep_IsGeneric()) strcpy(TEXT(rpm),"--");
 
-    fmt_counter(texts.err,ui_encoder_errors());
-    MT6701Diagnostics enc;
-    ui_encoder_diag(&enc);
-    for (unsigned i=0;i<sizeof(s_enc_labels)/sizeof(s_enc_labels[0]);++i)
-        s_enc_labels[i][1]=(char)('1'+s_view_axis);
-    static const ValueRow encoder_values[]={
-        VALUE_ROW(MT6701Diagnostics,crc_errors,enc_crc,VALUE_COUNT),
-        VALUE_ROW(MT6701Diagnostics,field_errors,enc_field,VALUE_COUNT),
-        VALUE_ROW(MT6701Diagnostics,track_errors,enc_track,VALUE_COUNT),
-        VALUE_ROW(MT6701Diagnostics,spi_errors,enc_spi,VALUE_COUNT),
-        VALUE_ROW(MT6701Diagnostics,frame_errors,enc_frame,VALUE_COUNT),
-    };
-    refresh_values(&enc,encoder_values,sizeof(encoder_values)/sizeof(encoder_values[0]));
-    fmt_pair(texts.enc_age,enc.age_cycles,enc.max_age_cycles);
-    strcpy(texts.enc_last,MT6701_ErrorText(enc.last_error));
-    const char *zero=enc.zero_age>3U ? "GAP" :
-        (enc.zero_before<=128U || enc.zero_before>=16384U-128U) ? ui_strings.text_near : "FAR";
-    if (enc.zero_count) {
-        UiText_Format(texts.enc_zero,sizeof(texts.enc_zero),ui_strings.fmt_s_u,zero,enc.zero_count);
-        if (enc.zero_age!=UINT16_MAX) fmt_counter(texts.enc_zpre,enc.zero_before);
-        else strcpy(texts.enc_zpre,"--");
-        if (enc.zero_after!=UINT16_MAX) fmt_counter(texts.enc_zpost,enc.zero_after);
-        else strcpy(texts.enc_zpost,"--");
-        fmt_counter(texts.enc_ztime,(enc.zero_after==UINT16_MAX ? HAL_GetTick() : enc.zero_ended_at)-enc.zero_started_at);
-    } else {
-        strcpy(texts.enc_zero,"--"); strcpy(texts.enc_zpre,"--"); strcpy(texts.enc_zpost,"--");
-        strcpy(texts.enc_ztime,"--");
+        if (axis==MOTOR_AXIS_1 && MotorControl_SixStepAllowed()) {
+            char *unavailable[]={TEXT(iq),TEXT(id),TEXT(elec),TEXT(mech),TEXT(elec_deg),TEXT(mech_deg)};
+            for (unsigned i=0;i<sizeof(unavailable)/sizeof(unavailable[0]);++i) strcpy(unavailable[i],"--");
+        }
     }
-
-    MotorSamplingDiagnostics adc;
-    MotorSampling_GetAxisDiagnostics(s_view_axis,&adc);
-    s_ibus_limit_ma=MotorSampling_GetIbusLimit();
-    fmt_unit(texts.ibus_limit,s_ibus_limit_ma/100,10,"A");
-    fmt_unit(texts.ibus_voltage,to_x100(adc.ibus_threshold_v),100,"V");
-    static const ValueRow adc_values[]={
-        VALUE_ROW(MotorSamplingDiagnostics,ibus_dac_code,ibus_code,VALUE_COUNT16),
-        VALUE_ROW(MotorSamplingDiagnostics,ibus_trips,ibus_trips,VALUE_COUNT),
-        VALUE_ROW(MotorSamplingDiagnostics,reference_updates,ref_count,VALUE_COUNT),
-        VALUE_ROW(MotorSamplingDiagnostics,reference_errors,ref_errors,VALUE_COUNT),
-        VALUE_ROW(MotorSamplingDiagnostics,bus_raw,bus_raw,VALUE_COUNT16),
-        VALUE_ROW(MotorSamplingDiagnostics,bus_samples,bus_count,VALUE_COUNT),
-        VALUE_ROW(MotorSamplingDiagnostics,frame_samples,frame_count,VALUE_COUNT),
-    };
-    refresh_values(&adc,adc_values,sizeof(adc_values)/sizeof(adc_values[0]));
-    strcpy(texts.ibus_pin,adc.ibus_high ? ui_strings.text_high : "LOW");
-    strcpy(texts.ibus_state,adc.ibus_latched ? ui_strings.text_ibus_tripped : adc.ibus_ready ? ui_strings.text_ibus_ready : ui_strings.text_ibus_not_ready);
-    unsigned reference_mv = (unsigned)(adc.reference_voltage * 1000.0f + 0.5f);
-    if (adc.reference_updates != 0U)
-        UiText_Format(texts.reference, sizeof(texts.reference), ui_strings.fmt_u_03u_v,
-                 reference_mv / 1000U, reference_mv % 1000U);
-    else
-        strcpy(texts.reference,ui_strings.text_no_data);
-    strcpy(texts.ref_state,
-             adc.reference_fresh ? "OK" : (adc.reference_updates ? ui_strings.text_stale : ui_strings.text_wait));
-    fmt_pair(texts.ref_raw,adc.reference_raw,adc.reference_cal);
-    UiText_Format(texts.adc_revision, sizeof(texts.adc_revision), ui_strings.fmt_0x_04x, (unsigned)adc.silicon_revision);
-    for (unsigned i = 0U; i < 3U; ++i) {
-        if (s_view_axis==MOTOR_AXIS_2 && i==2U) { strcpy(texts.current_adc[i],ui_strings.text_derived); continue; }
-        fmt_pair(texts.current_adc[i],adc.current_raw[i],adc.current_zero[i]);
+    if (mask&(REF_ENCODER)) {
+        strcpy(TEXT(enc),
+                 (axis==MOTOR_AXIS_1 ? MT6701_IsHealthy()!=0U : state.healthy) ? "OK" : ui_strings.text_error);
+        MT6701_2_Snapshot encoder2;
+        MT6701_2_GetSnapshot(&encoder2);
+        UiText_Format(TEXT(enc2), sizeof(TEXT(enc2)), ui_strings.fmt_s_u,
+                 encoder2.healthy ? "OK" : encoder2.stopped ? "OFF" : ui_strings.text_error, (unsigned)encoder2.raw_angle);
+        fmt_counter(TEXT(enc2_err),encoder2.errors);
+        MT6701Diagnostics enc;
+        ui_encoder_diag(&enc);
+        fmt_counter(TEXT(err),enc.errors);
+        fmt_counter(TEXT(raw),ui_encoder_raw());
+        if (!text_query) for (unsigned i=0;i<sizeof(s_enc_labels)/sizeof(s_enc_labels[0]);++i)
+            s_enc_labels[i][1]=(char)('1'+axis);
+        static const ValueRow encoder_values[]={
+            VALUE_ROW(MT6701Diagnostics,crc_errors,enc_crc,VALUE_COUNT),
+            VALUE_ROW(MT6701Diagnostics,field_errors,enc_field,VALUE_COUNT),
+            VALUE_ROW(MT6701Diagnostics,track_errors,enc_track,VALUE_COUNT),
+            VALUE_ROW(MT6701Diagnostics,spi_errors,enc_spi,VALUE_COUNT),
+            VALUE_ROW(MT6701Diagnostics,frame_errors,enc_frame,VALUE_COUNT),
+        };
+        refresh_values(&enc,encoder_values,sizeof(encoder_values)/sizeof(encoder_values[0]));
+        fmt_pair(TEXT(enc_age),enc.age_cycles,enc.max_age_cycles);
+        strcpy(TEXT(enc_last),MT6701_ErrorText(enc.last_error));
+        const char *zero=enc.zero_age>3U ? "GAP" :
+            (enc.zero_before<=128U || enc.zero_before>=16384U-128U) ? ui_strings.text_near : "FAR";
+        if (enc.zero_count) {
+            UiText_Format(TEXT(enc_zero),sizeof(TEXT(enc_zero)),ui_strings.fmt_s_u,zero,enc.zero_count);
+            if (enc.zero_age!=UINT16_MAX) fmt_counter(TEXT(enc_zpre),enc.zero_before);
+            else strcpy(TEXT(enc_zpre),"--");
+            if (enc.zero_after!=UINT16_MAX) fmt_counter(TEXT(enc_zpost),enc.zero_after);
+            else strcpy(TEXT(enc_zpost),"--");
+            fmt_counter(TEXT(enc_ztime),(enc.zero_after==UINT16_MAX ? HAL_GetTick() : enc.zero_ended_at)-enc.zero_started_at);
+        } else {
+            strcpy(TEXT(enc_zero),"--"); strcpy(TEXT(enc_zpre),"--"); strcpy(TEXT(enc_zpost),"--");
+            strcpy(TEXT(enc_ztime),"--");
+        }
     }
-    if (s_view_axis==MOTOR_AXIS_2 && adc.fault_phase==3U) {
-        strcpy(texts.current_trip,ui_strings.text_run_w_derived);
-    } else if (adc.fault_phase != 0U) {
-        unsigned i = adc.fault_phase - 1U;
-        UiText_Format(texts.current_trip, sizeof(texts.current_trip), ui_strings.fmt_s_c_u,
-                 adc.fault_during_zero ? ui_strings.text_zero : "RUN", "UVW"[i],
-                 (unsigned)adc.fault_current_raw[i]);
-    } else {
-        strcpy(texts.current_trip,"--");
+    if (mask&(REF_SIXSTEP)) {
+        SixStepSnapshot six; SixStep_GetSnapshot(&six);
+        UiText_Format(TEXT(six_quality),sizeof(TEXT(six_quality)),ui_strings.fmt_u_12_c_u_u_c,six.quality,six.gate ? six.gate : '-',six.phase_pct,six.period_pct,'0'+six.period_fraction%10U);
+        static const char *const reject_text[]={"-",ui_strings.text_phase_early,ui_strings.text_phase_late,ui_strings.text_period_low,ui_strings.text_period_high};
+        strcpy(TEXT(six_reject),reject_text[six.reject<=SIX_REJECT_LONG ? six.reject : 0]);
+        strcpy(TEXT(six_sample),six.sampling_off ? "OFF" : "ON");
+        static const ValueRow six_values[]={
+            VALUE_ROW(SixStepSnapshot,duty,six_duty,VALUE_DUTY),
+            VALUE_ROW(SixStepSnapshot,bemf,six_bemf,VALUE_VOLT),
+            VALUE_ROW(SixStepSnapshot,velocity,six_speed,VALUE_SIX_SPEED),
+            VALUE_ROW(SixStepSnapshot,startup_emf,six_start_emf,VALUE_VOLT),
+            VALUE_ROW(SixStepSnapshot,startup_current,six_start_i,VALUE_AMP),
+            VALUE_ROW(SixStepSnapshot,ramp_hz_s,six_ramp,VALUE_TENTH),
+        };
+        refresh_values(&six,six_values,sizeof(six_values)/sizeof(six_values[0]));
+        UiText_Format(TEXT(six_start),sizeof(TEXT(six_start)),ui_strings.fmt_u_500_ms,six.startup_ms);
     }
-    if (adc.bus_fresh) {
-        fmt_unit(texts.bus, to_x10(adc.bus_voltage), 10, "V");
-    } else {
-        strcpy(texts.bus,ui_strings.text_no_data);
+    if (mask&(REF_HSO)) {
+        StHsoSnapshot hso; StHso_GetSnapshot(&hso);
+        int32_t minimum=hso_min_x10(),maximum=hso_max_x10();
+        fmt_unit(TEXT(hso_min),minimum,10,ui_strings.text_rad_s);
+        fmt_unit(TEXT(hso_max),maximum,10,ui_strings.text_rad_s);
+        if (maximum<minimum) strcpy(TEXT(hso_max),ui_strings.text_no_run_range);
+        /* All reason literals fit these 16-byte application buffers. */
+        strcpy(TEXT(hso_gate),StHso_ReasonText(JerryFOC_isHSOActive() ? hso.reason : hso.entry_reason));
+        UiText_Format(TEXT(hso_qual), sizeof(TEXT(hso_qual)), ui_strings.fmt_lu_u_ms_lu_20,
+                 (unsigned long)(hso.qualified_samples / 10U),
+                 hso.state==ST_HSO_LEARNING || hso.reason==ST_HSO_REASON_LEARN_TIMEOUT ? 1000U : 200U,
+                 (unsigned long)hso.bad_samples);
+        strcpy(TEXT(hso_lost),JerryFOC_getHSOFaultText());
+        strcpy(TEXT(hso_reject),StHso_ReasonText(hso.capture_reason));
+        static const ValueRow hso_values[]={
+            VALUE_ROW(StHsoSnapshot,velocity_rad_s,hso_speed,VALUE_SPEED),
+            VALUE_ROW(StHsoSnapshot,angle_error_rad,hso_error,VALUE_ERROR_DEG),
+            VALUE_ROW(StHsoSnapshot,capture_resets,hso_resets,VALUE_COUNT),
+            VALUE_ROW(StHsoSnapshot,capture_angle_rad,hso_rangle,VALUE_DEG),
+            VALUE_ROW(StHsoSnapshot,capture_frequency_error_hz,hso_rfreq,VALUE_TENTH),
+            VALUE_ROW(StHsoSnapshot,capture_emf_ratio,hso_remf,VALUE_PERCENT),
+            VALUE_ROW(StHsoSnapshot,capture_drift_rad,hso_rdrift,VALUE_DEG),
+            VALUE_ROW(StHsoSnapshot,emf_offset_v,hso_offset,VALUE_MV),
+            VALUE_ROW(StHsoSnapshot,emf_offset_limit_v,hso_olimit,VALUE_MV),
+            VALUE_ROW(StHsoSnapshot,flux_wb,hso_flux_actual,VALUE_MWB),
+        };
+        refresh_values(&hso,hso_values,sizeof(hso_values)/sizeof(hso_values[0]));
+        strcpy(TEXT(hso),
+                 JerryFOC_hasHSOFault() ? ui_strings.text_lost : StHso_StateText(hso.state));
+        UiText_Format(TEXT(hso_flux), sizeof(TEXT(hso_flux)), ui_strings.fmt_lu_uwb, (unsigned long)(hso.reference_flux_wb * 1000000.0f));
+        UiText_Format(TEXT(hso_time), sizeof(TEXT(hso_time)), ui_strings.fmt_lu_us_lu, (unsigned long)(hso.max_control_cycles / 170U), (unsigned long)hso.overruns);
     }
-    UiText_Format(texts.adc1_error, sizeof(texts.adc1_error), ui_strings.fmt_0x_lx, (unsigned long)adc.adc1_error);
-    UiText_Format(texts.adc2_error, sizeof(texts.adc2_error), ui_strings.fmt_0x_lx, (unsigned long)adc.adc2_error);
+    if (mask&(REF_ADC|REF_DRIVE)) {
+        MotorSamplingDiagnostics adc; MotorSampling_GetAxisDiagnostics(axis,&adc);
+        unsigned reference_mv = (unsigned)(adc.reference_voltage * 1000.0f + 0.5f);
+        if (adc.reference_updates != 0U)
+            UiText_Format(TEXT(reference), sizeof(TEXT(reference)), ui_strings.fmt_u_03u_v,
+                     reference_mv / 1000U, reference_mv % 1000U);
+        else
+            strcpy(TEXT(reference),ui_strings.text_no_data);
+        strcpy(TEXT(ref_state),
+                 adc.reference_fresh ? "OK" : (adc.reference_updates ? ui_strings.text_stale : ui_strings.text_wait));
+        if (adc.bus_fresh) {
+            fmt_unit(TEXT(bus), to_x10(adc.bus_voltage), 10, "V");
+        } else {
+            strcpy(TEXT(bus),ui_strings.text_no_data);
+        }
+        if (mask&(REF_ADC)) {
+            unsigned limit=MotorSampling_GetIbusLimit();
+            if (!text_query) s_ibus_limit_ma=(int32_t)limit;
+            fmt_unit(TEXT(ibus_limit),(int32_t)limit/100,10,"A");
+            fmt_unit(TEXT(ibus_voltage),to_x100(adc.ibus_threshold_v),100,"V");
+            static const ValueRow adc_values[]={
+                VALUE_ROW(MotorSamplingDiagnostics,ibus_dac_code,ibus_code,VALUE_COUNT16),
+                VALUE_ROW(MotorSamplingDiagnostics,ibus_trips,ibus_trips,VALUE_COUNT),
+                VALUE_ROW(MotorSamplingDiagnostics,reference_updates,ref_count,VALUE_COUNT),
+                VALUE_ROW(MotorSamplingDiagnostics,reference_errors,ref_errors,VALUE_COUNT),
+                VALUE_ROW(MotorSamplingDiagnostics,bus_raw,bus_raw,VALUE_COUNT16),
+                VALUE_ROW(MotorSamplingDiagnostics,bus_samples,bus_count,VALUE_COUNT),
+                VALUE_ROW(MotorSamplingDiagnostics,frame_samples,frame_count,VALUE_COUNT),
+            };
+            refresh_values(&adc,adc_values,sizeof(adc_values)/sizeof(adc_values[0]));
+            strcpy(TEXT(ibus_pin),adc.ibus_high ? ui_strings.text_high : "LOW");
+            strcpy(TEXT(ibus_state),adc.ibus_latched ? ui_strings.text_ibus_tripped : adc.ibus_ready ? ui_strings.text_ibus_ready : ui_strings.text_ibus_not_ready);
+            fmt_pair(TEXT(ref_raw),adc.reference_raw,adc.reference_cal);
+            UiText_Format(TEXT(adc_revision), sizeof(TEXT(adc_revision)), ui_strings.fmt_0x_04x, (unsigned)adc.silicon_revision);
+            for (unsigned i = 0U; i < 3U; ++i) {
+                if (axis==MOTOR_AXIS_2 && i==2U) { strcpy(TEXT(current_adc[i]),ui_strings.text_derived); continue; }
+                fmt_pair(TEXT(current_adc[i]),adc.current_raw[i],adc.current_zero[i]);
+            }
+            if (axis==MOTOR_AXIS_2 && adc.fault_phase==3U) {
+                strcpy(TEXT(current_trip),ui_strings.text_run_w_derived);
+            } else if (adc.fault_phase != 0U) {
+                unsigned i = adc.fault_phase - 1U;
+                UiText_Format(TEXT(current_trip), sizeof(TEXT(current_trip)), ui_strings.fmt_s_c_u,
+                         adc.fault_during_zero ? ui_strings.text_zero : "RUN", "UVW"[i],
+                         (unsigned)adc.fault_current_raw[i]);
+            } else {
+                strcpy(TEXT(current_trip),"--");
+            }
+            UiText_Format(TEXT(adc1_error), sizeof(TEXT(adc1_error)), ui_strings.fmt_0x_lx, (unsigned long)adc.adc1_error);
+            UiText_Format(TEXT(adc2_error), sizeof(TEXT(adc2_error)), ui_strings.fmt_0x_lx, (unsigned long)adc.adc2_error);
+        }
+    }
 }
+static void refresh_texts(void) { refresh_info(255U); }
 
 /* ---------- 页面描述 ---------- */
 static const KK_UI_HomeItem home_items[] = {
@@ -1163,6 +1212,8 @@ static const InfoRowRef info_refs[]={
 _Static_assert(sizeof(info_refs)/sizeof(info_refs[0])==INFO_ROW_COUNT,"Resource row counts");
 #undef INFO_ENCODER
 static KK_UI_InfoRow info_rows[INFO_ROW_COUNT];
+static KK_UI_InfoRow diagnostic_rows[diagnostics_rows_COUNT+BOARD_DIAG_ROWS];
+static char diagnostic_values[BOARD_DIAG_ROWS][32];
 __attribute__((noinline,noclone)) static const char *info_pointer(uint16_t reference)
 {
     static const char *const bases[]={(const char *)&texts,(const char *)&ui_strings,(const char *)s_enc_labels,(const char *)s_txt_axes,(const char *)s_txt_work_items};
@@ -1178,6 +1229,11 @@ __attribute__((noinline,noclone)) static void init_info_rows(void)
         info_rows[i].name=name>=1792U ? (const char *)s_enc_labels+name-1792U : name>=1536U ? (const char *)&texts+(name-1536U)*4U : (const char *)&ui_strings+name;
         info_rows[i].value=value>=1024U ? (const char *)&ui_strings+value-1024U : (const char *)&texts+value*4U;
     }
+    memcpy(diagnostic_rows,&info_rows[diagnostics_rows_START],sizeof(KK_UI_InfoRow)*diagnostics_rows_COUNT);
+    for (unsigned i=0;i<BOARD_DIAG_ROWS;++i) {
+        diagnostic_rows[diagnostics_rows_COUNT+i].name=BoardDiag_Row(s_view_axis,i,diagnostic_values[i]);
+        diagnostic_rows[diagnostics_rows_COUNT+i].value=diagnostic_values[i];
+    }
     init_menu_items();
 }
 
@@ -1188,7 +1244,7 @@ static const KK_UI_InfoPage info_pages[] = {
     {texts.groups[2],&info_rows[encoder_rows_START],encoder_rows_COUNT},
     {texts.groups[3],&info_rows[adc_rows_START],adc_rows_COUNT},
     {texts.groups[4],&info_rows[hso_rows_START],hso_rows_COUNT},
-    {ui_strings.text_system,&info_rows[diagnostics_rows_START],diagnostics_rows_COUNT},
+    {ui_strings.text_diagnostics,diagnostic_rows,diagnostics_rows_COUNT+BOARD_DIAG_ROWS},
     {ui_strings.text_m1_six_step,&info_rows[sixstep_rows_START],sixstep_rows_COUNT},
 };
 
@@ -1203,7 +1259,7 @@ _Static_assert(sizeof(MenuItemRef)==3,"Compact menu references");
 enum {
     settings_items_START=0, settings_items_COUNT=11,
     motor_items_START=settings_items_START+settings_items_COUNT, motor_items_COUNT=4,
-    system_items_START=motor_items_START+motor_items_COUNT, system_items_COUNT=7,
+    system_items_START=motor_items_START+motor_items_COUNT, system_items_COUNT=8,
     sensorless_items_START=system_items_START+system_items_COUNT, sensorless_items_COUNT=2,
     work_items_START=sensorless_items_START+sensorless_items_COUNT, work_items_COUNT=7,
     status_items_START=work_items_START+work_items_COUNT, status_items_COUNT=9,
@@ -1236,6 +1292,7 @@ static const MenuItemRef menu_refs[]={
     MENU_ROW(INFO_LITERAL(text_gear_ratio),KK_UI_MENU_INT,INT_GEAR_RATIO),
     MENU_ROW(INFO_LITERAL(text_gear_offset),KK_UI_MENU_INT,INT_GEAR_OFFSET),
     MENU_ROW(INFO_LITERAL(text_align_retry),KK_UI_MENU_ACTION,EVT_ALIGN),
+    MENU_ROW(INFO_LITERAL(text_clear_diag),KK_UI_MENU_ACTION,EVT_DIAG_CLEAR),
     /* sensorless_items */
     MENU_ROW(INFO_LITERAL(text_hso_feedback),KK_UI_MENU_BOOL,BOOL_HSO),
     MENU_ROW(INFO_LITERAL(text_six_step),KK_UI_MENU_BOOL,BOOL_SIXSTEP),
@@ -1254,7 +1311,7 @@ static const MenuItemRef menu_refs[]={
     MENU_ROW(INFO_LITERAL(text_adc),KK_UI_MENU_PAGE,UI_PAGE_ADC),
     MENU_ROW(INFO_LITERAL(text_hso),KK_UI_MENU_PAGE,UI_PAGE_HSO),
     MENU_ROW(INFO_LITERAL(text_six_step),KK_UI_MENU_PAGE,UI_PAGE_SIXSTEP),
-    MENU_ROW(INFO_LITERAL(text_system),KK_UI_MENU_PAGE,UI_PAGE_DIAGNOSTICS),
+    MENU_ROW(INFO_LITERAL(text_diagnostics),KK_UI_MENU_PAGE,UI_PAGE_DIAGNOSTICS),
     MENU_ROW(INFO_AXIS(0),KK_UI_MENU_ACTION,EVT_FOCUS_M1),
     MENU_ROW(INFO_AXIS(1),KK_UI_MENU_ACTION,EVT_FOCUS_M2),
     /* protection_items */
@@ -1793,6 +1850,8 @@ void ui_app_update(uint32_t now_ms)
     if ((now_ms - s_info_at) >= 500U) {
         s_info_at = now_ms;
         refresh_texts();
+        if (KK_UI_GetCurrentPage()==UI_PAGE_DIAGNOSTICS)
+            for (unsigned i=0;i<BOARD_DIAG_ROWS;++i) (void)BoardDiag_Row(s_view_axis,i,diagnostic_values[i]);
         KK_UI_Invalidate();
     }
 
@@ -1910,6 +1969,8 @@ static bool apply_event(KK_UI_EventId evt)
 
     case EVT_SAVE_STATUS:
         s_force_save=true; mark_settings_dirty(HAL_GetTick()); break;
+    case EVT_DIAG_CLEAR:
+        ok=BoardDiag_Clear(); s_pending_toast=ok ? "Diag cleared" : "Stop first"; break;
     default:
         break;
     }
@@ -1983,7 +2044,7 @@ static bool save_detection(void)
 
 int8_t App_Control(unsigned axis,unsigned key,int32_t value)
 {
-    if (axis>2 || key>16) return -2;
+    if (axis>2 || key>17) return -2;
     const unsigned axis_keys=(1U<<1)|(1U<<2)|(1U<<6)|(1U<<8)|(1U<<9)|(1U<<10);
     bool per_axis=((axis_keys>>key)&1U)!=0;
     if (per_axis != (axis!=0)) return -2;
@@ -2017,6 +2078,7 @@ int8_t App_Control(unsigned axis,unsigned key,int32_t value)
         case 14: MotorSampling_GlobalStopIRQ(); MotorControl_StopAll(); ok=true; break;
         case 15: ok=save_detection(); break;
         case 16: ok=apply_event(EVT_SAVE_STATUS); break;
+        case 17: ok=apply_event(EVT_DIAG_CLEAR); break;
         default: break;
         }
     }
@@ -2075,11 +2137,21 @@ int App_ReadRow(unsigned axis,unsigned group,unsigned row,char *label,char *valu
     const KK_UI_InfoPage *page=&info_pages[group];
     if (row>=page->row_count) return -2;
     ensure_model();
-    MotorAxis old=s_view_axis; AxisView saved=current_view;
-    load_view((MotorAxis)(axis-1)); refresh_texts();
-    UiText_Format(label,24,"%s",page->rows[row].name);
-    UiText_Format(value,32,"%s",page->rows[row].value);
-    s_view_axis=old; current_view=saved; update_position_speed_limit(); refresh_texts();
+    if (group==6U && row>=diagnostics_rows_COUNT) {
+        const char *name=BoardDiag_Row(axis-1U,row-diagnostics_rows_COUNT,value);
+        UiText_Format(label,24,"%s",name); return page->row_count;
+    }
+    const KK_UI_InfoRow *entry=&page->rows[row];
+    UiText_Format(label,24,"%s",entry->name);
+    UiText_Format(value,32,"%s",entry->value);
+    uintptr_t field=(uintptr_t)entry->value-(uintptr_t)&texts;
+    if (field>=sizeof(texts)) return page->row_count; /* Immutable About/HSO literals. */
+    if (group==3U && row<sizeof(s_enc_labels)/sizeof(s_enc_labels[0])) label[1]=(char)('0'+axis);
+    TextQuery query={.axis=(MotorAxis)(axis-1U),.field=(unsigned)field,
+        .value=value,.name=entry->name==texts.target_unit ? label : NULL};
+    text_query=&query;
+    refresh_info(1U<<group);
+    text_query=NULL;
     return page->row_count;
 }
 
@@ -2185,6 +2257,21 @@ void KK_UI_CustomOnInput(KK_UI_PageId page, KK_UI_InputEvent event)
         stop_run(); /* 在退出动画开始前停止，不等待 OnLeave。 */
         (void)KK_UI_CustomRequestClose();
         return;
+    }
+    /* A boot/global stop can leave the encoder unaligned. An explicit OK
+     * requests alignment only; completing it must never apply the Run draft.
+     * Keep held-key, hardware-trip and stationary gates in the controller. */
+    if (event.action==KK_UI_INPUT_OK && !s_run_active) {
+        MotorAxisSnapshot state;MotorControl_GetAxis(s_view_axis,&state);
+        if (state.ready && state.healthy && (!state.aligned || state.aligning)) {
+            const char *message=ui_strings.text_aligning;
+            if (!state.aligning) {
+                if (MotorControl_RequestAlign(s_view_axis)) {
+                    clear_run_stop();message=ui_strings.text_align_requested;
+                } else message=MotorSampling_IsGlobalStopped() ? ui_strings.text_global_stop : ui_strings.text_stop_check_axis;
+            }
+            (void)KK_UI_ShowToast(message,1200U);KK_UI_Invalidate();return;
+        }
     }
     if (MotorControl_IsHandFollow()) {
         if (event.action==KK_UI_INPUT_OK) {
@@ -2399,10 +2486,11 @@ void KK_UI_CustomOnDraw(KK_UI_PageId page, int16_t x_offset,
     OLED_SetFont(ui_font_body);
     OLED_DrawUTF8((int16_t)(value_x+value_width+4),24,unit);
     const char *fault=NULL;
-    if (!motor_state.ready) fault=motor_state.status;
+    if (MotorSampling_IsGlobalStopped()) fault=ui_strings.text_global_stop;
+    else if (!motor_state.ready) fault=motor_state.status;
     else if (!s_run_active && strcmp(texts.run_stop,"--")) fault=texts.run_stop;
     else if (!motor_state.healthy || !motor_state.aligned)
-        fault=motor_state.healthy ? ui_strings.text_not_aligned : MotorControl_EncoderLostText(s_view_axis);
+        fault=motor_state.healthy ? (motor_state.aligning ? ui_strings.text_aligning : ui_strings.text_not_aligned) : MotorControl_EncoderLostText(s_view_axis);
     if (fault) UiText_Format(buf,sizeof(buf),"%s",fault);
     else {
         const char *speed_tag=starting ? "Ref" : six ? "Est" : "Act";
@@ -2460,7 +2548,8 @@ void KK_UI_CustomOnDraw(KK_UI_PageId page, int16_t x_offset,
         OLED_DrawUTF8((int16_t)(4+x_offset),51,buf);
         OLED_DrawUTF8(right,51,v);
     } else OLED_DrawUTF8((int16_t)(4+x_offset),51,state);
-    const char *action=(hso || six) && *run_target(true)==0 ? ui_strings.text_stop_138 :
+    const char *action=!s_run_active && (!motor_state.aligned || motor_state.aligning) ? ui_strings.text_align :
+        (hso || six) && *run_target(true)==0 ? ui_strings.text_stop_138 :
         s_run_active ? (changed ? ui_strings.text_apply : ui_strings.text_stop_138) : ui_strings.text_start;
     UiText_Format(buf,sizeof(buf),independent ? ui_strings.fmt_ok_s_lr_hold_k2_back : ui_strings.fmt_ok_s_k2_back,action);
     draw_footer(x_offset,(uint16_t)W,buf);

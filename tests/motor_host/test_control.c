@@ -507,6 +507,8 @@ static void check_global_control_stop(void)
     assert(!output_requested && !output2 && global_stopped);
     assert(MotorControl_RequestAlign(MOTOR_AXIS_1)); /* Explicit align is an allowed fresh action. */
     assert(!global_stopped && JerryFOC_needsAlignment());
+    assert(strcmp(state(MOTOR_AXIS_1).status,"GLOBAL STOP") && !output_requested);
+    assert(!JerryFOC_Target_Iq && !JerryFOC_Target_Velocity); /* No motion target is replayed. */
     MotorControl_StopAll();
     puts("PASS: KEY1 real controllers: every work mode, both-axis cleanup, linked follow cancel, held commands/align/open-loop rejected, release never restarts, explicit run/align, configuration cannot revive pending alignment");
 }

@@ -27,6 +27,12 @@ parser.add_argument("--allow-uart-user-code",action="store_true",
                     help="Permit only the exact R90 main/USART IRQ USER CODE routing and UART module addition")
 parser.add_argument("--allow-spi-user-code",action="store_true",
                     help="Permit only R91 SPI/DMA USER CODE routing, user LCD transport calls and SPI module addition")
+parser.add_argument("--allow-cubemx-user-code",action="store_true",
+                    help="Permit only R92 IRQ USER CODE routing and the exact generated-config build check")
+parser.add_argument("--allow-native-ll-init", action="store_true",
+                    help="Permit R93 native CubeMX LL USART, its unchanged official sources, and SPI3 NSSP configuration")
+parser.add_argument("--allow-diagnostics-user-code",action="store_true",
+                    help="Permit only R95 CPU-vector/main USER CODE hooks and diagnostics module addition")
 args = parser.parse_args()
 OUT = ROOT / args.directory
 LABEL = args.label
@@ -54,6 +60,33 @@ def official_commands(mode):
         if path.startswith(("Drivers/", "Middlewares/", "ThirdParty/", "Core/", "USB_Device/", "mycode/kk_")):
             result[path] = entry.get("command", entry.get("arguments"))
     return result
+
+
+def verify_diagnostics_user_changes(changed):
+    allowed={"Core/Src/main.c","Core/Src/stm32g4xx_it.c","CMakeLists.txt"}
+    assert set(changed)<=allowed,changed
+    for name in allowed:
+        before=(OUT/name).read_text(encoding="utf-8")
+        assert sha(OUT/name)==baseline["protected"][name],name
+        expected=before
+        if name.endswith("main.c"):
+            expected=expected.replace('/* USER CODE BEGIN Includes */\n','/* USER CODE BEGIN Includes */\n#include "board_diag.h"\n')
+            expected=expected.replace('/* USER CODE BEGIN 1 */\n','/* USER CODE BEGIN 1 */\n  BoardDiag_Init();\n')
+            expected=expected.replace('  g_boot_stage = 4U;\n','  g_boot_stage = 4U;\n  if (BoardDiag_LastCrash()->kind) MotorSampling_GlobalStopIRQ();\n')
+        elif name.endswith("stm32g4xx_it.c"):
+            expected=expected.replace('/* USER CODE BEGIN Includes */\n','/* USER CODE BEGIN Includes */\n#include "board_diag.h"\n')
+            for block,kind in [('NonMaskableInt',2),('HardFault',3),('MemoryManagement',4),('BusFault',5),('UsageFault',6)]:
+                anchor='/* USER CODE BEGIN '+block+'_IRQn 0 */\n'
+                assert expected.count(anchor)==1,block
+                expected=expected.replace(anchor,anchor+'  BOARD_DIAG_VECTOR('+str(kind)+');\n')
+        else:
+            anchor='add_dependencies(${CMAKE_PROJECT_NAME} cubemx_config_check)\n'
+            addition=('\n# User diagnostics retain only crash/first-fault records across MCU reset.\n'
+                'target_sources(${CMAKE_PROJECT_NAME} PRIVATE mycode/board_diag.c)\n'
+                'set_source_files_properties(mycode/board_diag.c PROPERTIES COMPILE_OPTIONS "-Oz;-flto")\n')
+            assert expected.count(anchor)==1
+            expected=expected.replace(anchor,anchor+addition)
+        assert (ROOT/name).read_text(encoding="utf-8")==expected,"Unexpected protected change: "+name
 
 
 def verify_irq_user_changes(changed):
@@ -157,6 +190,85 @@ def verify_spi_user_changes(changed):
         assert (ROOT/name).read_text(encoding="utf-8")==expected,"Unexpected protected change: "+name
 
 
+def verify_cubemx_user_changes(changed):
+    assert set(changed)<={"Core/Src/stm32g4xx_it.c","CMakeLists.txt"},changed
+    name="Core/Src/stm32g4xx_it.c"
+    before=(OUT/name).read_text(encoding="utf-8")
+    expected=before.replace('#include "spi_port.h"','#include "spi_port.h"\n#include "cubemx_irq.h"')
+    expected=re.sub(r'(  /\* USER CODE BEGIN DMA[12]_Channel\d_IRQn 0 \*/)\n  SpiPort_DMAIRQ\([^\n]+\n  return;\n',r'\1\n\n',expected)
+    expected=expected.replace('  MotorIRQ_Key1();\n  return; /* Application owns this vector; keep generated fallback intact. */\n','\n')
+    assert (ROOT/name).read_text(encoding="utf-8")==expected,name
+    name="CMakeLists.txt"
+    before=(OUT/name).read_text(encoding="utf-8")
+    addition=('''# Every build checks the generated configuration against user-driver contracts.
+# CubeMX remains the source of pin/clock/DMA initialization parameters.
+find_package(Python3 REQUIRED COMPONENTS Interpreter)
+add_custom_target(cubemx_config_check
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/scripts/check_cubemx.py
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+    VERBATIM)
+add_dependencies(${CMAKE_PROJECT_NAME} cubemx_config_check)
+
+''')
+    anchor='# SPI runtime and its five dedicated DMA channels; HAL still owns setup.\n'
+    assert before.count(anchor)==1
+    assert (ROOT/name).read_text(encoding="utf-8")==before.replace(anchor,addition+anchor),name
+
+
+def verify_native_ll_init(changed):
+    verified = json.loads((ROOT/'build/cubemx-regeneration/verified.json').read_text())
+    assert sha(ROOT/'FOC_two.ioc') == verified['ioc'], 'Run native CubeMX regeneration verification again'
+    native = ROOT/verified['native_project']
+    added = set(report['protected']) - set(baseline['protected'])
+    ll_sources = {'Drivers/STM32G4xx_HAL_Driver/Src/stm32g4xx_ll_'+n+'.c'
+                  for n in ('usart', 'gpio', 'rcc', 'utils', 'exti', 'dma')}
+    assert added == ll_sources, added
+    allowed = set(verified['sources']) | ll_sources | {
+        'Core/Src/main.c', 'FOC_two.ioc', 'CMakeLists.txt', 'cmake/stm32cubemx/CMakeLists.txt'}
+    assert set(changed) <= allowed, changed
+    for name in added:
+        assert sha(ROOT/name) == verified['official_sources'][name], name
+    for name, expected in verified['sources'].items():
+        assert sha(ROOT/name) == expected, 'Generated file differs from native CubeMX: '+name
+    def read(name):
+        path = OUT/('snapshot/'+name if name != 'CMakeLists.txt' else name)
+        assert sha(path) == baseline['protected'][name], 'Invalid baseline '+name
+        return path.read_text(encoding='utf-8')
+    name = 'Core/Src/main.c'
+    before = read(name)
+    expected = re.sub(r'  /\* 0\. SPI2/SPI3[^\n]*\*/\n  CLEAR_BIT\(SPI2->CR2, SPI_CR2_NSSP\);\n  CLEAR_BIT\(SPI3->CR2, SPI_CR2_NSSP\);\n', '', before)
+    assert before != expected and (ROOT/name).read_text(encoding='utf-8') == expected, name
+    name = 'FOC_two.ioc'
+    expected = read(name).replace('MX_USART1_UART_Init-USART1-false-HAL-true', 'MX_USART1_UART_Init-USART1-false-LL-true')
+    expected = expected.replace('SPI3.IPParameters=VirtualType,Mode,Direction,BaudRatePrescaler,CalculateBaudRate,DataSize\n',
+                                'SPI3.IPParameters=VirtualType,Mode,Direction,BaudRatePrescaler,CalculateBaudRate,DataSize,NSSPMode\n')
+    expected = expected.replace('SPI3.Mode=SPI_MODE_MASTER\n', 'SPI3.Mode=SPI_MODE_MASTER\nSPI3.NSSPMode=SPI_NSS_PULSE_DISABLE\n')
+    assert (ROOT/name).read_text(encoding='utf-8') == expected, name
+    name = 'cmake/stm32cubemx/CMakeLists.txt'
+    expected = read(name).replace('set(MX_Defines_Syms \n', 'set(MX_Defines_Syms \n\tUSE_FULL_LL_DRIVER \n')
+    section = r'set\(STM32_Drivers_Src\n.*?\n\)'
+    native_section = re.search(section, (native/name).read_text(encoding='utf-8'), re.S)[0]
+    expected = re.sub(section, lambda m: native_section, expected, flags=re.S)
+    assert (ROOT/name).read_text(encoding='utf-8') == expected, name
+    name = 'CMakeLists.txt'
+    expected = read(name).replace('# USART1 runtime transport; generated HAL setup and ST sources stay intact.',
+                                 '# USART1 runtime transport; CubeMX owns HAL/LL initialization.')
+    for n in ('uart', 'uart_ex'):
+        expected = expected.replace('    Drivers/STM32G4xx_HAL_Driver/Src/stm32g4xx_hal_'+n+'.c\n', '')
+    anchor = 'set_property(SOURCE Drivers/STM32G4xx_HAL_Driver/Src/stm32g4xx_hal_spi.c\n'
+    expected = expected.replace(anchor, anchor+''.join('    Drivers/STM32G4xx_HAL_Driver/Src/stm32g4xx_ll_'+n+'.c\n'
+                                                       for n in ('usart', 'gpio', 'rcc')))
+    assert (ROOT/name).read_text(encoding='utf-8') == expected, name
+    # The only global compile change is CubeMX's native USE_FULL_LL_DRIVER.
+    removed = {'Drivers/STM32G4xx_HAL_Driver/Src/stm32g4xx_hal_'+n+'.c' for n in ('uart', 'uart_ex')}
+    for mode in ('Debug', 'Release'):
+        old, now = baseline['commands'][mode], report['commands'][mode]
+        assert set(old)-set(now) == removed, mode
+        assert set(now)-set(old) == ll_sources, mode
+        for path in set(old) & set(now):
+            assert now[path].replace(' -DUSE_FULL_LL_DRIVER', '') == old[path], (mode, path)
+
+
 def image(mode):
     folder = ROOT / "build" / mode
     elf, binary = folder / "FOC_two.elf", folder / "FOC_two.bin"
@@ -167,15 +279,15 @@ def image(mode):
         if len(parts) == 4 and parts[2] in "tT":
             functions.append({"name": parts[3], "bytes": int(parts[1])})
     sections = subprocess.check_output(["arm-none-eabi-objdump", "-h", str(elf)], text=True).splitlines()
-    ram = 0
+    ram_end = 0x20000000
     for index, line in enumerate(sections[:-1]):
         parts = line.split()
         if len(parts) >= 7 and parts[0].isdigit() and "ALLOC" in sections[index + 1]:
             size, address = int(parts[2], 16), int(parts[3], 16)
             if 0x20000000 <= address < 0x20008000:
-                ram += size
+                ram_end = max(ram_end,address+size)
     return {"flash_bytes": binary.stat().st_size, "flash_free": 131072 - binary.stat().st_size,
-            "ram_allocated": ram, "bin_sha256": sha(binary), "elf_sha256": sha(elf),
+            "ram_allocated": ram_end-0x20000000, "bin_sha256": sha(binary), "elf_sha256": sha(elf),
             "largest_functions": list(reversed(functions[-50:]))}
 
 
@@ -205,7 +317,13 @@ else:
     if baseline["protected"] != report["protected"]:
         changed = [name for name in set(baseline["protected"]) | set(report["protected"])
                    if baseline["protected"].get(name) != report["protected"].get(name)]
-        if args.allow_console_user_build:
+        if args.allow_diagnostics_user_code:
+            verify_diagnostics_user_changes(changed)
+            report["permitted_user_changes"]=sorted(changed)
+        elif args.allow_native_ll_init:
+            verify_native_ll_init(changed)
+            report['permitted_native_init_changes'] = sorted(changed)
+        elif args.allow_console_user_build:
             assert changed==["CMakeLists.txt"],changed
             before=(OUT/"CMakeLists.txt").read_text(encoding="utf-8")
             expected=before.replace("-fno-function-sections -fno-data-sections -flto=1",
@@ -218,6 +336,9 @@ else:
             expected=expected.replace(anchor,anchor+'set_source_files_properties(mycode/app_storage.c mycode/w25q64.c mycode/ws2812.c mycode/number_parse.c\n    PROPERTIES COMPILE_OPTIONS "-Oz;-flto")\n')
             assert (ROOT/"CMakeLists.txt").read_text(encoding="utf-8")==expected,"Unexpected build configuration change"
             report["permitted_user_changes"]=changed
+        elif args.allow_cubemx_user_code:
+            verify_cubemx_user_changes(changed)
+            report["permitted_user_changes"]=sorted(changed)
         elif args.allow_spi_user_code:
             verify_spi_user_changes(changed)
             report["permitted_user_changes"]=sorted(changed)
@@ -229,7 +350,7 @@ else:
             report["permitted_user_changes"]=sorted(changed)
         else:
             raise SystemExit("Protected files changed: " + ", ".join(sorted(changed)))
-    if baseline["commands"] != report["commands"]:
+    if not args.allow_native_ll_init and baseline["commands"] != report["commands"]:
         raise SystemExit("Official/core compilation commands changed.")
     for mode, current in report["images"].items():
         current["saved_bytes"] = baseline["images"][mode]["flash_bytes"] - current["flash_bytes"]

@@ -3,7 +3,7 @@
 #include <stdint.h>
 #include <stddef.h>
 #include "uart_constants.h"
-typedef struct { uint32_t CR1,CR3,ISR,ICR,RDR,TDR; } USART_TypeDef;
+typedef struct { uint32_t CR1,CR3,ISR,ICR,RDR,TDR,CR2,BRR,PRESC; } USART_TypeDef;
 extern USART_TypeDef uart_regs;
 #define USART1 (&uart_regs)
 #define __STATIC_INLINE static inline

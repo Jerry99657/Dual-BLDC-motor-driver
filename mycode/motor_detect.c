@@ -1,6 +1,7 @@
 #include "motor_detect.h"
 #include "motor_control.h"
 #include "MT6701.h"
+#include "board_diag.h"
 #include <math.h>
 #include <stddef.h>
 #include <stdlib.h>
@@ -47,6 +48,10 @@ static float wrap(float v) {
     return v;
 }
 static bool finish(const char *text,bool ok) {
+    if (!ok && MotorDetect_Active() && !MotorSampling_IsGlobalStopped()) {
+        MotorSampling_SetOutputEnabled(false);
+        BoardDiag_Fault(1U,DIAG_DETECT,text);
+    }
     message=text; phase=ok ? DONE : FAILED;
     /* Mark inactive first: the ordinary coast path also calls Detect_Stop. */
     JerryFOC_stop();
@@ -54,7 +59,10 @@ static bool finish(const char *text,bool ok) {
 }
 void MotorDetect_Stop(void) {
     uint32_t mask=__get_PRIMASK(); __disable_irq();
-    if(MotorDetect_Active()) finish(MotorSampling_IsGlobalStopped() ? "GLOBAL STOP" : "STOPPED",false);
+    if(MotorDetect_Active()) {
+        phase=FAILED; /* An explicit user stop is not a diagnostic fault. */
+        finish(MotorSampling_IsGlobalStopped() ? "GLOBAL STOP" : "STOPPED",false);
+    }
     __set_PRIMASK(mask);
 }
 __attribute__((noinline)) void MotorDetect_Reset(void) {

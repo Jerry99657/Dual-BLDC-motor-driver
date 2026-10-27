@@ -1,4 +1,5 @@
 #include "motor_control.h"
+#include "board_diag.h"
 #include "motor_sampling.h"
 #include "MT6701.h"
 #include "angle_src_encoder.h"
@@ -367,7 +368,7 @@ bool MotorControl_RequestAlign(MotorAxis axis)
         if (axis==MOTOR_AXIS_2) MT6701_2_Retry();
         __set_PRIMASK(mask); return true; /* Encoder retry only; never align the hand shaft. */
     }
-    if (axis==MOTOR_AXIS_1) JerryFOC_requestAlignment();
+    if (axis==MOTOR_AXIS_1) { JerryFOC_requestAlignment(); control.m1_stop_reason=NULL; }
     else { MT6701_2_Retry(); control.m2.pending_align=true; control.m2.aligned=false; control.m2.stop_reason=NULL; }
     __set_PRIMASK(mask); return true;
 }
@@ -760,6 +761,8 @@ void MotorControl_Fast(void)
         (!MT6701_IsHealthy() || !MotorSampling_IsAxisReady(MOTOR_AXIS_1))) {
         control.m1_stop_reason=MT6701_IsHealthy() ? MotorSampling_GetAxisStatusText(MOTOR_AXIS_1) : MotorControl_EncoderLostText(MOTOR_AXIS_1);
         command_text=control.group_stop_reason=control.m1_stop_reason;
+        (void)MotorSampling_SetOutputEnabled(false);
+        BoardDiag_Fault(1U,DIAG_ENCODER,control.m1_stop_reason);
         MotorControl_Stop(MOTOR_AXIS_1);
     }
     if (!MotorControl_AxisEnabled(MOTOR_AXIS_2)) return;
@@ -771,6 +774,8 @@ void MotorControl_Fast(void)
         control.m2.stop_reason=enc.healthy ? MotorSampling_GetAxisStatusText(MOTOR_AXIS_2) : MotorControl_EncoderLostText(MOTOR_AXIS_2);
         if (!enc.healthy) control.m2.aligned=false;
         command_text=control.group_stop_reason=control.m2.stop_reason;
+        (void)MotorSampling_SetAxisOutputEnabled(MOTOR_AXIS_2,false);
+        BoardDiag_Fault(2U,DIAG_ENCODER,control.m2.stop_reason);
         MotorControl_Stop(MOTOR_AXIS_2); return;
     }
     if (control.group_active && (!MT6701_IsHealthy() || !enc.healthy ||
@@ -779,6 +784,9 @@ void MotorControl_Fast(void)
         (!MotorControl_IsPassive(MOTOR_AXIS_1) && !JerryFOC_isDriveReady()))) {
         command_text=control.group_stop_reason=!MT6701_IsHealthy() ? MotorControl_EncoderLostText(MOTOR_AXIS_1) :
             !enc.healthy ? MotorControl_EncoderLostText(MOTOR_AXIS_2) : "GROUP OUTPUT OFF";
+        (void)MotorSampling_SetOutputEnabled(false);
+        (void)MotorSampling_SetAxisOutputEnabled(MOTOR_AXIS_2,false);
+        BoardDiag_Fault(!MT6701_IsHealthy() ? 1U : !enc.healthy ? 2U : 0U,DIAG_CONTROL,command_text);
         MotorControl_StopAll(); return;
     }
     const MotorSampleFrame *f=MotorSampling_GetFrame();
@@ -959,12 +967,17 @@ static void coordinate(void)
     else control.error_ms=0U;
     if (control.error_ms>=500U) {
         command_text=hand ? "FOLLOW ERROR" : "SYNC ERROR";
-        control.group_stop_reason=control.m2.stop_reason=command_text; MotorControl_StopAll();
+        control.group_stop_reason=control.m2.stop_reason=command_text;
+        (void)MotorSampling_SetOutputEnabled(false);
+        (void)MotorSampling_SetAxisOutputEnabled(MOTOR_AXIS_2,false);
+        BoardDiag_Fault(0U,DIAG_CONTROL,command_text); MotorControl_StopAll();
     }
 }
 void MotorControl_Outer(void)
 {
     if (!MotorControl_AxisEnabled(MOTOR_AXIS_2)) return;
+    BoardDiag_Motion(1U,control.m2.mode,control.m2.target_speed,control.m2.target_position,
+        control.m2.target_q,control.m2.velocity,control.m2.position);
     if (!MotorSampling_IsAxisOutputRequested(MOTOR_AXIS_2) || control.m2.aligning) {
         control.m2.reference=control.m2.velocity; JerryFOC_ResetPID(&control.m2.vel); JerryFOC_ResetPID(&control.m2.pos); return;
     }
@@ -988,6 +1001,9 @@ void MotorControl_RecordCycles(uint32_t cycles)
     if (cycles>control.max_cycles) control.max_cycles=cycles;
     if (cycles>=17000U && (MotorSampling_IsOutputRequested() ||
         MotorSampling_IsAxisOutputRequested(MOTOR_AXIS_2))) {
-        control.timing_fault=true; MotorControl_StopAll();
+        control.timing_fault=true;
+        (void)MotorSampling_SetOutputEnabled(false);
+        (void)MotorSampling_SetAxisOutputEnabled(MOTOR_AXIS_2,false);
+        BoardDiag_Fault(0U,DIAG_CONTROL,"CONTROL OVERRUN"); MotorControl_StopAll();
     }
 }

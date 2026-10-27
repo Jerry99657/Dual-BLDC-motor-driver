@@ -1,10 +1,10 @@
-# 双电机控制台 R91（单文件 HTML）
+# 双电机控制台 R98（单文件 HTML）
 
 `index.html` 是完整的离线上位机。界面、Web Serial 通信、协议解析、曲线、CSV 记录／回放和配置查询都内嵌在文件中，无需 Python、安装依赖或运行后台。
 
 ## 使用
 
-1. 板子使用本项目 `UI-R91-SPI` 固件；构建产物位于 `build/Debug/`、`build/Release/`。R88～R90 兼容完整设置／诊断，R87 仅兼容原有优先控制／读回功能。
+1. 板子使用本项目 `UI-R98-BOOT` 固件；构建产物位于 `build/Debug/`、`build/Release/`。R88～R97 兼容完整设置／诊断，R87 仅兼容原有优先控制／读回功能。
 2. 用桌面 Chrome／Edge 打开 `pc_tool/index.html`。也可以把这一个文件复制到其他位置打开。
 3. 点击“选择串口并连接”，在浏览器对话框中选择 USB CDC 或 USB 转 USART 的串口。USART1 保持 **115200、8N1**。
 4. 工具首先发送 `Get` 读取板端配置。连接不会自动运行电机，也不会用网页残留值覆盖板端设置。
@@ -16,7 +16,21 @@
 
 ## 本批已经提供
 
-R91迁移SPI1／SPI2／SPI3运行时与专用DMA通道，保留编码器／Flash共享、错误恢复及LCD刷新；通信协议与界面操作保持，schema 2新增接受固件版本91。见 [R91 SPI／DMA迁移](../docs/HAL_LL_SPI_R91.md)。
+R98 区分严格匹配的下载期 RAM 调试记录，修复 F5 下载后误触发启动暂停；真实应用异常和保护保持，协议与行号不变。上位机兼容固件 98，见 [R98 下载期调试记录](../docs/Loader_debug_stop_R98.md)。
+
+R97 修正板端 Run 未对齐时的恢复交互，保留显式确认及全局停止准入；Status 的诊断入口统一命名 Diagnostics。单文件上位机支持固件 97，协议与行号保持，见 [R97 对齐恢复](../docs/Alignment_resume_R97.md)。
+
+R96 优化板端逐行诊断查询，按专题读取所需快照，不临时切换 LCD View，不修改菜单／草稿／保存状态；字段、行号与协议保持。主机同文件兼容 R87～R98，详见 [R96 查询优化](../docs/Diagnostics_query_R96.md)。
+
+R95 在 Diagnostics / Flash 专题追加首次故障、CPU 异常与控制时序；新增“清除诊断记录”，通过 `App:0,17,0`，两轴均停机时才生效，不解除保护或启动电机。R87～R94 仍按原功能兼容，清除操作要求 R95。记录可在 SRAM 保留的 Reset 后查看，不保证断电保留。字段定义见 [R95 诊断说明](../docs/Diagnostics_R95.md)。
+
+R94 清理按键 GPIO 重复配置并迁移 WS2812 运行时，通信协议保持，上位机新增接受固件版本 94。详见 [R94 GPIO／WS2812](../docs/HAL_LL_WS2812_R94.md)。
+
+R93 使用 CubeMX 原生 LL USART1 初始化，保留 115200、8N1 及原通信协议。单文件上位机兼容固件版本 93；见 [R93 初始化收尾](../docs/HAL_LL_INIT_R93.md)。
+
+R92 让 SPI DMA 和 KEY1 中断跟随 CubeMX 生成配置，新增每次构建的配置检查；通信 schema 2 保持，新增接受固件版本 92。见 [R92 CubeMX 配置适配](../docs/CUBEMX_COMPAT_R92.md)。
+
+R91迁移SPI1／SPI2／SPI3运行时与专用DMA通道，保留编码器／Flash共享、错误恢复及LCD刷新。见 [R91 SPI／DMA迁移](../docs/HAL_LL_SPI_R91.md)。
 
 R90 将USART1运行时收发／中断迁移到用户LL模块，USB与通信帧保持。串口接收发生电气错误时，该通道丢弃受损行到后续干净换行；可先发送空行，再重新查询。实现和验证见 [R90 USART1迁移](../docs/HAL_LL_USART_R90.md)。
 

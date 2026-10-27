@@ -1,4 +1,5 @@
 #include "JerryFOC.h"
+#include "board_diag.h"
 #include <stdint.h>
 #include <stdio.h>
 #include "adc.h"
@@ -552,6 +553,8 @@ static void service_hso_feedback(void)
      * cleaned up its startup/control state. Do not turn KEY1 into HSO LOST. */
     if (!foc.hso_feedback || MotorSampling_IsGlobalStopped() || StHso_IsRunning()) return;
     StHsoSnapshot snapshot; StHso_GetSnapshot(&snapshot);
+    (void)MotorSampling_SetOutputEnabled(false);
+    BoardDiag_Fault(1U,DIAG_HSO,StHso_ReasonText(snapshot.reason));
     JerryFOC_stop();
     foc.hso_feedback_fault=foc.hso_stop_inhibit=foc.hso_loss_recorded=1U;
     foc.hso_fault_reason=snapshot.reason;
@@ -830,7 +833,6 @@ void HAL_ADCEx_InjectedConvCpltCallback(ADC_HandleTypeDef *hadc)
 
 void JerryFOC_FastIRQ(void)
 {
-    uint32_t control_start = DWT->CYCCNT;
     if (!MotorSampling_Capture()) return;
     /* SPI DMA 不再在完成中断里自触发；由 ADC 节拍固定为 10 kHz。 */
     MT6701_Service();
@@ -844,8 +846,6 @@ void JerryFOC_FastIRQ(void)
         }
         MotorControl_Fast();
     }
-    StHso_RecordControlCycles(DWT->CYCCNT - control_start);
-    MotorControl_RecordCycles(DWT->CYCCNT - control_start);
     service_hso_feedback();
 }
 
@@ -882,6 +882,9 @@ void JerryFOC_OuterIRQ(void)
     }
 
     MotorControl_PrepareOuter();
+
+    BoardDiag_Motion(0U,foc.current_control_mode,JerryFOC_Target_Velocity,
+        JerryFOC_Target_Position,JerryFOC_Target_Iq,filtered_velocity_global,JerryFOC_getAngle());
 
     if (MotorDetect_Active()) return;
 

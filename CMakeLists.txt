@@ -41,9 +41,22 @@ add_subdirectory(cmake/stm32cubemx)
 target_sources(${CMAKE_PROJECT_NAME} PRIVATE mycode/motor_irq.c)
 set_source_files_properties(mycode/motor_irq.c PROPERTIES COMPILE_OPTIONS "-Os;-flto")
 
-# USART1 runtime transport; generated HAL setup and ST sources stay intact.
+# USART1 runtime transport; CubeMX owns HAL/LL initialization.
 target_sources(${CMAKE_PROJECT_NAME} PRIVATE mycode/uart_port.c)
 set_source_files_properties(mycode/uart_port.c PROPERTIES COMPILE_OPTIONS "-Os;-flto")
+
+# Every build checks the generated configuration against user-driver contracts.
+# CubeMX remains the source of pin/clock/DMA initialization parameters.
+find_package(Python3 REQUIRED COMPONENTS Interpreter)
+add_custom_target(cubemx_config_check
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/scripts/check_cubemx.py
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+    VERBATIM)
+add_dependencies(${CMAKE_PROJECT_NAME} cubemx_config_check)
+
+# User diagnostics retain only crash/first-fault records across MCU reset.
+target_sources(${CMAKE_PROJECT_NAME} PRIVATE mycode/board_diag.c)
+set_source_files_properties(mycode/board_diag.c PROPERTIES COMPILE_OPTIONS "-Oz;-flto")
 
 # SPI runtime and its five dedicated DMA channels; HAL still owns setup.
 target_sources(${CMAKE_PROJECT_NAME} PRIVATE mycode/spi_port.c)
@@ -65,12 +78,13 @@ target_compile_options(USB_Device_Library PRIVATE -flto)
 # COMP/DAC init likewise shares its fixed-instance HAL paths. The linked
 # startup check verifies their real, explicitly retained MSP hooks.
 set_property(SOURCE Drivers/STM32G4xx_HAL_Driver/Src/stm32g4xx_hal_spi.c
+    Drivers/STM32G4xx_HAL_Driver/Src/stm32g4xx_ll_usart.c
+    Drivers/STM32G4xx_HAL_Driver/Src/stm32g4xx_ll_gpio.c
+    Drivers/STM32G4xx_HAL_Driver/Src/stm32g4xx_ll_rcc.c
     Drivers/STM32G4xx_HAL_Driver/Src/stm32g4xx_hal_pcd.c
     Drivers/STM32G4xx_HAL_Driver/Src/stm32g4xx_hal_pcd_ex.c
     Drivers/STM32G4xx_HAL_Driver/Src/stm32g4xx_ll_usb.c
     Drivers/STM32G4xx_HAL_Driver/Src/stm32g4xx_hal_gpio.c
-    Drivers/STM32G4xx_HAL_Driver/Src/stm32g4xx_hal_uart.c
-    Drivers/STM32G4xx_HAL_Driver/Src/stm32g4xx_hal_uart_ex.c
     Drivers/STM32G4xx_HAL_Driver/Src/stm32g4xx_hal_fdcan.c
     Drivers/STM32G4xx_HAL_Driver/Src/stm32g4xx_hal_i2c.c
     Drivers/STM32G4xx_HAL_Driver/Src/stm32g4xx_hal_i2c_ex.c

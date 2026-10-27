@@ -5,28 +5,27 @@
 #define SPI_ERRORS (SPI_SR_OVR|SPI_SR_MODF|SPI_SR_FRE)
 #define SPI_EVENTS (SPI_CR2_RXDMAEN|SPI_CR2_TXDMAEN|SPI_CR2_ERRIE|SPI_CR2_RXNEIE|SPI_CR2_TXEIE)
 
-static DMA_TypeDef *controller(const SPI_HandleTypeDef *h)
+/* HAL_DMA_Init and __HAL_LINKDMA publish the actual CubeMX mapping.
+ * RX and TX may be on different DMA controllers and arbitrary channels. */
+static uint32_t channel(const DMA_HandleTypeDef *d) { return d->ChannelIndex>>2U; }
+static uint32_t dma_flags(const DMA_HandleTypeDef *d)
 {
-    return h->Instance==SPI2 ? DMA2 : DMA1;
+    return LL_DMA_ReadReg(d->DmaBaseAddress,ISR)>>d->ChannelIndex;
 }
-static uint32_t tx_channel(const SPI_HandleTypeDef *h)
+static void stop_channel(DMA_HandleTypeDef *d)
 {
-    return h->Instance==SPI3 ? LL_DMA_CHANNEL_4 : LL_DMA_CHANNEL_2;
-}
-static void stop_channel(DMA_TypeDef *dma,uint32_t channel)
-{
-    LL_DMA_DisableChannel(dma,channel);
-    LL_DMA_DisableIT_TC(dma,channel);
-    LL_DMA_DisableIT_HT(dma,channel);
-    LL_DMA_DisableIT_TE(dma,channel);
-    LL_DMA_WriteReg(dma,IFCR,15UL<<(channel*4U));
+    if (!d) return;
+    LL_DMA_DisableChannel(d->DmaBaseAddress,channel(d));
+    LL_DMA_DisableIT_TC(d->DmaBaseAddress,channel(d));
+    LL_DMA_DisableIT_HT(d->DmaBaseAddress,channel(d));
+    LL_DMA_DisableIT_TE(d->DmaBaseAddress,channel(d));
+    LL_DMA_WriteReg(d->DmaBaseAddress,IFCR,15UL<<d->ChannelIndex);
 }
 static void quiesce(SPI_HandleTypeDef *h)
 {
     CLEAR_BIT(h->Instance->CR2,SPI_EVENTS);
-    DMA_TypeDef *dma=controller(h);
-    stop_channel(dma,tx_channel(h));
-    if (h->Instance!=SPI3) stop_channel(dma,LL_DMA_CHANNEL_1);
+    stop_channel(h->hdmatx);
+    stop_channel(h->hdmarx);
 }
 static bool dma_busy(const SPI_HandleTypeDef *h)
 {
@@ -98,32 +97,30 @@ void SpiPort_IRQHandler(SPI_HandleTypeDef *h)
         if (error) fail(h,error);
     }
 }
-void SpiPort_DMAIRQ(SPI_HandleTypeDef *h,uint32_t channel)
+void SpiPort_DMAIRQ(DMA_HandleTypeDef *d)
 {
-    /* Vector API uses physical channel 1/2/4; ST LL indices start at zero. */
-    --channel;
-    DMA_TypeDef *dma=controller(h);
-    uint32_t shift=channel*4U;
-    uint32_t flags=(LL_DMA_ReadReg(dma,ISR)>>shift)&15U;
-    /* A stale/disabled vector must not acknowledge another owner's events. */
-    uint32_t enabled=h->Instance==SPI3 || channel==LL_DMA_CHANNEL_2 ?
-        h->hdmatx->Instance->CCR : h->hdmarx->Instance->CCR;
+    SPI_HandleTypeDef *h=d->Parent;
+    /* This is also the generated ADC/WS2812 DMA vector entry. Their HAL
+     * ownership, callbacks and newly generated channel routes are intact. */
+    if ((h!=&hspi1 && h!=&hspi2 && h!=&hspi3) ||
+        (d!=h->hdmarx && d!=h->hdmatx)) {
+        HAL_DMA_IRQHandler(d);
+        return;
+    }
+    uint32_t enabled=d->Instance->CCR;
     if (!dma_busy(h) || !(enabled&DMA_CCR_EN)) return;
-    uint32_t txshift=tx_channel(h)*4U;
-    uint32_t errors=LL_DMA_ReadReg(dma,ISR)&(8UL<<txshift);
-    if (h->Instance!=SPI3) errors|=LL_DMA_ReadReg(dma,ISR)&8U;
+    uint32_t flags=dma_flags(d);
+    uint32_t errors=dma_flags(h->hdmatx)&8U;
+    if (h->hdmarx) errors|=dma_flags(h->hdmarx)&8U;
     if ((enabled&DMA_CCR_TEIE) && errors) { fail(h,HAL_SPI_ERROR_DMA); return; }
     if ((enabled&DMA_CCR_TCIE) && (flags&2U)) {
         uint32_t mask=__get_PRIMASK(); __disable_irq();
         if (h->hdmatx->Instance->CNDTR ||
-            (h->Instance!=SPI3 && h->hdmarx->Instance->CNDTR)) {
+            (h->hdmarx && h->hdmarx->Instance->CNDTR)) {
             fail(h,HAL_SPI_ERROR_DMA); __set_PRIMASK(mask); return;
         }
-        /* RX TC owns full-duplex completion; TX TC owns LCD completion.
-         * Do not release CS just because DMA has loaded the final byte. */
-        /* ADC service may finish and start the next frame as soon as the
-         * DMA requests disappear. Publish that boundary only after BOTH
-         * channels are quiesced, so this old IRQ cannot stop the new frame. */
+        /* Disable BOTH linked channels atomically before ADC can publish a
+         * completed frame and start the next one. No wait for BSY in IRQ. */
         quiesce(h);
         __set_PRIMASK(mask);
         SpiPort_Service(h);
@@ -143,16 +140,16 @@ static HAL_StatusTypeDef claim(SPI_HandleTypeDef *h,HAL_SPI_StateTypeDef state)
     h->State=state;
     return HAL_OK;
 }
-static void setup_dma(DMA_TypeDef *dma,uint32_t channel,const SPI_TypeDef *spi,
+static void setup_dma(DMA_HandleTypeDef *d,const SPI_TypeDef *spi,
                       const void *memory,uint16_t length,bool complete)
 {
-    stop_channel(dma,channel);
-    LL_DMA_SetPeriphAddress(dma,channel,LL_SPI_DMA_GetRegAddr(spi));
-    LL_DMA_SetMemoryAddress(dma,channel,(uint32_t)(uintptr_t)memory);
-    LL_DMA_SetDataLength(dma,channel,length);
-    LL_DMA_EnableIT_TE(dma,channel);
-    if (complete) LL_DMA_EnableIT_TC(dma,channel);
-    LL_DMA_EnableChannel(dma,channel);
+    stop_channel(d);
+    LL_DMA_SetPeriphAddress(d->DmaBaseAddress,channel(d),LL_SPI_DMA_GetRegAddr(spi));
+    LL_DMA_SetMemoryAddress(d->DmaBaseAddress,channel(d),(uint32_t)(uintptr_t)memory);
+    LL_DMA_SetDataLength(d->DmaBaseAddress,channel(d),length);
+    LL_DMA_EnableIT_TE(d->DmaBaseAddress,channel(d));
+    if (complete) LL_DMA_EnableIT_TC(d->DmaBaseAddress,channel(d));
+    LL_DMA_EnableChannel(d->DmaBaseAddress,channel(d));
 }
 static HAL_StatusTypeDef start_dma(SPI_HandleTypeDef *h,const uint8_t *tx,uint8_t *rx,uint16_t length)
 {
@@ -160,13 +157,12 @@ static HAL_StatusTypeDef start_dma(SPI_HandleTypeDef *h,const uint8_t *tx,uint8_
     uint32_t mask=__get_PRIMASK(); __disable_irq();
     HAL_StatusTypeDef result=claim(h,rx ? HAL_SPI_STATE_BUSY_TX_RX : HAL_SPI_STATE_BUSY_TX);
     if (result==HAL_OK) {
-        DMA_TypeDef *dma=controller(h);
         quiesce(h);
         if (rx) {
-            setup_dma(dma,LL_DMA_CHANNEL_1,h->Instance,rx,length,true);
+            setup_dma(h->hdmarx,h->Instance,rx,length,true);
             LL_SPI_EnableDMAReq_RX(h->Instance);
         }
-        setup_dma(dma,tx_channel(h),h->Instance,tx,length,!rx);
+        setup_dma(h->hdmatx,h->Instance,tx,length,!rx);
         /* ERRIE on LCD would continuously interrupt on expected RX overrun.
          * DMA TE is still armed; MODF/FRE are checked at completion/service. */
         if (rx) LL_SPI_EnableIT_ERR(h->Instance);

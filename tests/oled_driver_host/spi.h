@@ -1,6 +1,7 @@
 #ifndef OLED_HOST_SPI_H
 #define OLED_HOST_SPI_H
 #include <stdint.h>
+typedef struct { unsigned unused; } DMA_HandleTypeDef;
 typedef struct { void *Instance; } SPI_HandleTypeDef;
 typedef enum { HAL_OK,HAL_ERROR } HAL_StatusTypeDef;
 #define SPI3 ((void *)3)

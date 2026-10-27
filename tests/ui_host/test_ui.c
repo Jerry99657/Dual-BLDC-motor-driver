@@ -17,6 +17,9 @@
 #include "ui_fonts.h"
 #include "motor_sixstep.h"
 #include "motor_detect.h"
+/* Count RAM snapshot getter calls, independent of simulated UI time. */
+static struct { unsigned adc,hso,six,enc1,enc2,probe,bus; } query_reads;
+extern unsigned control_stub_axis_reads;
 static bool detect_active;
 static uint32_t detect_result;
 static unsigned detect_current;
@@ -38,7 +41,7 @@ static SixStepSnapshot six_ui={.gate='P',.phase_pct=50,.period_pct=100,.status="
 static bool generic;
 bool SixStep_IsGeneric(void) { return generic; }
 void SixStep_SetGeneric(bool g) { generic=g; if(g) six_ui.speed_control=false; }
-void SixStep_GetSnapshot(SixStepSnapshot *out) { *out=six_ui; }
+void SixStep_GetSnapshot(SixStepSnapshot *out) { ++query_reads.six; *out=six_ui; }
 
 GPIO_TypeDef host_gpio = {0xFFFFU};
 static uint32_t tick, dma_done;
@@ -66,10 +69,19 @@ static unsigned recoveries;
 static JerryFOC_ControlMode mode;
 static float velocity, angle, iq;
 static uint8_t current_loop;
+uint8_t ControlStub_CurrentLoop(void) { return current_loop; }
 static bool output_requested=true;
 static unsigned stop_calls;
 static bool aligning;
 static bool global_stopped;
+static bool align_request_allowed=true;
+static unsigned align_requests;
+static MotorAxis align_request_axis;
+bool ControlStub_RequestAlign(MotorAxis axis) {
+    ++align_requests;align_request_axis=axis;
+    if(!align_request_allowed) return false;
+    global_stopped=false;return true;
+}
 bool MotorSampling_IsGlobalStopped(void) { return global_stopped; }
 void MotorSampling_GlobalStopIRQ(void) { global_stopped=true;output_requested=false; }
 static uint16_t ibus_limit_ma=APP_IBUS_DEFAULT_MA;
@@ -99,6 +111,7 @@ GPIO_PinState HAL_GPIO_ReadPin(GPIO_TypeDef *port, uint16_t pin) {
 }
 uint8_t MT6701_IsHealthy(void) { return healthy; }
 void MT6701_2_GetSnapshot(MT6701_2_Snapshot *out) {
+    ++query_reads.probe;
     *out=(MT6701_2_Snapshot){.healthy=1,.raw_angle=456,.errors=enc2_diag.errors};
 }
 uint8_t JerryFOC_isDriveReady(void) { return drive_ready && !hso_fault; }
@@ -112,7 +125,7 @@ uint8_t JerryFOC_useHSO(uint8_t en) {
     if(!en) { hso_fault=false; JerryFOC_Target_Iq=JerryFOC_Target_Velocity=0; }
     return 1;
 }
-void StHso_GetSnapshot(StHsoSnapshot *out) { *out=hso_snapshot; }
+void StHso_GetSnapshot(StHsoSnapshot *out) { ++query_reads.hso; *out=hso_snapshot; }
 float StHso_MinSpeed(void) { return 5.0f; } /* Both supported HSO profiles round up to 5 rad/s. */
 bool StHso_AtRest(void) { return hso_at_rest; }
 bool StHso_IsStarting(void) { return hso_active && hso_snapshot.state!=ST_HSO_CONTROL; }
@@ -132,6 +145,7 @@ const char *StHso_ReasonText(StHsoReason reason) {
 float JerryFOC_getBusVoltage(void) { return bus_voltage; }
 const char *MotorSampling_GetStatusText(void) { return drive_ready ? "READY" : unready_status; }
 void MotorSampling_GetDiagnostics(MotorSamplingDiagnostics *out) {
+    ++query_reads.adc;
     *out=(MotorSamplingDiagnostics){.bus_fresh=bus_data,.bus_voltage=bus_voltage,.bus_raw=2707,.bus_samples=tick*2,.frame_samples=tick*10,
         .current_raw={2047,2048,2049},.current_zero={2046,2047,2048},
         .fault_current_raw={2047,0,2049},.fault_phase=2,.fault_during_zero=true,.silicon_revision=0x2002,
@@ -144,9 +158,10 @@ uint8_t AngleSrc_Encoder_IsAligned(void) { return aligned; }
 uint8_t JerryFOC_isAligning(void) { return aligning; }
 uint16_t MT6701_GetRawAngle(void) { return 123; }
 uint32_t MT6701_GetErrorCounter(void) { return enc_diag.errors; }
-void MT6701_GetDiagnostics(MT6701Diagnostics *out) { *out=enc_diag; }
-void MT6701_2_GetDiagnostics(MT6701Diagnostics *out) { *out=enc2_diag; }
+void MT6701_GetDiagnostics(MT6701Diagnostics *out) { ++query_reads.enc1; *out=enc_diag; }
+void MT6701_2_GetDiagnostics(MT6701Diagnostics *out) { ++query_reads.enc2; *out=enc2_diag; }
 void MT6701_2_GetBusDiagnostics(MT6701_2_BusDiagnostics *out) {
+    ++query_reads.bus;
     *out=(MT6701_2_BusDiagnostics){0x354,0x1700,0x80,3};
 }
 const char *MT6701_ErrorText(MT6701Error error) {
@@ -256,6 +271,7 @@ static void press(uint8_t key) { step(key,30); step(0,30); }
 static void settle(void) { step(0,600); }
 static void back(void) { press(KK_UI_KEY_BACK); settle(); }
 static void reset(void) {
+    align_request_allowed=true;align_requests=0;
     ControlStub_SetOptionsAllowed(true); ControlStub_ResetInput();
     global_stopped=false;
     ibus_limit_ma=APP_IBUS_DEFAULT_MA; ibus_trip=ibus_set_failed=false; ibus_clear_allowed=true;
@@ -491,6 +507,8 @@ static void check_r57(void) {
     ui_app_reset(tick); assert(KK_UI_Init(app)==KK_UI_OK); settle();
     press(KK_UI_KEY_RIGHT); press(KK_UI_KEY_RIGHT); press(KK_UI_KEY_OK); settle();
     assert(KK_UI_GetCurrentPage()==UI_PAGE_STATUS && app->menu_pages[4].item_count==9);
+    assert(!strcmp(app->menu_pages[4].items[6].label,"Diagnostics"));
+    assert(!strcmp(app->info_pages[6].title,"Diagnostics"));
     step(0,2000); snapshot("r57-status-menu");
     const KK_UI_PageId status_routes[]={UI_PAGE_DRIVE,UI_PAGE_MOTION,UI_PAGE_ENCODER,
         UI_PAGE_ADC,UI_PAGE_HSO,UI_PAGE_SIXSTEP,UI_PAGE_DIAGNOSTICS};
@@ -1036,12 +1054,24 @@ static void check_app_bridge(void)
     ui_app_update(tick-1);assert(save_requests==saves_before_stale_frame);
     assert(App_Control(0,16,0)==1);App_SaveService(tick);
     assert(save_requests>0);settle();
+    extern unsigned diag_host_clears;
+    extern bool diag_host_clear_allowed;
+    unsigned clear_count=diag_host_clears;
+    diag_host_clear_allowed=false;
+    assert(App_Control(0,17,0)==-1 && diag_host_clears==clear_count);
+    diag_host_clear_allowed=true;
+    assert(App_Control(0,17,0)==1 && diag_host_clears==clear_count+1);
+    assert(App_Control(1,17,0)==-2 && App_Control(0,17,1)==-1);
     /* Read-only diagnostics must restore both the view and its draft. */
     char label[24],value[32];
     assert(App_ReadRow(2,3,0,label,value)>0);
     assert(MotorControl_GetFocus()==MOTOR_AXIS_1 && KK_UI_GetCurrentPage()==before);
     assert(App_ReadRow(0,0,0,label,value)==-2 && App_ReadRow(1,8,0,label,value)==-2);
     assert(App_ReadRow(1,0,255,label,value)==-2);
+    assert(App_ReadRow(1,6,11,label,value)==37);
+    assert(!strcmp(label,"Diag"));
+    assert(App_ReadRow(2,6,36,label,value)==37);
+    assert(App_ReadRow(2,6,37,label,value)==-2);
     assert(KK_UI_GoTo(UI_PAGE_SETTINGS,tick)==KK_UI_OK);settle();
     select_setting("Speed Limit");press(KK_UI_KEY_OK);settle();
     options=MotorControl_GetOptions(MOTOR_AXIS_1);
@@ -1092,8 +1122,171 @@ static void check_app_bridge(void)
     assert(App_Control(0,14,0)==1 && global_stopped && !output_requested);
     puts("PASS: R88 shared Settings validation/publication/save, per-axis ranges/steps, actual DAC rejection, local-editor conflict, non-invasive diagnostic rows, remote Run values/OK/Back, modal navigation and remote detection entry/result");
 }
+static void reset_query_reads(void) {
+    memset(&query_reads,0,sizeof(query_reads)); control_stub_axis_reads=0;
+}
+static unsigned query_reads_total(void) {
+    return query_reads.adc+query_reads.hso+query_reads.six+query_reads.enc1+query_reads.enc2+query_reads.probe+query_reads.bus;
+}
+static void query_metrics(void) {
+    MotorControl_SelectWork(MOTOR_WORK_INDEPENDENT); MotorControl_SetFocus(MOTOR_AXIS_1); reset();
+    char name[24],value[32];
+    for(unsigned axis=1;axis<=2;++axis) for(unsigned group=0;group<8;++group) {
+        reset_query_reads();
+        assert(App_ReadRow(axis,group,0,name,value)>0);
+        printf("QUERY M%u G%u: axis=%u adc=%u hso=%u six=%u e1=%u e2=%u probe=%u bus=%u\n",
+            axis,group,control_stub_axis_reads,query_reads.adc,query_reads.hso,query_reads.six,
+            query_reads.enc1,query_reads.enc2,query_reads.probe,query_reads.bus);
+    }
+}
+/* Hash all public text and editable binding state. Row reads must leave even
+ * off-screen titles/labels and unpublished integer drafts unchanged. */
+static uint32_t query_ui_hash;
+static void query_hash_bytes(const void *data,size_t size) {
+    const uint8_t *p=data;
+    while(size--) query_ui_hash=(query_ui_hash^*p++)*16777619U;
+}
+static void query_hash_text(const char *s) { if(s) query_hash_bytes(s,strlen(s)+1); }
+static uint32_t query_model_hash(void) {
+    query_ui_hash=2166136261U;
+    const KK_UI_App *app=ui_app_get();
+    for(unsigned p=0;p<app->info_page_count;++p) {
+        const KK_UI_InfoPage *page=&app->info_pages[p];query_hash_text(page->title);
+        for(unsigned r=0;r<page->row_count;++r) {
+            query_hash_text(page->rows[r].name);query_hash_text(page->rows[r].value);
+        }
+    }
+    for(unsigned p=0;p<app->menu_page_count;++p) {
+        const KK_UI_MenuPage *page=&app->menu_pages[p];query_hash_text(page->title);
+        for(unsigned r=0;r<page->item_count;++r) query_hash_text(page->items[r].label);
+    }
+    for(unsigned b=0;b<app->int_binding_count;++b) {
+        const KK_UI_IntBinding *binding=&app->int_bindings[b];
+        query_hash_bytes(binding,sizeof(*binding));query_hash_bytes(binding->value,sizeof(*binding->value));
+        query_hash_text(binding->title);query_hash_text(binding->unit);
+    }
+    for(unsigned b=0;b<app->bool_binding_count;++b) {
+        const KK_UI_BoolBinding *binding=&app->bool_bindings[b];
+        query_hash_bytes(binding->value,sizeof(*binding->value));query_hash_text(binding->title);
+    }
+    query_hash_bytes(&kk_ui,sizeof(kk_ui));query_hash_bytes(&settings,sizeof(settings));
+    query_hash_bytes(&save_requests,sizeof(save_requests));
+    return query_ui_hash;
+}
+static void check_query_rows(void) {
+    char label[24],value[32];
+    /* All rows agree with the real local formatter, across both axes and all
+     * three control modes. Queries never update the local info buffers. */
+    for(unsigned axis=1;axis<=2;++axis) for(unsigned m=0;m<3;++m) {
+        MotorControl_SelectWork(MOTOR_WORK_INDEPENDENT);MotorControl_SetFocus((MotorAxis)(axis-1));reset();
+        mode=(JerryFOC_ControlMode)m;velocity=-12.34f;angle=-7.1f;JerryFOC_Target_Velocity=18.6f;
+        JerryFOC_Target_Position=-2.4f;JerryFOC_Target_Iq=.35f;
+        enc_diag=(MT6701Diagnostics){.errors=42,.frame_errors=7,.zero_count=3,.zero_before=16383,
+            .zero_after=2,.zero_age=0,.zero_started_at=tick-250,.zero_ended_at=tick};
+        enc2_diag=enc_diag;enc2_diag.errors=84;enc2_diag.crc_errors=9;
+        hso_snapshot=(StHsoSnapshot){.state=ST_HSO_CAPTURE,.velocity_rad_s=15,.reference_flux_wb=.00749f,
+            .flux_wb=.0055f,.angle_error_rad=-.4f,.max_control_cycles=12750};
+        ControlStub_SetSecondState((MotorAxisSnapshot){.ready=true,.healthy=true,.aligned=true,.status="READY",
+            .mode=(JerryFOC_ControlMode)m,.velocity=-23.45f,.position=2.25f,.target_velocity=35,
+            .target_position=7.1f,.target_iq=.7f});
+        settle();ui_app_reset(tick); /* Same instant for live counters and LCD text. */
+        uint32_t original=query_model_hash();
+        const KK_UI_App *app=ui_app_get();
+        for(unsigned g=0;g<app->info_page_count;++g) for(unsigned r=0;r<app->info_pages[g].row_count;++r) {
+            const KK_UI_InfoPage *p=&app->info_pages[g];
+            assert(App_ReadRow(axis,g,r,label,value)==p->row_count);
+            if(strcmp(label,p->rows[r].name) || strcmp(value,p->rows[r].value))
+                fprintf(stderr,"Query mismatch M%u mode%u group%u row%u: %s=%s vs %s=%s\n",
+                    axis,m,g,r,label,value,p->rows[r].name,p->rows[r].value);
+            assert(!strcmp(label,p->rows[r].name) && !strcmp(value,p->rows[r].value));
+            assert(query_model_hash()==original);
+        }
+        for(unsigned g=0;g<8;++g) for(unsigned r=0;r<app->info_pages[g].row_count;++r) {
+            assert(App_ReadRow(3-axis,g,r,label,value)>0);
+            assert(query_model_hash()==original);
+        }
+    }
+    /* Independent queries read current state rather than a UI refresh/TTL. */
+    velocity=1.2f;assert(App_ReadRow(1,2,3,label,value)>0 && !strcmp(value,"1.2 rad/s"));
+    velocity=3.4f;assert(App_ReadRow(1,2,3,label,value)>0 && !strcmp(value,"3.4 rad/s"));
+    bus_voltage=11.9f;assert(App_ReadRow(2,0,3,label,value)>0 && !strcmp(value,"11.9 V"));
+    bus_voltage=20;assert(App_ReadRow(1,0,3,label,value)>0 && !strcmp(value,"20.0 V"));
+    reset_query_reads();assert(App_ReadRow(1,1,0,label,value)>0);
+    assert(!control_stub_axis_reads && !query_reads_total());
+    reset_query_reads();assert(App_ReadRow(2,5,3,label,value)>0);
+    assert(!control_stub_axis_reads && !query_reads.hso); /* Immutable H Zero policy. */
+    reset_query_reads();assert(App_ReadRow(2,5,16,label,value)>0);
+    assert(query_reads.hso==1 && !control_stub_axis_reads && !query_reads.adc && !query_reads.six && !query_reads.enc1 && !query_reads.enc2);
+    reset_query_reads();assert(App_ReadRow(1,7,1,label,value)>0);
+    assert(query_reads.six==1 && !control_stub_axis_reads && !query_reads.hso && !query_reads.adc);
+    reset_query_reads();assert(App_ReadRow(2,4,9,label,value)>0 && !strcmp(value,"derived"));
+    assert(query_reads.adc==1 && !control_stub_axis_reads && !query_reads.six && !query_reads.hso);
+    reset_query_reads();assert(App_ReadRow(2,3,2,label,value)>0 && !strcmp(label,"E2 Field"));
+    assert(query_reads.enc2==1 && !query_reads.enc1 && !query_reads.adc && !query_reads.hso && !query_reads.six);
+    reset_query_reads();assert(App_ReadRow(1,6,11,label,value)>0);
+    assert(!control_stub_axis_reads && !query_reads_total());
+    /* Actual current-loop state controls remote units, even if a local draft
+     * or saved preference still describes voltage mode. */
+    MotorControl_SelectWork(MOTOR_WORK_SINGLE_M1);MotorControl_SetFocus(MOTOR_AXIS_1);reset();
+    mode=JERRYFOC_MODE_TORQUE;JerryFOC_Target_Iq=.25f;current_loop=1;
+    assert(App_ReadRow(1,2,1,label,value)>0 && !strcmp(value,"0.25 A"));
+    current_loop=0;assert(App_ReadRow(1,2,1,label,value)>0 && !strcmp(value,"0.25 V"));
+    /* Keep a local unpublished setting open while reading every other-axis
+     * topic. Values, range, focus, draft, selection and save state stay put. */
+    MotorControl_SelectWork(MOTOR_WORK_SINGLE_M1);MotorControl_SetFocus(MOTOR_AXIS_1);reset();MotorControl_StopAll();
+    assert(KK_UI_GoTo(UI_PAGE_SETTINGS,tick)==KK_UI_OK);settle();
+    select_setting("Speed Limit");press(KK_UI_KEY_OK);settle();press(KK_UI_KEY_UP);
+    assert(kk_ui.overlay.editing);uint32_t editing=query_model_hash();
+    for(unsigned g=0;g<8;++g) {
+        assert(App_ReadRow(2,g,0,label,value)>0);assert(query_model_hash()==editing);
+    }
+    back();back();
+    assert(KK_UI_GoTo(UI_PAGE_SETTINGS,tick)==KK_UI_OK);settle();
+    select_setting("System");press(KK_UI_KEY_OK);settle();
+    /* The IBUS binding is also outside AxisView; old queries overwrote it. */
+    const KK_UI_App *app=ui_app_get();unsigned ibus_binding=app->int_binding_count;
+    for(unsigned b=0;b<app->int_binding_count;++b)
+        if(!strcmp(app->int_bindings[b].title,"M1 IBUS Trip")) ibus_binding=b;
+    assert(ibus_binding<app->int_binding_count);
+    int32_t *draft=app->int_bindings[ibus_binding].value;*draft=1700;
+    assert(App_ReadRow(1,4,1,label,value)>0 && *draft==1700 && !strcmp(value,"3.0 A"));
+    for(unsigned b=0;b<app->int_binding_count;++b) if(!strcmp(app->int_bindings[b].title,"Speed Limit")) {
+        *app->int_bindings[b].value=250;
+        assert(App_ReadRow(1,5,2,label,value)>0 && !strcmp(value,"100.0 rad/s"));
+        assert(*app->int_bindings[b].value==250);
+    }
+    puts("PASS: R96 every row/axis/mode parity, live values, topic-only snapshots, immutable literals, frozen UI/model/settings and local editor isolation");
+}
+static void check_run_alignment(void) {
+    MotorControl_SelectWork(MOTOR_WORK_SINGLE_M1);MotorControl_SetFocus(MOTOR_AXIS_1);reset();
+    MotorControl_StopAll();aligned=false;
+    global_stopped=true;align_request_allowed=false;
+    press(KK_UI_KEY_OK);settle(); /* Enter Run; never auto-resume or align. */
+    assert(KK_UI_GetCurrentPage()==UI_PAGE_RUN && !align_requests && global_stopped && !output_requested);
+    probe_frame();assert(drew("GLOBAL STOP") && drew("OK:Align K2:Back"));
+    press(KK_UI_KEY_UP);float draft_target=JerryFOC_Target_Iq;
+    press(KK_UI_KEY_OK);assert(align_requests==1 && global_stopped && !output_requested);
+    settle();assert(drew("GLOBAL STOP"));
+    align_request_allowed=true;press(KK_UI_KEY_OK);
+    assert(align_requests==2 && align_request_axis==MOTOR_AXIS_1 && !global_stopped && !output_requested);
+    assert(JerryFOC_Target_Iq==draft_target); /* Align request never applies the Run draft. */
+    aligning=true;output_requested=true;settle();unsigned count=align_requests;
+    press(KK_UI_KEY_OK);assert(align_requests==count && output_requested);
+    settle();probe_frame();assert(drew("ALIGNING"));
+    aligning=false;aligned=true;output_requested=false;settle();
+    assert(!output_requested && JerryFOC_Target_Iq==0); /* Completion never auto-runs. */
+    press(KK_UI_KEY_OK);assert(output_requested && JerryFOC_Target_Iq>0);
+    back();assert(!output_requested);
+    reset();MotorControl_StopAll();healthy=false;aligned=false;
+    press(KK_UI_KEY_OK);settle();press(KK_UI_KEY_OK);assert(!align_requests && !output_requested);
+    reset();MotorControl_StopAll();drive_ready=false;aligned=false;
+    press(KK_UI_KEY_OK);settle();press(KK_UI_KEY_OK);assert(!align_requests && !output_requested);
+    puts("PASS: R97 Run distinguishes global stop/aligning, held-key align denial, explicit align/second-confirm start, no automatic restart and unhealthy/ADC gates");
+}
 int main(int argc,char **argv) {
-    (void)argv;
+    if(argc>1 && !strcmp(argv[1],"align")) { check_run_alignment();return 0; }
+    if(argc>1 && !strcmp(argv[1],"metrics")) { query_metrics();return 0; }
+    if(argc>1 && !strcmp(argv[1],"queries")) { check_query_rows();return 0; }
     if (argc>1) {
         MotorControl_SelectWork(MOTOR_WORK_SINGLE_M1);MotorControl_SetFocus(MOTOR_AXIS_1);
         MotorControl_StopAll();AppStorage_ResetDefaults();
@@ -1106,7 +1299,7 @@ int main(int argc,char **argv) {
         puts("PASS: R88 headless Settings, save service and diagnostic model before any LCD/UI initialization");return 0;
     }
     ui_input_init(); assert(ui_input_poll()==0);
-    assert(!(ui_gpio_init_mask & KEY1_Pin));
+    assert(ui_gpio_init_mask==0); /* Every GPIO mode/pull stays CubeMX-owned. */
     host_gpio.pins&=~KEY1_Pin; assert(ui_input_poll()==0); host_gpio.pins=0xFFFFU;
     host_gpio.pins &= ~KEY2_Pin; assert(ui_input_poll()==KK_UI_KEY_BACK);
     host_gpio.pins=0xFFFFU;

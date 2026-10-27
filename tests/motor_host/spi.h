@@ -1,6 +1,7 @@
 #ifndef MOTOR_HOST_SPI_H
 #define MOTOR_HOST_SPI_H
 #include "main.h"
+typedef struct { unsigned unused; } DMA_HandleTypeDef;
 typedef struct { uint32_t CR1, CR2, SR; } SPI_TypeDef;
 typedef struct { uint32_t CLKPhase,BaudRatePrescaler,NSSPMode; } SPI_InitTypeDef;
 typedef struct { SPI_TypeDef *Instance; uint32_t State; SPI_InitTypeDef Init; } SPI_HandleTypeDef;

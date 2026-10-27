@@ -1,5 +1,9 @@
 # R82：HAL＋LL 第一轮迁移（第 1～4 批）
 
+**UI-R94-LED** 继续清理按键 GPIO 重复初始化并迁移 WS2812 运行时；所有初始化仍由 CubeMX 生成，I2C3 保持现状。净省 236 B，Flash 余 6012 B，见 [R94 GPIO／WS2812](HAL_LL_WS2812_R94.md)。
+
+当前第 7 批已在 **UI-R93-INIT** 完成：USART1 使用 CubeMX 原生 LL 初始化，SPI／DMA 保留 HAL 初始化与恢复，净省 856 B、Flash 余 5776 B；实际重生成验证通过，见 [R93 初始化收尾](HAL_LL_INIT_R93.md)。R92 已让 SPI DMA/KEY1 跟随 CubeMX 生成的句柄与向量，并将配置检查接入每次构建，见 [R92 配置适配规则](CUBEMX_COMPAT_R92.md)。
+
 第6批已在 `UI-R91-SPI` 完成：三路SPI运行时及五个专用DMA通道迁移到用户LL模块，相对R90净节省2452 B，Flash余量4836 B，见 [R91 SPI／DMA迁移](HAL_LL_SPI_R91.md)。
 
 后续第5批已在 `UI-R90-UART` 完成：USART1运行时收发／中断使用用户LL模块，初始化保留HAL，Debug／Release均净节省2384 B。具体边界、验证和实板复测见 [R90 USART1迁移](HAL_LL_USART_R90.md)。下文为R82历史记录。

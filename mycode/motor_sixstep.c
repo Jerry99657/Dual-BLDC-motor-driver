@@ -1,4 +1,5 @@
 #include "motor_sixstep.h"
+#include "board_diag.h"
 #include "main.h"
 #include "JerryFOC.h"
 #include "motor_math.h"
@@ -53,6 +54,8 @@ void SixStep_Stop(void)
 }
 static void fail(const char *reason)
 {
+    (void)MotorSampling_SetOutputEnabled(false);
+    BoardDiag_Fault(1U,DIAG_SIXSTEP,reason);
     s.state=SIX_FAULT; s.status=reason; SixStep_Stop();
 }
 static bool schedule(uint32_t microseconds)

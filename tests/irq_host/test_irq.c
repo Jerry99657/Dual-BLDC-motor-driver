@@ -9,6 +9,8 @@
 
 EXTI_TypeDef irq_exti;
 TIM_TypeDef irq_tim1,irq_tim2;
+TIM_HandleTypeDef htim1={&irq_tim1};
+HostDwt host_dwt;
 ADC_TypeDef irq_adc1,irq_adc2;
 ADC_HandleTypeDef hadc1={.Instance=ADC1},hadc2={.Instance=ADC2};
 static unsigned key_calls,outer_calls,break_calls,fast_calls,error_calls,pair_errors;
@@ -65,6 +67,21 @@ static void reset(void)
     hadc1.ErrorCode=hadc2.ErrorCode=0;
     key_calls=outer_calls=break_calls=fast_calls=error_calls=pair_errors=0;
     reenter_timer=reenter_adc=fuzzing=false; m1_power=m2_power=true;
+}
+static void check_timing_boundaries(void)
+{
+    extern unsigned diag_host_outer,diag_host_timings;
+    extern uint32_t diag_host_at,diag_host_age;
+    reset();unsigned previous=diag_host_timings;
+    host_dwt.CYCCNT=123;MotorIRQ_Tim2();MotorIRQ_Adc12();assert(diag_host_timings==previous);
+    irq_tim2.DIER=TIM_DIER_UIE;irq_tim2.SR=TIM_SR_UIF;MotorIRQ_Tim2();
+    assert(diag_host_timings==previous+1 && diag_host_outer==1 && diag_host_at==123);
+    host_dwt.CYCCNT=220;irq_tim1.CNT=345;irq_tim1.ARR=8500;
+    irq_adc1.IER=ADC_IER_JEOSIE;irq_adc1.ISR=irq_adc2.ISR=ADC_ISR_JEOS;
+    MotorIRQ_Adc12();assert(diag_host_outer==0 && diag_host_at==220 && diag_host_age==345);
+    irq_tim1.CR1=TIM_CR1_DIR;irq_tim1.CNT=8100;irq_adc1.ISR=irq_adc2.ISR=ADC_ISR_JEOS;
+    MotorIRQ_Adc12();assert(diag_host_age==400);
+    puts("PASS: real IRQ timing hooks only on enabled events, entry timestamps before control and both PWM count directions");
 }
 static void check_exti_timer(void)
 {
@@ -138,5 +155,5 @@ static void exhaust_adc_sources(void)
 }
 int main(void)
 {
-    check_exti_timer(); check_adc(); exhaust_adc_sources(); return 0;
+    check_timing_boundaries();check_exti_timer(); check_adc(); exhaust_adc_sources(); return 0;
 }

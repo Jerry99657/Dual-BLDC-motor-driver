@@ -58,6 +58,8 @@ AppSettings *AppStorage_Get(void) { return &settings; }
 bool AppStorage_RequestSave(void) { return false; }
 #endif
 #ifdef CONTROL_STUB_UI
+unsigned control_stub_axis_reads;
+extern uint8_t ControlStub_CurrentLoop(void);
 static bool storage_deferred;
 void ControlStub_SetDeferred(bool value) { storage_deferred=value; }
 bool AppStorage_IsDeferred(void) { return storage_deferred; }
@@ -189,7 +191,14 @@ bool MotorControl_SetGear(int32_t r,int32_t o) {
     if(!r || r< -1000 || r>1000 || o< -6283 || o>6283)return false;
     AppStorage_Get()->gear_ratio_x100=r;AppStorage_Get()->gear_offset_x100=o;return true;
 }
-bool MotorControl_RequestAlign(MotorAxis a) { (void)a; return true; }
+bool MotorControl_RequestAlign(MotorAxis a) {
+#ifdef CONTROL_STUB_UI
+    extern bool ControlStub_RequestAlign(MotorAxis);
+    return ControlStub_RequestAlign(a);
+#else
+    (void)a; return true;
+#endif
+}
 bool MotorControl_ModeAllowed(JerryFOC_ControlMode m) {
     if(MotorControl_SixStepAllowed()) return m==JERRYFOC_MODE_TORQUE ||
         (!SixStep_IsGeneric() && m==JERRYFOC_MODE_VELOCITY);
@@ -242,6 +251,7 @@ bool MotorControl_CommandFrom(MotorAxis a,JerryFOC_ControlMode m,float t,float l
 void MotorControl_GetAxis(MotorAxis a,MotorAxisSnapshot *s)
 {
 #ifdef CONTROL_STUB_UI
+    ++control_stub_axis_reads;
     if (a==MOTOR_AXIS_2) { *s=second_ui; return; }
 #endif
     (void)a;
@@ -259,6 +269,9 @@ void MotorControl_GetAxis(MotorAxis a,MotorAxisSnapshot *s)
         .target_velocity=JerryFOC_getTargetVelocity ? JerryFOC_getTargetVelocity() : 0,
         .target_iq=&JerryFOC_Target_Iq ? JerryFOC_Target_Iq : 0,
         .target_position=&JerryFOC_Target_Position ? JerryFOC_Target_Position : 0,
+#ifdef CONTROL_STUB_UI
+        .current_loop=ControlStub_CurrentLoop()!=0,
+#endif
         .status=MotorSampling_GetStatusText ? MotorSampling_GetStatusText() : "READY"};
 }
 void MotorSampling_GetAxisDiagnostics(MotorAxis a,MotorSamplingDiagnostics *o)

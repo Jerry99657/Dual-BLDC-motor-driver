@@ -32,6 +32,7 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
+#include "board_diag.h"
 #include "JerryFOC.h"
 #include "MT6701.h"
 #include "angle_src_encoder.h"
@@ -145,6 +146,7 @@ int main(void)
 {
 
   /* USER CODE BEGIN 1 */
+  BoardDiag_Init();
    g_boot_stage = 1U;
   /* USER CODE END 1 */
 
@@ -198,11 +200,9 @@ int main(void)
   MX_DAC3_Init();
   /* USER CODE BEGIN 2 */
   g_boot_stage = 4U;
+  if (BoardDiag_LastCrash()->kind) MotorSampling_GlobalStopIRQ();
   /* Also latch a key held before power-up (there may be no falling edge). */
   (void)MotorSampling_IsGlobalStopped();
-  /* 0. SPI2/SPI3 使用软件 NSS，清除 CubeMX 默认生成的 NSSP 位 */
-  CLEAR_BIT(SPI2->CR2, SPI_CR2_NSSP);
-  CLEAR_BIT(SPI3->CR2, SPI_CR2_NSSP);
 
   /* 1. 开启 DWT 计数器，提供微秒级延时 */
   CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;

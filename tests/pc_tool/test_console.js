@@ -42,7 +42,7 @@ async function main(){
  for(let i=0;i<reference.length;i++){const bad=Uint8Array.from(reference);bad[i]^=64;context.bad=bad;context.good=reference;assert.equal(evaluate('(()=>{const p=new WireParser();return p.feed(bad).length+p.feed(good).length})()'),1)}
  evaluate('parser=new WireParser();parser.feed(new Uint8Array(100000))');assert(evaluate('parser.buffer.length')<12);
  await evaluate('connect()');assert.equal(serialOptions.baudRate,115200);assert.deepEqual(writes,['@1:Get']);
- assert.equal(evaluate('boardConfig.firmware'),91);assert.equal(elements.get('motorModel').value,'2804');
+ assert.equal(evaluate('boardConfig.firmware'),98);assert.equal(elements.get('motorModel').value,'2804');
  // Settings editor units, real row-frame layout, import validation and Stop cancellation.
  evaluate(`$('speedLimit').value=240;$('posSpeed').value=150;$('speedStep').value=1.7`);
  const startSettings=writes.length;await evaluate('applyEditorSettings()');
@@ -55,6 +55,8 @@ async function main(){
  assert.equal(evaluate('decodeRow(new WireParser().feed(rowBytes)[0]).value'),'24.0 V');
  assert.equal(evaluate('decodeRow(new WireParser().feed(rowBytes)[0]).axis'),2);
  await evaluate('readDiagnostics()');assert.equal(elements.get('diagRows').children.length,2);
+ await evaluate('clearDiagnostics()');assert(/:App:0,17,0$/.test(writes.at(-1)));
+ evaluate('boardConfig.firmware=94');await assert.rejects(evaluate('clearDiagnostics()'),/R95/);evaluate('boardConfig.firmware=98');
  context.imported=JSON.parse(evaluate('JSON.stringify(editableConfig(boardConfig))'));
  evaluate(`imported.axes[1].speedLimit=300;imported.axes[1].posSpeed=180;imported.ledBrightness=63`);
  const commands=evaluate('importCommands(validateImport({format:"FOC-console-settings",version:1,editable:imported}))');

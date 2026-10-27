@@ -1,8 +1,12 @@
 from pathlib import Path
+import argparse
 import shutil
 import subprocess
 import sys
 
+parser=argparse.ArgumentParser(description="UI/storage/display regressions and optional diagnostic-query baseline comparison")
+parser.add_argument("--query-baseline",type=Path,help="Previous ui_app.c to compile against the same deterministic host fixture")
+args=parser.parse_args()
 repo = Path(__file__).resolve().parents[2]
 output = repo / "build/ui-validation"
 output.mkdir(parents=True, exist_ok=True)
@@ -13,6 +17,7 @@ sources = list((repo / "mycode/kk_ui/src").glob("*.c"))
 sources += list((repo / "mycode/kk_oled/graphics").glob("*.c"))
 sources += [repo / p for p in ("mycode/ui_app.c", "mycode/ui_text.c", "mycode/ui_input.c", "mycode/ui_fonts.c", "mycode/motor_params.c", "tests/ui_host/test_ui.c", "tests/motor_host/control_stub.c")]
 sources += [repo / "mycode/motor_math.c"]
+sources += [repo / "tests/diag_stub.c"]
 includes = ["tests/ui_host", "mycode", "mycode/kk_ui/include", "mycode/kk_ui/src", "mycode/kk_oled/include", "mycode/kk_oled/graphics", "mycode/kk_oled/driver"]
 command = [shutil.which("gcc") or "gcc", "-std=c11", "-Wall", "-Wextra", "-Werror", "-O1", "-DKK_OLED_TEST", "-DCONTROL_STUB_UI"]
 command += ["-I" + str(repo / p) for p in includes]
@@ -20,6 +25,22 @@ command += [str(p) for p in sources] + ["-Wl,--wrap=OLED_DrawUTF8", "-lm", "-o",
 subprocess.run(command, cwd=repo, check=True)
 subprocess.run([str(output / "test_ui.exe")], cwd=repo, check=True)
 subprocess.run([str(output / "test_ui.exe"),"headless"], cwd=repo, check=True)
+subprocess.run([str(output / "test_ui.exe"),"queries"], cwd=repo, check=True)
+subprocess.run([str(output / "test_ui.exe"),"align"], cwd=repo, check=True)
+metrics=subprocess.check_output([str(output / "test_ui.exe"),"metrics"],cwd=repo,text=True)
+(output/"query-metrics-current.txt").write_text(metrics)
+if args.query_baseline:
+    baseline_command=command.copy()
+    baseline_command[baseline_command.index(str(repo/"mycode/ui_app.c"))]=str(args.query_baseline.resolve())
+    baseline_command[-1]=str(output/"test_ui_baseline.exe")
+    subprocess.run(baseline_command,cwd=repo,check=True)
+    previous=subprocess.check_output([baseline_command[-1],"metrics"],cwd=repo,text=True)
+    (output/"query-metrics-baseline.txt").write_text(previous)
+    for before,after in zip(previous.splitlines(),metrics.splitlines()):
+        assert before.split(":")[0]==after.split(":")[0]
+        counts=lambda line:sum(int(item.split("=")[1]) for item in line.split(":")[1].split())
+        assert counts(after)<counts(before),(before,after)
+        print(f'{after.split(":")[0]} snapshot calls: {counts(before)} -> {counts(after)}')
 
 # Exercise the real storage state machine against an asynchronous NOR model.
 subprocess.run([shutil.which("gcc") or "gcc", "-std=c11", "-Wall", "-Wextra", "-Werror", "-O1", "-Itests/ui_host", "-Imycode", "mycode/app_storage.c", "tests/ui_host/test_storage.c", "-o", str(output / "test_storage.exe")], cwd=repo, check=True)

@@ -10,9 +10,10 @@
 #include "spi_port.h"
 
 uint32_t host_primask;
-static SPI_HandleTypeDef ports[3];
+SPI_HandleTypeDef ports[3];
 static DMA_HandleTypeDef rx_dma[2],tx_dma[3];
-static unsigned complete[3],errors[3],resets,overrun_clears;
+static unsigned complete[3],errors[3],resets,overrun_clears,hal_dma_calls;
+void HAL_DMA_IRQHandler(DMA_HandleTypeDef *d) { assert(d && d->Parent!=ports);++hal_dma_calls; }
 static uint32_t tick,tick_step,reads,inject_at,inject_error;
 static bool stall,early,restart;
 static bool preempt_on_quiesce,preempt_pending;
@@ -84,7 +85,7 @@ static void finish_dma(unsigned port,bool busy)
     }
     dma->ISR|=flags(owner,3);
     h->Instance->SR=SPI_SR_TXE|(busy ? SPI_SR_BSY : 0U);
-    SpiPort_DMAIRQ(h,owner);
+    SpiPort_DMAIRQ(port==2 ? h->hdmatx : h->hdmarx);
 }
 void __set_PRIMASK(uint32_t mask)
 {
@@ -112,7 +113,7 @@ static void reset(void)
 {
     memset((void *)0x40000000UL,0,0x30000U);memset(ports,0,sizeof(ports));
     memset(complete,0,sizeof(complete));memset(errors,0,sizeof(errors));
-    host_primask=reads=inject_at=inject_error=wire_count=received_count=resets=overrun_clears=0;
+    host_primask=reads=inject_at=inject_error=wire_count=received_count=resets=overrun_clears=hal_dma_calls=0;
     tick=tick_step=0;stall=early=restart=false;
     preempt_on_quiesce=preempt_pending=false;
     for (unsigned i=0;i<3;++i) {
@@ -121,10 +122,10 @@ static void reset(void)
         h->Instance->CR1=SPI_CR1_MSTR|SPI_CR1_SSM|SPI_CR1_SSI;
         h->Instance->CR2=(7U<<SPI_CR2_DS_Pos)|SPI_CR2_FRXTH;
         DMA_TypeDef *dma=controller(i);
-        tx_dma[i].Instance=channel(dma,tx_channel(i));h->hdmatx=tx_dma+i;
+        tx_dma[i]=(DMA_HandleTypeDef){channel(dma,tx_channel(i)),dma,4U*(tx_channel(i)-1U),h};h->hdmatx=tx_dma+i;
         h->hdmatx->Instance->CCR=DMA_CCR_MINC|DMA_CCR_DIR|DMA_CCR_PL;
         if(i<2) {
-            rx_dma[i].Instance=channel(dma,1);h->hdmarx=rx_dma+i;
+            rx_dma[i]=(DMA_HandleTypeDef){channel(dma,1),dma,0U,h};h->hdmarx=rx_dma+i;
             h->hdmarx->Instance->CCR=DMA_CCR_MINC|DMA_CCR_PL;
         }
     }
@@ -158,7 +159,7 @@ static void check_dma(void)
             assert(h->hdmarx->Instance->CMAR==(uint32_t)(uintptr_t)rx);
             assert(h->hdmarx->Instance->CCR&DMA_CCR_TCIE);
             assert(!(h->hdmatx->Instance->CCR&DMA_CCR_TCIE));
-            dma->ISR|=flags(2,3);SpiPort_DMAIRQ(h,2);
+            dma->ISR|=flags(2,3);SpiPort_DMAIRQ(h->hdmatx);
             assert(!complete[i] && (h->Instance->CR2&SPI_CR2_RXDMAEN));
         }
         finish_dma(i,true);assert(!complete[i] && h->State!=HAL_SPI_STATE_READY);
@@ -168,7 +169,7 @@ static void check_dma(void)
         if(i==2) h->Instance->SR|=SPI_SR_OVR;
         SpiPort_Service(h);assert(complete[i]==1 && !errors[i]);
         if(i==2) assert(overrun_clears==1);
-        SpiPort_Service(h);SpiPort_DMAIRQ(h,i==2 ? 4 : 1);assert(complete[i]==1);
+        SpiPort_Service(h);SpiPort_DMAIRQ(i==2 ? h->hdmatx : h->hdmarx);assert(complete[i]==1);
         check_other_channels();
     }
     reset();early=true;assert(SpiPort_ExchangeDMA(ports,tx,rx,3)==HAL_OK && complete[0]==1);
@@ -196,8 +197,8 @@ static void check_errors(void)
         assert((i==2 ? SpiPort_WriteDMA(h,tx,3) : SpiPort_ExchangeDMA(h,tx,rx,3))==HAL_OK);
         unsigned n=which ? 2U : i==2 ? 4U : 1U;
         controller(i)->ISR|=flags(n,11);
-        SpiPort_DMAIRQ(h,n);assert(errors[i]==1 && !complete[i] && SpiPort_GetError(h)==HAL_SPI_ERROR_DMA);
-        SpiPort_DMAIRQ(h,n);assert(errors[i]==1);
+        SpiPort_DMAIRQ(which || i==2 ? h->hdmatx : h->hdmarx);assert(errors[i]==1 && !complete[i] && SpiPort_GetError(h)==HAL_SPI_ERROR_DMA);
+        SpiPort_DMAIRQ(which || i==2 ? h->hdmatx : h->hdmarx);assert(errors[i]==1);
         assert((i==2 ? SpiPort_WriteDMA(h,tx,3) : SpiPort_ExchangeDMA(h,tx,rx,3))==HAL_BUSY);
         if(i==2) { SpiPort_Service(h);assert(resets==1 && h->State==HAL_SPI_STATE_READY); }
         else { assert(SpiPort_Abort(h)==HAL_OK);assert(h->State==HAL_SPI_STATE_READY); }
@@ -222,10 +223,10 @@ static void check_errors(void)
     assert(SpiPort_ExchangeDMA(ports,NULL,rx,3)==HAL_ERROR);
     assert(SpiPort_ExchangeDMA(ports,tx,rx,0)==HAL_ERROR);
     reset();assert(SpiPort_ExchangeDMA(ports,tx,rx,3)==HAL_OK);
-    DMA1->ISR|=flags(1,3);SpiPort_DMAIRQ(ports,1);
+    DMA1->ISR|=flags(1,3);SpiPort_DMAIRQ(ports[0].hdmarx);
     assert(errors[0]==1 && !complete[0]); /* Never publish a partial buffer. */
     reset();assert(SpiPort_ExchangeDMA(ports,tx,rx,3)==HAL_OK);
-    preempt_on_quiesce=true;DMA1->ISR|=flags(1,11);SpiPort_DMAIRQ(ports,1);
+    preempt_on_quiesce=true;DMA1->ISR|=flags(1,11);SpiPort_DMAIRQ(ports[0].hdmarx);
     assert(!preempt_on_quiesce && !preempt_pending && errors[0]==1 && !complete[0]);
     puts("PASS: RX/TX DMA TE dominates TC, OVR/MODF/FRE snapshots, disabled/stale vectors, no duplicate callbacks, LCD reset after errors and scoped abort/IRQ-mask preservation");
 }
@@ -255,6 +256,72 @@ static void check_polling(void)
     assert(SpiPort_GetError(ports+1)==HAL_SPI_ERROR_OVR);
     puts("PASS: real LL polling duplex/write/read 1..1280 bytes, dummy clocks, RX draining, BUSY/invalid rejection, hardware faults and timeout across tick wrap");
 }
+static void remap(DMA_HandleTypeDef *d,unsigned slot)
+{
+    d->DmaBaseAddress=slot<6 ? DMA1 : DMA2;
+    d->ChannelIndex=(slot%6U)*4U;
+    d->Instance=channel(d->DmaBaseAddress,slot%6U+1U);
+}
+static void mapped_finish(SPI_HandleTypeDef *h)
+{
+    DMA_HandleTypeDef *owner=h->hdmarx ? h->hdmarx : h->hdmatx;
+    h->hdmatx->Instance->CNDTR=0;
+    if(h->hdmarx) h->hdmarx->Instance->CNDTR=0;
+    owner->DmaBaseAddress->ISR|=3UL<<owner->ChannelIndex;
+    h->Instance->SR=SPI_SR_TXE;
+    SpiPort_DMAIRQ(owner);
+}
+static void check_remapping(void)
+{
+    uint32_t random=0x928165U;
+    for(unsigned pass=0;pass<600;++pass) {
+        reset();DMA1->ISR=DMA2->ISR=0;
+        unsigned slots[12];for(unsigned i=0;i<12;++i) slots[i]=i;
+        for(unsigned i=11;i>0;--i) {
+            random=random*1664525U+1013904223U;
+            unsigned j=random%(i+1U),t=slots[i];slots[i]=slots[j];slots[j]=t;
+        }
+        DMA_HandleTypeDef *handles[]={&rx_dma[0],&tx_dma[0],&rx_dma[1],&tx_dma[1],&tx_dma[2]};
+        DMA_HandleTypeDef adc={0},led={0};remap(&adc,slots[5]);remap(&led,slots[6]);
+        adc.Instance->CCR=0xAA55U;led.Instance->CCR=0xBB66U;
+        adc.DmaBaseAddress->ISR|=15UL<<adc.ChannelIndex;
+        led.DmaBaseAddress->ISR|=15UL<<led.ChannelIndex;
+        for(unsigned i=0;i<5;++i) {
+            remap(handles[i],slots[i]);
+            handles[i]->Instance->CCR=DMA_CCR_MINC|((i==1||i==3||i==4) ? DMA_CCR_DIR : 0U)|((pass%4U)<<12U);
+        }
+        for(unsigned i=0;i<3;++i) {
+            /* Polarity/phase/bit order/divider are initialization settings;
+             * the user transport must not replace their generated values. */
+            uint32_t mode=SPI_CR1_MSTR|SPI_CR1_SSM|SPI_CR1_SSI|
+                (pass&1 ? SPI_CR1_CPOL|SPI_CR1_CPHA|SPI_CR1_LSBFIRST : 0U)|((pass%8U)<<3U);
+            ports[i].Instance->CR1=mode;
+            assert((i==2 ? SpiPort_WriteDMA(ports+i,tx,3) : SpiPort_ExchangeDMA(ports+i,tx,rx+i*4,3))==HAL_OK);
+            assert((ports[i].Instance->CR1&~SPI_CR1_SPE)==mode);
+        }
+        for(unsigned i=0;i<5;++i) {
+            assert(handles[i]->Instance->CMAR==(uint32_t)(uintptr_t)(i==0 ? rx : i==2 ? rx+4 : tx));
+            assert(handles[i]->Instance->CCR&DMA_CCR_EN);
+            assert((handles[i]->Instance->CCR&DMA_CCR_PL)==((pass%4U)<<12U));
+        }
+        /* TX on either controller may fault before its RX vector is served. */
+        if(pass&1U) {
+            DMA_HandleTypeDef *d=ports[0].hdmatx;
+            d->DmaBaseAddress->ISR|=8UL<<d->ChannelIndex;
+            SpiPort_DMAIRQ(ports[0].hdmarx);
+            assert(errors[0]==1 && !complete[0]);
+        } else { mapped_finish(ports);assert(complete[0]==1); }
+        mapped_finish(ports+1);mapped_finish(ports+2);
+        assert(complete[1]==1 && complete[2]==1);
+        assert(adc.Instance->CCR==0xAA55U && led.Instance->CCR==0xBB66U);
+        assert((adc.DmaBaseAddress->ISR>>adc.ChannelIndex&15U)==15U);
+        assert((led.DmaBaseAddress->ISR>>led.ChannelIndex&15U)==15U);
+        SpiPort_DMAIRQ(&adc);SpiPort_DMAIRQ(&led);assert(hal_dma_calls==2);
+        for(unsigned i=0;i<3;++i) { assert(SpiPort_Abort(ports+i)==HAL_OK); }
+        assert(adc.Instance->CCR==0xAA55U && led.Instance->CCR==0xBB66U);
+    }
+    puts("PASS: 600 generated-handle DMA remaps across both controllers/all 12 channels, split RX/TX controllers, dynamic priorities, three concurrent ports, TE/TC/abort and relocated ADC/WS2812 HAL fallback");
+}
 int main(void)
 {
 #ifdef _WIN32
@@ -262,5 +329,5 @@ int main(void)
 #else
     assert(mmap((void *)0x40000000UL,0x30000U,PROT_READ|PROT_WRITE,MAP_PRIVATE|MAP_ANONYMOUS|MAP_FIXED,-1,0)==(void *)0x40000000UL);
 #endif
-    check_dma();check_errors();check_polling();return 0;
+    check_dma();check_errors();check_polling();check_remapping();return 0;
 }

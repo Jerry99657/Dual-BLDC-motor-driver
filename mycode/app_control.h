@@ -9,7 +9,7 @@ enum {
     APP_SET_CURRENT_LOOP,APP_SET_LED_ENABLE,APP_SET_SPEED_STEP,
     APP_SET_TORQUE_STEP,APP_SET_POSITION_STEP,APP_ACTION_DEFAULTS,
     APP_ACTION_CLEAR_IBUS,APP_ACTION_DETECT_START,APP_ACTION_PAUSE,
-    APP_ACTION_DETECT_SAVE,APP_ACTION_SAVE
+    APP_ACTION_DETECT_SAVE,APP_ACTION_SAVE,APP_ACTION_DIAG_CLEAR
 };
 int8_t App_Control(unsigned axis,unsigned key,int32_t value);
 bool App_CanConfigure(void);
@@ -20,6 +20,7 @@ unsigned App_SaveState(void);
 void App_RemoteMotion(MotorAxis axis,bool detect);
 void App_CancelNavigation(void); /* Stop ISR-safe: only clears a byte. */
 uint8_t App_NavigationKeys(uint32_t now);
-/* Caller supplies label[24], value[32]; returns page count or negative error. */
+/* Main-loop only. Caller supplies label[24], value[32]; returns page count or
+ * negative error. Live topic formatting never changes View, editors or settings. */
 int App_ReadRow(unsigned axis,unsigned group,unsigned row,char *label,char *value);
 #endif

@@ -6,9 +6,15 @@
 typedef struct { volatile uint32_t CR1,CR2,SR,DR,CRCPR,RXCRCR,TXCRCR,I2SCFGR,I2SPR; } SPI_TypeDef;
 typedef struct { volatile uint32_t ISR,IFCR; } DMA_TypeDef;
 typedef struct { volatile uint32_t CCR,CNDTR,CPAR,CMAR; } DMA_Channel_TypeDef;
-typedef struct { DMA_Channel_TypeDef *Instance; } DMA_HandleTypeDef;
+typedef struct { DMA_Channel_TypeDef *Instance; DMA_TypeDef *DmaBaseAddress; uint32_t ChannelIndex; void *Parent; } DMA_HandleTypeDef;
 typedef struct { SPI_TypeDef *Instance; volatile HAL_SPI_StateTypeDef State; volatile uint32_t ErrorCode;
                  DMA_HandleTypeDef *hdmarx,*hdmatx; } SPI_HandleTypeDef;
+extern SPI_HandleTypeDef ports[3];
+#define hspi1 ports[0]
+#define hspi2 ports[1]
+#define hspi3 ports[2]
+void HAL_DMA_IRQHandler(DMA_HandleTypeDef *d);
+
 typedef enum { HAL_OK,HAL_ERROR,HAL_BUSY,HAL_TIMEOUT } HAL_StatusTypeDef;
 #define DMA1_BASE 0x40020000UL
 #define DMA2_BASE 0x40020400UL

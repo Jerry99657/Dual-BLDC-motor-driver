@@ -4,6 +4,7 @@
 #include "JerryFOC.h"
 #include "tim.h"
 #include "adc.h"
+#include "board_diag.h"
 #include "stm32g4xx_ll_exti.h"
 #include "stm32g4xx_ll_tim.h"
 #include "stm32g4xx_ll_adc.h"
@@ -20,8 +21,10 @@ void MotorIRQ_Key1(void)
 void MotorIRQ_Tim2(void)
 {
     if (LL_TIM_IsEnabledIT_UPDATE(TIM2) && LL_TIM_IsActiveFlag_UPDATE(TIM2)) {
+        uint32_t entered=DWT->CYCCNT;
         LL_TIM_ClearFlag_UPDATE(TIM2); /* rc_w0: preserve unrelated flags. */
         JerryFOC_OuterIRQ();
+        BoardDiag_Timing(1U,entered,0U);
     }
 }
 
@@ -68,6 +71,9 @@ static bool adc_errors(ADC_HandleTypeDef *adc,uint32_t pending,uint32_t allowed)
 
 void MotorIRQ_Adc12(void)
 {
+    uint32_t entered=DWT->CYCCNT;
+    uint32_t counter=htim1.Instance->CNT;
+    uint32_t age=(htim1.Instance->CR1&TIM_CR1_DIR) ? htim1.Instance->ARR-counter : counter;
     uint32_t master=LL_ADC_ReadReg(ADC1,ISR) & LL_ADC_ReadReg(ADC1,IER);
     uint32_t slave=LL_ADC_ReadReg(ADC2,ISR) & LL_ADC_ReadReg(ADC2,IER);
     bool error=adc_errors(&hadc1,master,ADC_ISR_JEOS);
@@ -80,5 +86,6 @@ void MotorIRQ_Adc12(void)
         LL_ADC_WriteReg(ADC1,ISR,ADC_ISR_JEOS|ADC_ISR_JEOC);
         if (!error) JerryFOC_FastIRQ();
         else LL_ADC_WriteReg(ADC2,ISR,ADC_ISR_JEOS|ADC_ISR_JEOC);
+        BoardDiag_Timing(0U,entered,age);
     }
 }

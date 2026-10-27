@@ -36,6 +36,7 @@ if selected-set(suites):
     raise SystemExit("Unknown suites: "+", ".join(sorted(selected-set(suites))))
 for name, sources in suites.items():
     if selected and name not in selected: continue
+    sources += ["tests/diag_stub.c"]
     if "mycode/protocol.c" in sources: sources += ["tests/motor_host/app_stub.c"]
     if name in ("detect","control","sensorless"): sources += ["mycode/motor_sixstep.c","mycode/motor_detect.c"]
     if name in ("foc","protocol","telemetry"):
@@ -85,7 +86,7 @@ for name, sources in suites.items():
         for scenario in ("stall","no-current","key"):
             subprocess.run([str(out/"sixstep_plant.exe"),"20","1","0.00004",scenario,"75","0.00929","4015","generic","4015","1.92","0.00044"],cwd=repo,check=True)
     if name=="sampling":
-        for scenario in ("ibus", "ibus-wrap", "ibus-shared", "ibus-dac-set", "ibus-dac-start", "ibus-comp-start", "ibus-runtime", "ibus-high-start", "ibus-startup-pulse", "global", "global-wrap", "six-outputs"):
+        for scenario in ("diag-optional", "ibus", "ibus-wrap", "ibus-shared", "ibus-dac-set", "ibus-dac-start", "ibus-comp-start", "ibus-runtime", "ibus-high-start", "ibus-startup-pulse", "global", "global-wrap", "six-outputs"):
             subprocess.run([str(out / "sampling.exe"),scenario],cwd=repo,check=True)
     if name == "encoder":
         for scenario in ("missing", "timeout", "missing-wrap", "m1-recovery", "m2-recovery", "required-retry", "required-retry-wrap", "zero-m1", "zero-m2", "zero-poll", "hso-save", "busy-admission", "flash-init"):

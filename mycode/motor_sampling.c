@@ -1,4 +1,5 @@
 #include "motor_sampling.h"
+#include "board_diag.h"
 #include "stm32g4xx_ll_gpio.h"
 #include "stm32g4xx_ll_exti.h"
 
@@ -255,6 +256,7 @@ static void ibus_latch(void)
     acquisition.ibus_latched=true;
     (void)MotorSampling_SixStepTimer(0U);
     if (acquisition.axis_fault[0]==MOTOR_SAMPLE_FAULT_NONE) acquisition.axis_fault[0]=MOTOR_SAMPLE_FAULT_IBUS;
+    BoardDiag_Fault(1U,DIAG_SAMPLE,"M1 IBUS TRIP");
     __set_PRIMASK(mask);
 }
 
@@ -311,6 +313,7 @@ failed:
     __HAL_TIM_MOE_DISABLE_UNCONDITIONALLY(&htim1);
     s_requested[0]=false; acquisition.arm_frames[0]=0;
     if (acquisition.axis_fault[0]==MOTOR_SAMPLE_FAULT_NONE) acquisition.axis_fault[0]=MOTOR_SAMPLE_FAULT_IBUS_INIT;
+    BoardDiag_Fault(1U,DIAG_SAMPLE,"M1 IBUS INIT");
 }
 
 uint16_t MotorSampling_GetIbusLimit(void) { return s_ibus_limit_ma; }
@@ -328,6 +331,7 @@ bool MotorSampling_SetIbusLimit(uint16_t ma)
         if (acquisition.ibus_started && !ibus_write_threshold(s_adc_volts*ADC_FULL_SCALE)) {
             s_ibus_limit_ma=previous; acquisition.ibus_init_failed=true;
             if (acquisition.axis_fault[0]==MOTOR_SAMPLE_FAULT_NONE) acquisition.axis_fault[0]=MOTOR_SAMPLE_FAULT_IBUS_INIT;
+            BoardDiag_Fault(1U,DIAG_SAMPLE,"M1 IBUS INIT");
             ok=false;
         }
         ibus_poll();
@@ -369,6 +373,7 @@ static void trip(MotorSamplingFault fault)
     __HAL_TIM_MOE_DISABLE_UNCONDITIONALLY(&htim8);
     acquisition.power_enabled = false;
     if (acquisition.fault == MOTOR_SAMPLE_FAULT_NONE) acquisition.fault = fault;
+    BoardDiag_Fault(0U,DIAG_SAMPLE,MotorSampling_GetStatusText());
     __set_PRIMASK(primask);
 }
 
@@ -392,6 +397,9 @@ static void trip_axis(MotorAxis axis, MotorSamplingFault fault, unsigned phase, 
     CLEAR_BIT(axis_timer(axis)->Instance->CCER, PHASE_CHANNELS);
     if (axis==MOTOR_AXIS_2) __HAL_TIM_MOE_DISABLE_UNCONDITIONALLY(&htim8);
     acquisition.arm_frames[axis] = 0U;
+    /* An absent, unused M2 front end must not consume the first event slot.
+     * Its readiness fault remains intact and still prevents enabling M2. */
+    if (s_monitored[axis]) BoardDiag_Fault((unsigned)axis+1U,DIAG_SAMPLE,MotorSampling_GetAxisStatusText(axis));
     __set_PRIMASK(mask);
 }
 
@@ -431,6 +439,7 @@ static void ibus_service(void)
             CLEAR_BIT(htim1.Instance->CCER,PHASE_CHANNELS);
             s_requested[0]=false; acquisition.arm_frames[0]=0;
             if (acquisition.axis_fault[0]==MOTOR_SAMPLE_FAULT_NONE) acquisition.axis_fault[0]=MOTOR_SAMPLE_FAULT_IBUS_INIT;
+            BoardDiag_Fault(1U,DIAG_SAMPLE,"M1 IBUS INIT");
         }
         ibus_poll();
         __set_PRIMASK(mask);

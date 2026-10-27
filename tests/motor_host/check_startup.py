@@ -39,16 +39,23 @@ def calls(disassembly):
     return re.findall(r"\bblx?(?:\.[nw])?\s+[0-9a-f]+\s+<([^>]+)>", disassembly)
 
 
+# Resolve generated physical vectors instead of freezing the R91 allocation.
+import sys
+sys.path.insert(0,str(repo/'scripts'))
+from check_cubemx import audit
+dma_mapping=dict(audit(repo))
+irq_source=(repo/'Core/Src/stm32g4xx_it.c').read_text(encoding='utf-8')
+key_vector=next(name for name,body in re.findall(r'void (EXTI\w+_IRQHandler)\(void\)\s*\{(.*?)^\}',irq_source,re.S|re.M)
+                if 'HAL_GPIO_EXTI_IRQHandler(KEY1_Pin)' in body)
 for mode in ("Debug", "Release"):
     root = repo / "build" / mode
     elf = root / "FOC_two.elf"
     symbols = tool("nm", elf)
     for symbol in ("HAL_Init", "HAL_MspInit"):
         assert re.search(r"^\w+ T " + symbol + r"$", symbols, re.M), (mode, symbol)
-    for symbol in ("DMA1_Channel1_IRQHandler", "DMA1_Channel2_IRQHandler",
-                   "DMA2_Channel1_IRQHandler", "DMA2_Channel2_IRQHandler", "DMA1_Channel4_IRQHandler",
+    for symbol in (key_vector, *(v+"_IRQHandler" for v in dma_mapping.values()),
                    "SPI1_IRQHandler", "SPI2_IRQHandler", "SPI3_IRQHandler", "ADC1_2_IRQHandler", "TIM2_IRQHandler",
-                   "TIM1_BRK_TIM15_IRQHandler", "HAL_COMP_MspInit", "HAL_DAC_MspInit", "EXTI15_10_IRQHandler", "TIM7_IRQHandler", "USART1_IRQHandler"):
+                   "TIM1_BRK_TIM15_IRQHandler", "HAL_COMP_MspInit", "HAL_DAC_MspInit", "TIM7_IRQHandler", "USART1_IRQHandler"):
         assert re.search(r"^\w+ T " + symbol + r"$", symbols, re.M), (mode, symbol)
     for symbol in ("g_boot_stage", "g_error_return_address"):
         assert re.search(r"^\w+ [bB] " + symbol + r"$", symbols, re.M), (mode, symbol)
@@ -60,17 +67,48 @@ for mode in ("Debug", "Release"):
     hal_calls = calls(tool("objdump", "-d", "--disassemble=HAL_Init", elf))
     assert hal_calls.index("HAL_InitTick") < hal_calls.index("HAL_MspInit"), (mode, hal_calls)
 
+    # R95: generated exception vectors are naked branch stubs. The separate
+    # Thumb emulator verifies actual shutdown ordering and retained-SRAM bounds.
+    for vector,kind in [('NMI_Handler',2),('HardFault_Handler',3),('MemManage_Handler',4),('BusFault_Handler',5),('UsageFault_Handler',6)]:
+        assembly=tool("objdump","-d","--disassemble="+vector,elf)
+        assert 'BoardDiag_ExceptionEntry' in assembly and not re.search(r'\b(?:push|vpush)\b',assembly), (mode,vector)
+        assert re.search(r'\bmovs\s+r2, #'+str(kind),assembly),(mode,vector)
+    entry=tool("objdump","-d","--disassemble=BoardDiag_ExceptionEntry",elf)
+    assert re.search(r'msr\s+MSP',entry,re.I) and 'BoardDiag_Fatal' in entry,mode
+    for name in ('BoardDiag_Fatal','BoardDiag_Init','commit','checksum'):
+        assembly=tool("objdump","-d","--disassemble="+name,elf)
+        assert not any(c.startswith(('HAL_','SpiPort_','UiText_')) for c in calls(assembly)),(mode,name)
+        assert not re.search(r'\b(?:vldr|vstr|vmov|vpush|vpop|vadd|vsub|vmul|vdiv)\b',assembly),(mode,name)
+    assert 'BoardDiag_Init' in main_calls and main_calls.index('BoardDiag_Init')<main_calls.index('HAL_Init'),mode
+    for dispatcher in ('MotorIRQ_Adc12','MotorIRQ_Tim2'):
+        assembly=tool("objdump","-d","--disassemble="+dispatcher,elf)
+        assert 'BoardDiag_Timing' in assembly,(mode,dispatcher)
+
     # R82: HAL owns setup/DMA; the board's LL vectors own ADC12/TIM/EXTI.
     # Application hooks may inline; verify the real linked control paths.
     for removed in ("HAL_ADC_IRQHandler","HAL_TIM_IRQHandler","HAL_GPIO_EXTI_IRQHandler"):
         assert not re.search(r"^\w+ [tT] "+removed+r"$",symbols,re.M),(mode,removed)
-    # HAL USART setup survives, but no HAL runtime IRQ/ISR/IT transfer is linked.
+    # CubeMX native LL USART setup survives; the generic HAL UART dependency
+    # and its static handle have been removed from the complete linked image.
     assert any(c.startswith("MX_USART1_UART_Init") for c in main_calls),(mode,main_calls)
+    assert not re.search(r'^\w+ [tTbB] (?:HAL_UART\w*|huart1)$',symbols,re.M),mode
+    uart_init=tool("objdump", "-d", "--disassemble=MX_USART1_UART_Init", elf)
+    assert uart_init and ('LL_USART_Init(USART1,' in (repo/'Core/Src/usart.c').read_text(encoding='utf-8'))
     assert not re.search(r'^\w+ [tT] (?:HAL_UART_(?:IRQHandler|Transmit_IT|Receive_IT)|UART_(?:RxISR|TxISR|DMAAbortOnError))[^\n]*$',symbols,re.M),mode
-    # HAL still sets up all ports and ADC/LED DMA; SPI runtime is now owned
-    # exclusively by the board LL module, including deferred recovery.
+    # HAL still sets up SPI/TIM/ADC/DMA. SPI and LED runtime belong to user
+    # modules; ADC retains HAL DMA callbacks and the unchanged fallback.
     assert not re.search(r'^\w+ [tT] (?:HAL_SPI_(?:IRQHandler|Transmit|Receive|TransmitReceive|Abort|DMAStop)|SPI_(?:DMA|RxISR|TxISR))[^\n]*$',symbols,re.M),mode
-    assert re.search(r'^\w+ [tT] HAL_DMA_IRQHandler[^\n]*$',symbols,re.M),mode
+    # R92 calls HAL DMA from an LTO user module: its unchanged dispatcher may
+    # inline there. Check the callback machinery as well as the source route.
+    dma_code=tool("objdump", "-d", "--disassemble=SpiPort_DMAIRQ", elf)
+    for callback in ('ADC_DMAHalfConvCplt','ADC_DMAConvCplt','ADC_DMAError'):
+        assert callback in symbols,(mode,callback)
+    for removed in ('HAL_TIM_PWM_Start_DMA','HAL_TIM_PWM_Stop_DMA',
+                    'TIM_DMADelayPulseCplt','TIM_DMADelayPulseHalfCplt','TIM_DMAError',
+                    'HAL_TIM_PWM_PulseFinishedCallback','HAL_TIM_ErrorCallback'):
+        assert not re.search(r'^\w+ [tT] '+removed+r'$',symbols,re.M),(mode,removed)
+    assert 'HAL_DMA_IRQHandler(d);' in (repo/'mycode/spi_port.c').read_text(encoding='utf-8')
+    assert re.search(r'^\w+ [tT] HAL_DMA_IRQHandler[^\n]*$',symbols,re.M) or re.search(r'\bbx\s+r\d+',dma_code),(mode,'HAL DMA callback dispatch')
     adc_calls=calls(tool("objdump", "-d", "--disassemble=MotorIRQ_Adc12", elf))
     tim_calls=calls(tool("objdump", "-d", "--disassemble=MotorIRQ_Tim2", elf))
     assert any(c.startswith("StHso_Process") for c in adc_calls), (mode, adc_calls)
@@ -88,7 +126,7 @@ for mode in ("Debug", "Release"):
     for vector,dispatcher in (("ADC1_2_IRQHandler","MotorIRQ_Adc12"),
                               ("TIM2_IRQHandler","MotorIRQ_Tim2"),
                               ("TIM1_BRK_TIM15_IRQHandler","MotorIRQ_Break"),
-                              ("EXTI15_10_IRQHandler","MotorIRQ_Key1"),
+                              (key_vector,"MotorIRQ_Key1"),
                               ("USART1_IRQHandler","Uart1_IRQHandler")):
         assert re.search(r"^\w+ T "+dispatcher+r"$",symbols,re.M),(mode,dispatcher)
         assert dispatcher in exti_transfers(vector),(mode,vector)
@@ -98,13 +136,20 @@ for mode in ("Debug", "Release"):
     assert any(c.startswith("MotorSampling_GlobalStopIRQ") for c in exti_calls), (mode,exti_calls)
     for vector,dispatcher in (
         ('SPI1_IRQHandler','SpiPort_IRQHandler'),('SPI2_IRQHandler','SpiPort_IRQHandler'),
-        ('SPI3_IRQHandler','SpiPort_IRQHandler'),('DMA1_Channel1_IRQHandler','SpiPort_DMAIRQ'),
-        ('DMA1_Channel2_IRQHandler','SpiPort_DMAIRQ'),('DMA2_Channel1_IRQHandler','SpiPort_DMAIRQ'),
-        ('DMA2_Channel2_IRQHandler','SpiPort_DMAIRQ'),('DMA1_Channel4_IRQHandler','SpiPort_DMAIRQ'),
+        ('SPI3_IRQHandler','SpiPort_IRQHandler'),
     ):
         assert any(c.startswith(dispatcher) for c in exti_transfers(vector)),(mode,vector)
-    for vector in ('DMA1_Channel3_IRQHandler','DMA1_Channel5_IRQHandler'):
-        assert any(c.startswith('HAL_DMA_IRQHandler') for c in exti_transfers(vector)),(mode,vector)
+    for handle,instance in dma_mapping.items():
+        vector=instance+'_IRQHandler'
+        routes=exti_transfers(vector)
+        # A small shared wrapper may be outlined by GCC; follow that real
+        # branch too. Regenerated-vector fixtures verify argument identity.
+        for route in list(routes):
+            if route.startswith('CubeMX_DMAIRQ'):
+                routes+=exti_transfers(route)
+        expected='WS2812_DMAIRQ' if handle=='hdma_tim3_ch1' else 'SpiPort_DMAIRQ'
+        assert any(c.startswith(expected) for c in routes),(mode,vector,routes)
+    # HAL DMA is either an out-of-line call or its callback dispatch was verified above.
 
     image = (root / "FOC_two.bin").read_bytes()
     import sys
@@ -113,7 +158,7 @@ for mode in ("Debug", "Release"):
     raw_resources=resources();packed_resources=pack(raw_resources)
     assert packed_resources in image and unpack(packed_resources,len(raw_resources))==raw_resources,mode
     text_image=image+raw_resources
-    assert b"UI-R91-SPI" in text_image and b"UI-R90-UART" not in text_image, mode
+    assert b"UI-R98-BOOT" in text_image and b"UI-R90-UART" not in text_image, mode
     assert "App_FloatToDoubleBits" in symbols and "__aeabi_f2d" in symbols,mode
     for unused in ("__aeabi_dadd","__aeabi_dsub","__adddf3","__subdf3"):
         assert not re.search(r"^\w+ [tT] "+unused+r"$",symbols,re.M),(mode,unused)

@@ -3,8 +3,8 @@
 #include "main.h"
 #include "app_control.h"
 
-/* 上拉输入、按下接地；开机按住按键不会改变极性。
- * 高有效硬件可在构建中定义对应的 KK_UI_KEY_* 位。 */
+/* CubeMX owns GPIO mode/pull. Default logic is active-low; active-high
+ * boards may select KK_UI_KEY_* bits here and configure their pulls in IOC. */
 #ifndef UI_INPUT_ACTIVE_HIGH_MASK
 #define UI_INPUT_ACTIVE_HIGH_MASK 0U
 #endif
@@ -32,14 +32,6 @@ void ui_input_init(void)
 {
     /* KEY1 belongs to CubeMX EXTI / global motor stop, not the UI scanner. */
     s_raw_keys=0U;
-    for (unsigned i = 0U; i < sizeof(s_pins) / sizeof(s_pins[0]); ++i) {
-        GPIO_InitTypeDef init = {0};
-        init.Pin = s_pins[i].pin;
-        init.Mode = GPIO_MODE_INPUT;
-        init.Pull = (UI_INPUT_ACTIVE_HIGH_MASK & s_pins[i].key) ?
-                    GPIO_PULLDOWN : GPIO_PULLUP;
-        HAL_GPIO_Init(s_pins[i].port, &init);
-    }
 }
 
 uint8_t ui_input_poll(void)

@@ -19,5 +19,6 @@ HAL_StatusTypeDef SpiPort_DMAStop(SPI_HandleTypeDef *h);
 uint32_t SpiPort_GetError(const SPI_HandleTypeDef *h);
 void SpiPort_Service(SPI_HandleTypeDef *h);
 void SpiPort_IRQHandler(SPI_HandleTypeDef *h);
-void SpiPort_DMAIRQ(SPI_HandleTypeDef *h,uint32_t channel);
+/* Generated DMA vectors pass their own handle, including HAL-owned DMA. */
+void SpiPort_DMAIRQ(DMA_HandleTypeDef *dma);
 #endif

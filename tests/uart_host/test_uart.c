@@ -134,4 +134,16 @@ static void check_transmit(void)
     reset();host_primask=1;Uart1_Init();assert(host_primask==1);host_primask=0;
     puts("PASS: real LL USART copied TX lengths 1..128, full duplex/error during TX, BUSY immutability, TC-only release, immediate completion, invalid frames and IRQ-mask preservation");
 }
-int main(void) { check_receive();check_transmit();return 0; }
+static void check_generated_setup(void)
+{
+    reset();uint8_t data[]={1,2,3};
+    uart_regs.CR1|=USART_CR1_UE|USART_CR1_TE|USART_CR1_RE|USART_CR1_OVER8;
+    uart_regs.CR3|=USART_CR3_ONEBIT;
+    uart_regs.CR2=0x2000U;uart_regs.BRR=738U;uart_regs.PRESC=3U;
+    uint32_t cr1=uart_regs.CR1,cr3=uart_regs.CR3;
+    Uart1_Init();assert(Uart1_TrySend(data,3));drain();
+    assert(uart_regs.CR1==cr1 && uart_regs.CR3==cr3);
+    assert(uart_regs.CR2==0x2000U && uart_regs.BRR==738U && uart_regs.PRESC==3U);
+    puts("PASS: generated baud/prescaler/stop bits/oversampling/one-bit sampling and enable bits survive LL runtime start/TX");
+}
+int main(void) { check_receive();check_transmit();check_generated_setup();return 0; }
