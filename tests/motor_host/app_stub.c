@@ -11,7 +11,7 @@ int8_t App_Control(unsigned axis,unsigned key,int32_t value)
 { app_host_axis=axis;app_host_key=key;app_host_value=value;return 1; }
 bool App_CanConfigure(void) { return app_host_config_allowed; }
 bool App_SelectMotor(MotorAxis axis,MotorProfile profile)
-{ return profile==MOTOR_PROFILE_COUNT ? MotorControl_SelectGeneric() : MotorControl_SelectProfile(axis,profile); }
+{ return profile==MOTOR_PROFILE_ESC ? MotorControl_SelectGeneric() : MotorControl_SelectProfile(axis,profile); }
 void App_ConfigChanged(void) { dirty=true; }
 void App_SaveService(uint32_t now) { (void)now; }
 unsigned App_SaveState(void) { return dirty ? APP_SAVE_PENDING : AppStorage_GetSaveState(); }

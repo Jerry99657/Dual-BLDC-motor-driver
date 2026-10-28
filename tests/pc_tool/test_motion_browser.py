@@ -28,11 +28,11 @@ with sync_playwright() as p:
         page.wait_for_timeout(260)
         assert page.locator('#uiMotionLayer .ui-motion-ghost').count()==0
 
-        page.locator('summary').click()
-        assert page.locator('details').evaluate('e=>e.open')
-        page.wait_for_function("document.querySelector('details .row').getAnimations().some(a=>a.id==='ui-disclosure')")
-        page.locator('summary').click()
-        assert not page.locator('details').evaluate('e=>e.open')
+        page.locator('#runPanel summary').click()
+        assert page.locator('#runPanel details').evaluate('e=>e.open')
+        page.wait_for_function("document.querySelector('#runPanel details .row').getAnimations().some(a=>a.id==='ui-disclosure')")
+        page.locator('#runPanel summary').click()
+        assert not page.locator('#runPanel details').evaluate('e=>e.open')
 
         # A disconnected theme change can reveal the whole UI; unsupported APIs
         # still have a direct/floor fallback and persist the user's choice.
@@ -73,11 +73,11 @@ with sync_playwright() as p:
             window.motionWrites=[];window.motionSample=0;window.motionPaints=0;
             const nativeDraw=plots[0].draw;plots[0].draw=function(){motionPaints++;return nativeDraw()};
             window.motionFeed=()=>{const ms=motionSample++*10;add({kind:1,epoch:0,ms,values:[['motion.speed','rad/s',Math.sin(ms/100)]]})};
-            for(let i=0;i<1500;i++)motionFeed();draw();window.motionTimer=setInterval(motionFeed,10);
+            for(let i=0;i<1500;i++)motionFeed();addAllPlotChannels();draw();window.motionTimer=setInterval(motionFeed,10);
             window.send=command=>{motionWrites.push(command);if(command==='Stop')return Promise.resolve({result:1});return new Promise(resolve=>{window.resolveMotion=resolve})};
         }""")
         # Open native details without replacing the browser's confirmation APIs.
-        page.locator('summary').click();page.fill('#command','Get')
+        page.locator('#runPanel summary').click();page.fill('#command','Get')
         page.click('#send')
         assert page.evaluate('motionWrites')==['Get']
         assert page.locator('#send').get_attribute('aria-busy')=='true'
@@ -111,8 +111,8 @@ with sync_playwright() as p:
         assert page.locator('.ui-theme-floor').count()==0
 
         page.evaluate("()=>{window.send=command=>{motionWrites.push(command);return Promise.reject(Error('测试拒绝：状态不允许'))}}")
-        if not page.locator('details').evaluate('e=>e.open'):
-            page.locator('summary').click()
+        if not page.locator('#runPanel details').evaluate('e=>e.open'):
+            page.locator('#runPanel summary').click()
         page.fill('#command','Get');page.click('#send')
         page.wait_for_function("document.getElementById('error').textContent.includes('测试拒绝')")
         page.wait_for_function("[...document.querySelectorAll('.ui-toast[data-kind=error]')].some(e=>e.textContent.includes('测试拒绝'))")

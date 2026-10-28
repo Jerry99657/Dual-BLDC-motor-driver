@@ -13,6 +13,7 @@ compiler = shutil.which("gcc") or "gcc"
 subprocess.run([sys.executable, "tests/motor_host/check_spi_clock.py"],
                cwd=repo, check=True)
 suites = {
+    "angle": ["mycode/angle_src_encoder.c","mycode/motor_math.c","tests/motor_host/test_angle.c"],
     "detect": ["mycode/JerryFOC.c", "mycode/motor_control.c", "mycode/protocol.c", "mycode/number_parse.c", "mycode/motor_params.c", "tests/motor_host/test_detect.c"],
     "control": ["mycode/JerryFOC.c", "mycode/motor_control.c", "mycode/protocol.c", "mycode/number_parse.c", "mycode/motor_params.c", "tests/motor_host/test_control.c"],
     "sensorless": ["mycode/JerryFOC.c", "mycode/motor_control.c", "mycode/protocol.c", "mycode/number_parse.c", "mycode/st_hso.c", "mycode/motor_params.c", "tests/motor_host/test_sensorless.c"],
@@ -45,7 +46,7 @@ for name, sources in suites.items():
     if name in ("foc","protocol","telemetry","justfloat"):
         sources += ["tests/motor_host/control_stub.c"]
     if name in ("protocol","telemetry","justfloat"): sources += ["tests/motor_host/telemetry_stubs.c"]
-    if name in ("foc","control","sensorless","detect"):
+    if name in ("foc","control","sensorless","detect","sixstep","sixstep_wave","sixstep_plant"):
         sources += ["mycode/motor_math.c"]
     command = [compiler, "-std=c11", "-Wall", "-Wextra", "-Werror", "-O1",
                "-Itests/motor_host", "-Imycode", "-IThirdParty/ST_HSO", *sources, "-lm", "-o", str(out / (name + ".exe"))]

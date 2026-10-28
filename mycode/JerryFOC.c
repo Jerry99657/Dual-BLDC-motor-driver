@@ -1,4 +1,5 @@
 #include "JerryFOC.h"
+MotorControllers m1_controllers;
 #include "board_diag.h"
 #include <stdint.h>
 #include <stdio.h>
@@ -52,7 +53,7 @@ void JerryFOC_playStartupSound(void)
 }
 
 /* ================= 参数与全局变量 ================= */
-#define active_motor (MotorParams_GetActive())
+static const MotorParams *active_motor=&MOTOR_2804;
 /* Compact private storage; externally visible state and all arithmetic are unchanged. */
 static struct {
     AngleSource *angle_source;
@@ -103,7 +104,7 @@ const MotorParams* JerryFOC_getMotorParams(void)
     return active_motor;
 }
 
-uint8_t JerryFOC_isDriveReady(void)
+__attribute__((noinline,noclone)) uint8_t JerryFOC_isDriveReady(void)
 {
     return MotorControl_MotionAllowed(MOTOR_AXIS_1) && MotorSampling_IsReady() &&
            MotorSampling_IsCalibrated() && !foc.hso_feedback_fault;
@@ -136,7 +137,7 @@ float JerryFOC_getBusVoltage(void)
     return MotorSampling_GetBusVoltage();
 }
 
-void JerryFOC_useCurrentLoop(uint8_t enable)
+__attribute__((noinline,noclone)) void JerryFOC_useCurrentLoop(uint8_t enable)
 {
     enable = enable || MotorControl_HsoAllowed() ? 1U : 0U;
     if (flag_use_current_loop == enable) return;
@@ -174,14 +175,14 @@ LowPassFilter M0_Curr_Flt = { .Tf = 0.0001f, .y_prev = 0.0f };
 /* Selected profile initializes every PID before ADC/output startup. Keep
  * these in BSS instead of storing a second, immediately overwritten preset. */
 /* 位置外环 P */
-PIDController pos_loop_M0;
+
 
 /* 速度外环 PI（电压模式时直接输出 Uq） */
-PIDController vel_loop_M0;
+
 
 /* 电流最内环 PI */
-PIDController id_loop_M0;
-PIDController iq_loop_M0;
+
+
 
 /* ================= 工具函数 ================= */
 uint8_t JerryFOC_needsAlignment(void) { return !MotorControl_SixStepAllowed() && !MotorControl_HsoAllowed() && foc.motor_alignment_pending; }
@@ -192,9 +193,10 @@ void JerryFOC_requestAlignment(void)
 }
 uint8_t JerryFOC_isAligning(void) { return !foc_fast_loop_enabled; }
 
-uint8_t JerryFOC_selectMotor(MotorProfile profile)
+static void load_motor(MotorProfile profile);
+__attribute__((noinline,noclone,optimize("Oz"))) uint8_t JerryFOC_selectMotor(MotorProfile profile)
 {
-    if ((unsigned)profile >= MOTOR_PROFILE_COUNT) return 0U;
+    if (!MotorParams_GetProfile(profile)) return 0U;
     if (foc.motor_profile_initialized && profile == MotorParams_GetActiveProfile()) return 1U;
     uint32_t mask = __get_PRIMASK();
     __disable_irq();
@@ -205,8 +207,15 @@ uint8_t JerryFOC_selectMotor(MotorProfile profile)
         __set_PRIMASK(mask);
         return 0U;
     }
+    load_motor(profile);
+    __set_PRIMASK(mask); return 1U;
+}
+
+__attribute__((noinline,noclone)) static void load_motor(MotorProfile profile)
+{
     JerryFOC_stop();
     MotorParams_Select(profile);
+    active_motor=MotorParams_GetActive();
     const MotorParams *m = active_motor;
     flag_use_current_loop = 0U;
     foc.current_control_mode = JERRYFOC_MODE_TORQUE;
@@ -216,21 +225,17 @@ uint8_t JerryFOC_selectMotor(MotorProfile profile)
     foc.g_shared_prev_Uq = foc.g_shared_prev_Ud = foc.g_shared_prev_Ualpha = foc.g_shared_prev_Ubeta = 0.0f;
     foc.hso_feedback = foc.hso_feedback_fault = foc.hso_stop_inhibit = 0U;
     foc.hso_loss_recorded = 0U;
-    JerryFOC_InitPID(&vel_loop_M0,m->vel_P,m->vel_I,m->vel_limit,m->vel_ramp);
-    JerryFOC_InitPID(&pos_loop_M0,m->pos_P,0,m->pos_limit,m->pos_ramp);
-    JerryFOC_InitPID(&id_loop_M0,m->cur_P,m->cur_I,m->cur_limit,m->cur_ramp);
-    iq_loop_M0=id_loop_M0;
-    velocity_limit_global = m->pos_limit;
+    JerryFOC_InitControllers(&m1_controllers,m);
+    velocity_limit_global = MOTOR_DEFAULT_POSITION_SPEED;
     M0_Vel_Flt = (LowPassFilter){.Tf=m->vel_filter_Tf};
     M0_Curr_Flt.y_prev = filtered_velocity_global = id_current = iq_current = 0.0f;
     foc.id_filter_prev = foc.debug_id_filter_prev = 0.0f;
-    foc.angle_source = AngleSrc_Encoder_Init(m->pole_pairs);
+    foc.angle_source = AngleSrc_Encoder_Init(m->pole_pairs*m->encoder_direction);
     StHso_Init(m);
     foc.motor_profile_initialized = 1U;
     foc.motor_alignment_pending = !MotorSampling_IsGlobalStopped();
-    __set_PRIMASK(mask);
-    return 1U;
 }
+void JerryFOC_ReloadMotor(void) { load_motor(MotorParams_GetActiveProfile()); }
 
 /* Share the repeated finite-controller saturation sequence; retain its NaN
  * behavior as well (unlike replacing it with fminf/fmaxf). */
@@ -257,7 +262,7 @@ __RAM_FUNC static float _normalizeAngle(float angle)
     return a >= 0.0f ? a : (a + 2.0f * PI);
 }
 
-__RAM_FUNC float JerryFOC_LPF_Calc(LowPassFilter* filter, float x)
+float JerryFOC_LPF_Calc(LowPassFilter* filter, float x)
 {
     const float Ts = 0.001f;
     float alpha = filter->Tf / (filter->Tf + Ts);
@@ -266,7 +271,7 @@ __RAM_FUNC float JerryFOC_LPF_Calc(LowPassFilter* filter, float x)
     return y;
 }
 
-__RAM_FUNC float JerryFOC_PID_Calc(PIDController* pid, float error)
+float JerryFOC_PID_Calc(PIDController* pid, float error)
 {
     const float Ts = 0.001f;
 
@@ -300,16 +305,15 @@ __RAM_FUNC float JerryFOC_PID_Calc(PIDController* pid, float error)
 /* ================= 底层 FOC 换相 ================= */
 __RAM_FUNC static void setAxisPwm(MotorAxis axis, float da, float db, float dc)
 {
-    float dc_a = _constrain(da, 0.0f, 1.0f);
-    float dc_b = _constrain(db, 0.0f, 1.0f);
-    float dc_c = _constrain(dc, 0.0f, 1.0f);
+    /* Private callers supply either the neutral vector or the final clamped
+     * duties from setAxisVoltage; do not repeat its three saturations. */
 
     TIM_HandleTypeDef *timer = axis == MOTOR_AXIS_1 ? &htim1 : &htim8;
     uint32_t arr = __HAL_TIM_GET_AUTORELOAD(timer);
 
-    __HAL_TIM_SET_COMPARE(timer, TIM_CHANNEL_1, (uint32_t)(dc_a * (float)arr));
-    __HAL_TIM_SET_COMPARE(timer, TIM_CHANNEL_2, (uint32_t)(dc_b * (float)arr));
-    __HAL_TIM_SET_COMPARE(timer, TIM_CHANNEL_3, (uint32_t)(dc_c * (float)arr));
+    __HAL_TIM_SET_COMPARE(timer, TIM_CHANNEL_1, (uint32_t)(da * (float)arr));
+    __HAL_TIM_SET_COMPARE(timer, TIM_CHANNEL_2, (uint32_t)(db * (float)arr));
+    __HAL_TIM_SET_COMPARE(timer, TIM_CHANNEL_3, (uint32_t)(dc * (float)arr));
 }
 
 __RAM_FUNC void JerryFOC_setAxisVoltage(MotorAxis axis, float Uq, float Ud, float angle_el,
@@ -454,19 +458,30 @@ static uint8_t sensored_active(void)
     return (foc.angle_source && AngleSrc_Encoder_IsSource(foc.angle_source)) ? 1U : 0U;
 }
 
-static uint8_t sensored_control_ready(void)
+__attribute__((noinline,noclone)) static uint8_t sensored_control_ready(void)
 {
     return (JerryFOC_isDriveReady() && MT6701_IsContinuous() && MT6701_IsHealthy() &&
             AngleSrc_Encoder_IsAligned()) ? 1U : 0U;
 }
 
-__attribute__((noinline,noclone))
-void JerryFOC_InitPID(PIDController *pid,float p,float i,float limit,float ramp)
+__attribute__((noinline,noclone)) void JerryFOC_InitPID(PIDController *pid,float p,float i,float limit,float ramp)
 {
     pid->P=p; pid->I=i; pid->limit=limit; pid->output_ramp=ramp;
     pid->D=pid->integral_prev=pid->error_prev=pid->output_prev=0;
 }
 
+__attribute__((noinline,noclone)) void JerryFOC_InitControllers(MotorControllers *c,const MotorParams *m)
+{
+    JerryFOC_InitPID(&c->vel,m->vel_P,m->vel_I,m->vel_limit,0);
+    JerryFOC_InitPID(&c->pos,m->pos_P,0,MOTOR_DEFAULT_POSITION_SPEED,0);
+    JerryFOC_InitPID(&c->d,m->Ls*MOTOR_CURRENT_BANDWIDTH_RAD_S,m->Rs*MOTOR_CURRENT_BANDWIDTH_RAD_S,m->bus_voltage,100000.0f);
+    c->q=c->d;
+}
+__attribute__((noinline,noclone)) void JerryFOC_ResetControllers(MotorControllers *c)
+{
+    JerryFOC_ResetPID(&c->vel); JerryFOC_ResetPID(&c->pos);
+    JerryFOC_ResetPID(&c->q); JerryFOC_ResetPID(&c->d);
+}
 __attribute__((noinline)) void JerryFOC_ResetPID(PIDController *pid)
 {
     pid->integral_prev = 0.0f;
@@ -474,7 +489,7 @@ __attribute__((noinline)) void JerryFOC_ResetPID(PIDController *pid)
     pid->output_prev = 0.0f;
 }
 
-void JerryFOC_stop(void)
+__attribute__((noinline,noclone)) void JerryFOC_stop(void)
 {
     MotorDetect_Stop();
     uint32_t mask = __get_PRIMASK();
@@ -491,10 +506,7 @@ void JerryFOC_stop(void)
     g_openloop_debug = 0U;
     foc.current_control_mode = JERRYFOC_MODE_TORQUE;
     JerryFOC_Target_Position = JerryFOC_Target_Velocity = JerryFOC_Target_Iq = 0.0f;
-    JerryFOC_ResetPID(&vel_loop_M0);
-    JerryFOC_ResetPID(&pos_loop_M0);
-    JerryFOC_ResetPID(&id_loop_M0);
-    JerryFOC_ResetPID(&iq_loop_M0);
+    JerryFOC_ResetControllers(&m1_controllers);
     foc.sensored_velocity_reference = filtered_velocity_global;
     foc.g_shared_prev_Uq = foc.g_shared_prev_Ud = foc.g_shared_prev_Ualpha = foc.g_shared_prev_Ubeta = 0.0f;
     setAxisPwm(MOTOR_AXIS_1,0.5f,0.5f,0.5f); /* Neutral preloads, with outputs disconnected. */
@@ -608,7 +620,7 @@ static float update_velocity_reference(float command)
 }
 
 /* ================= 闭环模式设置 ================= */
-void JerryFOC_setMode(JerryFOC_ControlMode mode)
+__attribute__((noinline,noclone)) void JerryFOC_setMode(JerryFOC_ControlMode mode)
 {
     if (mode == JERRYFOC_MODE_POSITION && foc.hso_feedback) (void)JerryFOC_useHSO(0U);
     if (mode == foc.current_control_mode) {
@@ -637,7 +649,7 @@ void JerryFOC_setPosition(float target_pos, float limit)
 
     JerryFOC_Target_Position = base_angle + target_pos;
 
-    if (limit <= 0.0f) limit = active_motor->pos_limit;
+    if (limit <= 0.0f) limit = MOTOR_DEFAULT_POSITION_SPEED;
     limit = fminf(limit, active_motor->max_speed_mech);
     velocity_limit_global = limit;
     pos_loop_M0.limit = limit;
@@ -648,7 +660,7 @@ void JerryFOC_setAbsolutePosition(float target_pos, float limit)
     if (!isfinite(target_pos)) return;
     recover_hso_stop_for_command();
     JerryFOC_Target_Position = target_pos;
-    if (limit <= 0.0f) limit = active_motor->pos_limit;
+    if (limit <= 0.0f) limit = MOTOR_DEFAULT_POSITION_SPEED;
     limit = fminf(limit, active_motor->max_speed_mech);
     velocity_limit_global = limit;
     pos_loop_M0.limit = limit;

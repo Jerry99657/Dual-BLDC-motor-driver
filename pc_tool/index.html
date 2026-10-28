@@ -175,6 +175,105 @@ html[data-theme-reveal]::view-transition-new(root){z-index:1}
 @media(max-width:700px){#uiToasts{left:14px;right:14px;bottom:78px;max-height:max(0px,calc(100dvh - 210px))}.ui-nav-marker{clip-path:polygon(0 0,100% 0,100% calc(100% - 7px),calc(100% - 7px) 100%,0 100%)}}
 @media(prefers-reduced-motion:reduce){.motion-ready [data-ui-button],.motion-ready .nav-item,.motion-ready .stop{transition:none!important}.motion-ready [data-ui-button]:active:not(:disabled){transform:none}.motion-ready [data-ui-button]::before{transition:none!important}.motion-ready [data-ui-button][data-ui-complete]::after{animation:none!important}}
 
+/* A moving edge accompanies the existing button fill, without a glow. */
+.motion-ready [data-ui-button]::after{background:transparent;border-right:3px solid var(--ef-panel)}
+.motion-ready [data-ui-button][data-ui-complete]::after{border:0;background:var(--ef-signal)}
+@keyframes ui-button-edge{0%{transform:translateX(-100%);opacity:0}12%,85%{opacity:1}100%{transform:translateX(0);opacity:0}}
+.motion-ready [data-ui-button]:focus-visible:not(:disabled):not([data-ui-complete])::after{animation:ui-button-edge 300ms var(--ui-mech)}
+@media(hover:hover){.motion-ready [data-ui-button]:hover:not(:disabled):not([data-ui-complete])::after{animation:ui-button-edge 300ms var(--ui-mech)}}
+@media(hover:none){.motion-ready [data-ui-button]:active:not(:disabled):not([data-ui-complete])::after{animation:ui-button-edge 100ms var(--ui-mech)}}
+.motion-ready .panel{position:relative}
+.motion-ready .panel::before{content:'';position:absolute;left:0;right:0;top:-2px;height:5px;background:var(--ef-ink);transform:scaleX(.14);transform-origin:left;transition:transform 400ms var(--ui-mech);pointer-events:none}
+.motion-ready .panel:focus-within::before{transform:scaleX(1)}
+@media(hover:hover){.motion-ready .panel:hover::before{transform:scaleX(1)}}
+/* Content moves inside a stable row, so checkbox and drag targets remain usable. */
+.motion-ready .signal-source,.motion-ready .config-row{position:relative;padding-left:9px;padding-right:10px}
+.motion-ready .signal-source{min-height:30px;padding-top:3px;padding-bottom:3px}
+.motion-ready .signal-source::before,.motion-ready .config-row::before{content:'';position:absolute;left:0;top:4px;bottom:4px;width:3px;background:var(--ef-trace);transform:scaleY(0);transform-origin:top;transition:transform 200ms var(--ui-mech);pointer-events:none}
+.motion-ready .signal-source>label,.motion-ready .signal-source>span,.motion-ready .config-row>span,.motion-ready .config-row>b{transition:transform 250ms var(--ui-snap)}
+.motion-ready .signal-source:focus-within::before,.motion-ready .config-row:focus-within::before{transform:scaleY(1)}
+.motion-ready .signal-source:focus-within>label,.motion-ready .signal-source:focus-within>span,.motion-ready .config-row:focus-within>span,.motion-ready .config-row:focus-within>b{transform:translateX(6px)}
+@media(hover:hover){.motion-ready .signal-source:hover,.motion-ready .config-row:hover{background:var(--field-ground)}.motion-ready .signal-source:hover::before,.motion-ready .config-row:hover::before{transform:scaleY(1)}.motion-ready .signal-source:hover>label,.motion-ready .signal-source:hover>span,.motion-ready .config-row:hover>span,.motion-ready .config-row:hover>b{transform:translateX(6px)}}
+@media(pointer:coarse){.motion-ready .signal-source{min-height:44px}.motion-ready .signal-source:active::before{transform:scaleY(1)}}
+:root{--ui-select-arrow:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1l5 5 5-5' fill='none' stroke='%23696b62' stroke-width='1.5'/%3E%3C/svg%3E")}
+html[data-theme=dark]{--ui-select-arrow:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1l5 5 5-5' fill='none' stroke='%23acafa2' stroke-width='1.5'/%3E%3C/svg%3E")}
+.motion-ready select{appearance:none;-webkit-appearance:none;background-image:var(--ui-select-arrow);background-repeat:no-repeat;background-position:right 9px center;padding-right:29px;white-space:nowrap;text-overflow:ellipsis;overflow:hidden}
+.motion-ready input:not([type=range]):not([type=file]):not([type=checkbox]):focus,.motion-ready select:focus{border-color:var(--ef-trace);background-color:var(--ef-panel)}
+.motion-ready input[type=checkbox]{appearance:none;-webkit-appearance:none;position:relative;display:inline-block;width:17px;height:17px;min-height:17px;padding:0;border:1px solid var(--ef-ink-2);background:var(--ef-panel);cursor:pointer;flex-shrink:0;border-radius:0}
+.motion-ready input[type=checkbox]::after{content:'';position:absolute;left:5px;top:2px;width:5px;height:9px;border:solid var(--ef-panel);border-width:0 2px 2px 0;transform:rotate(45deg);opacity:0;pointer-events:none}
+.motion-ready input[type=checkbox]:checked{background:var(--ef-ink);border-color:var(--ef-ink)}
+.motion-ready input[type=checkbox]:checked::after{opacity:1}
+.motion-ready input[type=checkbox]:disabled{cursor:default}
+.motion-ready input.ui-switch[type=checkbox]{width:43px;height:24px;min-height:24px;background:var(--ef-chip);border-color:var(--ef-rule);clip-path:polygon(0 0,100% 0,100% calc(100% - 4px),calc(100% - 4px) 100%,0 100%)}
+.motion-ready input.ui-switch[type=checkbox]::before{content:'';position:absolute;width:14px;height:14px;top:4px;left:4px;background:var(--ef-ink-2);transform:translateX(0);transition:transform 280ms var(--ui-mech);pointer-events:none}
+.motion-ready input.ui-switch[type=checkbox]::after{display:none}
+.motion-ready input.ui-switch[type=checkbox]:checked{background:var(--ef-ink);border-color:var(--ef-ink)}
+.motion-ready input.ui-switch[type=checkbox]:checked::before{transform:translateX(19px);background:var(--ef-panel)}
+.ui-segment-field{position:relative;display:inline-flex;vertical-align:middle;min-width:0;max-width:100%}
+.motion-ready select.ui-segment-source{position:absolute!important;left:0;top:0;width:1px!important;height:1px!important;min-height:1px!important;padding:0!important;border:0;opacity:0;pointer-events:none}
+.ui-segments{position:relative;isolation:isolate;display:inline-grid;grid-template-columns:repeat(var(--ui-segment-count),minmax(0,1fr));gap:0;padding:2px;border:1px solid var(--ef-rule);background:var(--ef-chip);max-width:100%;min-width:0;clip-path:polygon(0 0,100% 0,100% calc(100% - 6px),calc(100% - 6px) 100%,0 100%)}
+.ui-segment-marker{position:absolute;left:0;top:0;background:var(--ef-ink);pointer-events:none;z-index:0}
+.motion-ready .ui-segments .ui-segment-option{position:relative;z-index:1;min-width:0;min-height:30px;padding:5px 9px;font:inherit;font-size:11px;line-height:1.5;font-weight:500;white-space:nowrap;text-overflow:ellipsis;overflow:hidden;border:0;background:transparent;color:var(--ef-ink);clip-path:none;transform:none;transition:color 160ms var(--ui-ease)}
+.motion-ready .ui-segments .ui-segment-option[aria-checked=true]{color:var(--ef-panel);font-weight:600}
+.motion-ready .ui-segments .ui-segment-option:focus-visible{outline-offset:-3px}
+.motion-ready .ui-segments[aria-disabled=true]{opacity:.6}
+.motion-ready input[type=range]{appearance:none;-webkit-appearance:none;cursor:ew-resize}
+.motion-ready input[type=range]::-webkit-slider-runnable-track{height:3px;background:var(--ef-rule);border:0}
+.motion-ready input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:14px;height:18px;margin-top:-7px;background:var(--ef-ink);border:1px solid var(--ef-panel);border-radius:0}
+.motion-ready input[type=range]::-moz-range-track{height:3px;background:var(--ef-rule);border:0}
+.motion-ready input[type=range]::-moz-range-thumb{width:14px;height:18px;background:var(--ef-ink);border:1px solid var(--ef-panel);border-radius:0}
+.ui-task{margin:14px 0;padding:10px 0;border-top:1px solid var(--ef-rule);border-bottom:1px solid var(--ef-rule)}
+.ui-task-heading{display:flex;align-items:flex-start;gap:12px;justify-content:space-between;font-size:11px;margin-bottom:7px}.ui-task-heading span{min-width:0;overflow-wrap:anywhere}.ui-task-percent{font-weight:600;flex:none;font-size:14px;line-height:1.2}
+.ui-task-bar{position:relative;display:grid;grid-template-columns:repeat(24,minmax(0,1fr));gap:3px;height:8px;overflow:hidden}
+.ui-task-bar>i{background:var(--ef-chip)}.ui-task-bar>i[data-filled=true]{background:var(--ef-ink)}
+.ui-task-detail{font-size:10px;color:var(--ef-ink-2);line-height:1.7;margin:6px 0 0;overflow-wrap:anywhere}
+.ui-task[data-status=error],.ui-task[data-status=cancelled]{border-left:5px solid var(--ef-signal);padding-left:9px}
+.ui-task-bar::after{content:'';display:none;position:absolute;inset:0 auto 0 0;width:8.333%;background:var(--ef-ink)}
+.ui-task-bar[data-unknown=true]::after{display:block;animation:ui-progress-unknown 1200ms steps(12,end) infinite}
+@keyframes ui-progress-unknown{from{transform:translateX(0)}to{transform:translateX(1100%)}}
+@media(pointer:coarse){.motion-ready .ui-segments .ui-segment-option{min-height:44px}.motion-ready input[type=range]::-webkit-slider-thumb{width:20px;height:24px;margin-top:-10px}}
+@media(prefers-reduced-motion:reduce){.ui-task-bar[data-unknown=true]::after{animation:none!important}.motion-ready .panel::before,.motion-ready input.ui-switch::before,.motion-ready .signal-source>label,.motion-ready .signal-source>span,.motion-ready .config-row>span,.motion-ready .config-row>b{transition:none!important}}
+
+/* Operation confirmations share the page's native dialog semantics. */
+.ui-confirm{position:fixed;inset:0;margin:auto;padding:0;border:0;width:min(560px,calc(100vw - 32px));max-width:none;max-height:none;background:transparent;color:var(--ef-ink);overflow:visible}
+.ui-confirm::backdrop{background:#16161680;animation:ui-dialog-backdrop-in 200ms var(--ui-mech) both}
+.ui-confirm[data-closing]::backdrop{animation:ui-dialog-backdrop-out 160ms var(--ui-mech) both}
+@keyframes ui-dialog-backdrop-in{from{opacity:0}to{opacity:1}}
+@keyframes ui-dialog-backdrop-out{from{opacity:1}to{opacity:0}}
+.ui-confirm-card{display:flex;flex-direction:column;max-height:var(--ui-dialog-height,70dvh);padding:24px;background:var(--ef-panel);border-top:5px solid var(--ef-ink);clip-path:polygon(0 0,100% 0,100% calc(100% - 10px),calc(100% - 10px) 100%,0 100%)}
+.ui-confirm-card h2{font-size:21px;line-height:1.5;margin:6px 0 16px;font-weight:700;overflow-wrap:anywhere}
+.ui-confirm-copy{min-height:0;overflow:auto;overscroll-behavior:contain;white-space:pre-line;overflow-wrap:anywhere;font-size:13px;line-height:1.9;padding:0 4px 2px 0}
+.ui-confirm-actions{display:flex;justify-content:flex-end;gap:10px;flex:none;margin-top:22px;padding-top:16px;border-top:1px solid var(--ef-rule)}
+.ui-confirm-actions button{min-height:44px;padding:9px 18px}
+.ui-confirm-stop{position:fixed!important;display:flex;align-items:center;justify-content:center;gap:9px;background:var(--ef-signal)!important;color:#20211e!important;border:0!important;font-weight:700;clip-path:polygon(0 0,100% 0,100% calc(100% - 10px),calc(100% - 10px) 100%,0 100%);z-index:1}
+.ui-confirm-stop b{font-size:12px;letter-spacing:.1em}.ui-confirm-stop:focus-visible{outline:2px solid #20211e;outline-offset:-4px}
+/* Static empty states describe the actual source, without shimmer or fake data. */
+.ui-empty{position:relative;min-width:0;padding:15px 13px 12px;border:1px solid var(--ef-rule);background:var(--ef-panel);color:var(--ef-ink);font-size:11px;line-height:1.8;overflow-wrap:anywhere}
+.ui-empty::before{content:'';position:absolute;left:0;right:0;top:0;height:5px;background:repeating-linear-gradient(-45deg,transparent 0 4px,var(--ef-rule) 4px 5px);pointer-events:none}
+.ui-empty>b,.ui-empty>span{display:block}.ui-empty>b{font-weight:600;font-size:12px;margin-bottom:3px}.ui-empty>span{color:var(--ef-ink-2)}
+.ui-empty button{margin-top:9px;min-height:32px;font-size:11px}
+#sourceEmpty{margin:10px 0 14px}#statusEmpty{margin-bottom:12px}.ui-empty-channel{width:100%;padding:12px 10px 9px;font-size:10px}.ui-empty-channel>b{font-size:11px}
+.ui-empty[data-state=connecting],.ui-empty[data-state=reading],.ui-empty[data-state=loading]{border-left:4px solid var(--ef-signal)}
+.ui-preferences{border-top:1px solid var(--ef-rule);padding-top:14px;margin-top:18px;gap:12px}.ui-preferences label{display:flex;align-items:center;gap:10px;font-size:12px}.ui-preferences small{font-size:10px;line-height:1.8}
+.motion-ready input.ui-switch[type=checkbox]::before{background:var(--ef-panel)}
+.motion-ready input.ui-switch[type=checkbox]:checked{background:var(--ef-signal);border-color:var(--ef-signal)}
+.motion-ready input.ui-switch[type=checkbox]:checked::before{background:#20211e}
+.ui-task-bar>i[data-filled=true],.ui-task-bar[data-unknown=true]::after{background:var(--ef-signal)}
+@media(prefers-reduced-motion:reduce){.ui-confirm::backdrop{animation:none!important}}
+@media(max-width:700px){.ui-confirm-card{padding:18px}.ui-confirm-card h2{font-size:19px}.ui-confirm-copy{font-size:12px}.ui-confirm-actions{gap:8px}.ui-confirm-actions button{flex:1;min-width:0;padding:9px 12px;font-size:12px}.ui-confirm-stop{font-size:12px;gap:6px}.ui-confirm-stop b{font-size:10px}.ui-preferences{align-items:flex-start;flex-direction:column}}
+@media(pointer:coarse){
+ .motion-ready .plot-channel button{min-width:44px;min-height:44px;width:44px;height:44px;flex:none;padding:0;font-size:18px}
+ .motion-ready .signal-source>label{display:flex;align-items:center;min-height:44px}
+ .motion-ready label:has(>input[type=checkbox]){min-height:44px}
+ .ui-empty button{min-height:44px}
+ .plot-buffer{height:100px}.plot-buffer-track,.plot-buffer-window{top:65px}
+ .plot-buffer-handle{width:44px;height:44px;min-height:44px;top:44px}
+ .plot-buffer-handle::after{top:16px}
+ .plot-buffer-handle.middle{top:0}.plot-buffer-handle.middle::after{top:8px;left:16px}
+ .plot-buffer-handle.middle::before{left:21px;top:19px;height:48px}
+}
+
+
 </style>
 </head>
 <body>
@@ -212,20 +311,32 @@ html[data-theme-reveal]::view-transition-new(root){z-index:1}
 <div class="row"><select id="settingsAxis"><option value="1">M1</option><option value="2">M2</option></select><button id="loadSettings">用最近读回值填入</button><button id="applySettings" class="primary">应用本页设置</button><button id="saveSettings">立即请求保存</button></div>
 <div class="console-grid"><div><h3>选中电机</h3><div id="axisEditors"></div></div><div><h3>全局</h3><div id="globalEditors"></div></div></div><p id="settingsNote" class="muted"></p>
 <div class="row"><button id="align">选中轴重新对齐</button><button id="clearIbus">清除 IBUS 锁存</button><button id="resetSettings">恢复板端默认设置</button><label>导入配置 <input id="importConfig" type="file" accept=".json"></label></div>
-<p class="muted">导入会预览改动，确认后锁存暂停并逐项应用；发生拒绝即中止，已生效的项可重新读取确认。不会自动启动电机。</p></section>
-<section id="detectPanel" class="panel"><h2><span class="eyebrow">// MOTOR IDENTIFICATION</span>电机参数辨识</h2><div class="row"><label>测试电流 <input id="detectCurrent" type="number" min="100" max="500" step="50" value="300"> mA</label><button id="startDetect">开始辨识</button><button id="stopDetect">停止辨识</button><button id="saveDetect">保存完整结果</button></div><p class="muted">使用板端现有 Single M1 编码器辨识，电机会转动。保存结果不自动替换型号缓存设置；进度与结果见实时板端状态。</p><div class="row"><select id="hsoAction"><option>On</option><option>Off</option><option>Learn</option><option>Use</option><option>Encoder</option></select><button id="applyHso">执行 HSO 操作</button></div></section>
+<p class="muted">导入会预览改动，确认后锁存暂停并逐项应用；发生拒绝即中止，已生效的项可重新读取确认。不会自动启动电机。</p>
+<div class="row ui-preferences"><label>页面动效 <select id="motionMode" aria-label="页面动效"><option value="full">完整</option><option value="calm">简洁</option></select></label><small id="motionNote">仅保存在当前浏览器，不写入板端设置。</small></div></section>
+<section id="detectPanel" class="panel"><h2><span class="eyebrow">// MOTOR IDENTIFICATION</span>电机参数辨识</h2><div class="row"><label>测试电流 <input id="detectCurrent" type="number" min="100" max="500" step="50" value="300"> mA</label><button id="startDetect">开始辨识</button><button id="stopDetect">停止辨识</button><button id="saveDetect">保存完整结果</button></div><p class="muted">使用 Single M1 编码器辨识，电机会转动。保存与应用分开；旧版无型号标记的结果仅供查看，请重新辨识并保存后再应用。</p><div class="row"><label>应用到 <select id="calibrationAxis"><option value="1">M1</option><option value="2">M2</option></select></label><button id="applyDetection">应用保存的测量值</button><button id="restoreMotorPreset">恢复该轴预设电参</button><button id="readMotorParams">读取已应用参数</button></div><p class="muted">Apply／Preset 保留用于 2804／4015。需要两轴停止及编码器模式，应用后会重新对齐。向 M2 复制电参时保留 M2 原有编码器方向。</p><div class="row"><label>独立电机槽位 <select id="customSlot"><option value="1">Custom 1</option><option value="2">Custom 2</option><option value="3">Custom 3</option></select></label><button id="saveCustom">将已保存结果存入槽位</button></div><p class="muted">先保存完整结果，再存入槽位。保存不会切换电机；有数据的槽位才出现在型号列表。两轴均需停止，覆盖前两轴都必须选择其他型号。保护阈值和其余控制参数继承辨识时的基础型号；请等待 Saved 再断电。</p><div class="row"><select id="hsoAction"><option>On</option><option>Off</option><option>Learn</option><option>Use</option><option>Encoder</option></select><button id="applyHso">执行 HSO 操作</button></div></section>
 <section id="diagnosticsPanel" class="panel"><h2><span class="eyebrow">// DIAGNOSTICS</span>板端诊断</h2><div class="row"><select id="diagAxis"><option value="1">M1</option><option value="2">M2</option></select><select id="diagGroup"><option value="0">Drive</option><option value="1">About</option><option value="2">Motion</option><option value="3">Encoder</option><option value="4">ADC / VREF</option><option value="5">HSO</option><option value="6">Diagnostics / Flash</option><option value="7">SixStep</option></select><button id="readDiag">读取专题</button><button id="clearDiag">清除诊断记录</button></div><p class="muted">复用板端 Status 行；逐行采样，带板端时间，不改变 LCD 当前 View。R95 的 Diagnostics 附加完整中断时序、首次故障和 CPU 异常记录；仅停机后可清除，清除不会解锁保护。</p><div id="diagRows"></div></section>
 <section id="replayPanel" class="panel"><h2><span class="eyebrow">// CSV PLAYBACK</span>记录与回放</h2><p class="muted">直接保存 CSV 到电脑。导入本工具生成的 CSV，拖动时间轴检查历史曲线。</p><input type="file" id="file" accept=".csv"><div class="row"><button id="live">返回实时</button><span id="csvPlotTarget" class="muted">画布 1</span><input type="range" id="scrub" min="0" max="1000" value="1000" aria-label="回放时间" style="flex:1"></div><p class="muted">HSO relative_position 是本次连续锁定后的估算相对位移，每次启动重新建零；不是断电保持的绝对位置。</p><p class="muted">每条命令显示编号与板端回执。超时表示结果未知，运动指令不会自动重发。</p></section>
+<section id="runtimePanel" class="panel wide"><h2><span class="eyebrow">// LOCAL DIAGNOSTICS</span>浏览器运行诊断</h2><p class="muted">查看电脑端帧率、绘图耗时和采样缓冲占用。实时缓存、暂停快照和峰谷索引共用 128 MiB 缓冲预算；此数值不等于浏览器进程的全部内存。</p><details id="runtimeDetails"><summary>查看运行指标</summary><div id="runtimeValues"></div></details><div class="row" style="margin-top:14px"><button id="exportDiagnostics">导出诊断 JSON</button></div><p class="muted">诊断包含最近两分钟指标、最近错误及上次会话的最后检查点，不包含原始采样值，不向开发板发送指令。上次会话记录不能单独用于判定浏览器是否崩溃。</p></section>
 <footer class="console-footer wide"><span>FOC / DUAL MOTOR CONTROL TERMINAL</span><span>R102 / 本地单文件 / <a href="#serialPanel">串口连接 ↑</a></span></footer></main>
 <script>
 'use strict';
 const $=id=>document.getElementById(id),colors=['#3269a4','#9a651d','#7953aa','#287c89','#905478','#6a733a','#4e6892','#8e743e','#6675a2','#80634b','#527d86','#686d73'];
 const plotPalette={label:'#6b6e62',heading:'#45493e',grid:'#e2e5da',gridX:'#e9ebe3',border:'#c9cdbf',origin:'#797c6f',hover:'#838775',box:'#20211e14',selection:'#575e48'};
 let cursor=0,paused=false,replaying=false,recording=false,series=new Map(),selected=new Set(),lastKind=null,epoch=null,latestTime=0,replayEnd=0,replayStart=0,lastConnection='',lastStatus={},recordPath='';
+function setText(element,value){value=String(value);if(element.textContent!==value)element.textContent=value}
+const runtimeStats={startedAt:performance.now(),liveFrames:0,parsedPoints:0,refreshes:0,paints:0,paintMs:0,maxPaintMs:0,indexNodes:0,rawScans:0,paintTimes:[],errors:[],history:[]};
 function log(text){$('log').textContent=new Date().toLocaleTimeString()+' '+text+'\n'+$('log').textContent.slice(0,7000)}
-async function act(fn){try{$('error').textContent='';await fn()}catch(e){$('error').textContent=e.message;log('ERROR '+e.message)}}
+async function act(fn){try{setText($('error'),'');await fn()}catch(e){rememberRuntimeError(e.message,'operation');setText($('error'),e.message);log('ERROR '+e.message)}}
+let requestConfirmation=null;
+async function confirmAction(message,options={}){
+ const session=sessionToken,batch=batchEpoch,device=lastEpoch,wasConnected=connected;
+ const valid=()=>session===sessionToken&&batch===batchEpoch&&device===lastEpoch&&wasConnected===connected;
+ const accepted=requestConfirmation?await requestConfirmation(message,options,valid):confirm(message);
+ return !!accepted&&valid();
+}
 function clear(){series.clear();cacheRevision++;cacheDropTime=-Infinity;lastKind=null;epoch=null;latestTime=0;resetPlotData();renderSignals();draw()}
 function add(frame){
+ runtimeStats.parsedPoints+=frame.values.length;if(!replaying)runtimeStats.liveFrames++;
  if(epoch!==null&&epoch!==frame.epoch)clear();epoch=frame.epoch;
  if(lastKind!==null&&lastKind!==frame.kind)clear();lastKind=frame.kind;epoch=frame.epoch;latestTime=frame.ms/1000;
  let changed=false;
@@ -234,7 +345,7 @@ function add(frame){
   if(!series.has(id)){
    series.set(id,{key,unit,points:new PlotSamples(),value:null});
    if(!channelCatalog.has(id))channelCatalog.set(id,{key,unit,color:colors[channelCatalog.size%colors.length]});
-   const first=plots[0];if(first?.autoSelect&&first.selected.size<8)first.selected.add(id);changed=true;
+    changed=true;
   }
   const s=series.get(id);s.points.push([latestTime,value]);s.value=value;
  }
@@ -247,35 +358,72 @@ function add(frame){
 const clampPlot=(value,lo,hi)=>Math.max(lo,Math.min(hi,value));
 /* Circular Float64 storage keeps original samples without shifting long arrays.
  * Views share this storage; only explicit Pause copies a canvas's own history. */
+const SAMPLE_BLOCK=16;
+function sampleAllocation(capacity){const blocks=Math.ceil(Math.max(32,capacity)/SAMPLE_BLOCK),tree=2**Math.ceil(Math.log2(blocks));return Math.max(32,capacity)*16+tree*24}
 class PlotSamples{
- constructor(capacity=32){this.times=new Float64Array(Math.max(32,capacity));this.values=new Float64Array(this.times.length);this.head=0;this.length=0}
+ constructor(capacity=32,deferIndex=false){this.times=new Float64Array(Math.max(32,capacity));this.values=new Float64Array(this.times.length);this.head=0;this.length=0;if(!deferIndex)this.buildIndex()}
+ get byteLength(){return this.times.byteLength+this.values.byteLength+this.minimum.byteLength+this.maximum.byteLength+this.gaps.byteLength}
  timeAt(index){return this.times[(this.head+index)%this.times.length]}
  valueAt(index){const value=this.values[(this.head+index)%this.values.length];return Number.isFinite(value)?value:null}
  at(index){if(index<0)index+=this.length;return index>=0&&index<this.length?[this.timeAt(index),this.valueAt(index)]:undefined}
+ mergeNode(node){const a=node*2,b=a+1,amin=this.minimum[a],bmin=this.minimum[b],amax=this.maximum[a],bmax=this.maximum[b];this.minimum[node]=amin<0?bmin:bmin<0?amin:this.values[amin]<=this.values[bmin]?amin:bmin;this.maximum[node]=amax<0?bmax:bmax<0?amax:this.values[amax]>=this.values[bmax]?amax:bmax;this.gaps[node]=this.gaps[a]+this.gaps[b]}
+ indexBlock(block,parents=true){
+  const node=this.treeSize+block,start=block*SAMPLE_BLOCK,end=Math.min(start+SAMPLE_BLOCK,this.values.length);let min=-1,max=-1,gaps=0;
+  for(let i=start;i<end;i++){const v=this.values[i];if(!Number.isFinite(v)){gaps++;continue}if(min<0||v<this.values[min])min=i;if(max<0||v>this.values[max])max=i}
+  this.minimum[node]=min;this.maximum[node]=max;this.gaps[node]=gaps;
+  if(parents)for(let i=node>>>1;i;i>>>=1)this.mergeNode(i);
+ }
+ buildIndex(){const blocks=Math.ceil(this.times.length/SAMPLE_BLOCK);this.treeSize=2**Math.ceil(Math.log2(blocks));this.minimum=new Int32Array(this.treeSize*2).fill(-1);this.maximum=new Int32Array(this.treeSize*2).fill(-1);this.gaps=new Uint32Array(this.treeSize*2);for(let i=0;i<blocks;i++)this.indexBlock(i,false);for(let i=this.treeSize-1;i;i--)this.mergeNode(i)}
  resize(capacity){
-  const times=new Float64Array(capacity),values=new Float64Array(capacity);
-  for(let i=0;i<this.length;i++){times[i]=this.timeAt(i);values[i]=this.values[(this.head+i)%this.values.length]}
-  this.times=times;this.values=values;this.head=0;
+  const times=new Float64Array(capacity),values=new Float64Array(capacity),first=Math.min(this.length,this.times.length-this.head);
+  times.set(this.times.subarray(this.head,this.head+first));values.set(this.values.subarray(this.head,this.head+first));
+  if(first<this.length){times.set(this.times.subarray(0,this.length-first),first);values.set(this.values.subarray(0,this.length-first),first)}
+  this.times=times;this.values=values;this.head=0;this.buildIndex();
  }
- push(point){
-  if(this.length===this.times.length)this.resize(this.times.length*2);
-  const index=(this.head+this.length)%this.times.length;this.times[index]=point[0];this.values[index]=Number.isFinite(point[1])?point[1]:NaN;this.length++;
- }
+ push(point){if(this.length===this.times.length)this.resize(this.times.length*2);const index=(this.head+this.length)%this.times.length;this.times[index]=point[0];this.values[index]=Number.isFinite(point[1])?point[1]:NaN;this.length++;this.indexBlock(Math.floor(index/SAMPLE_BLOCK))}
  discard(count){count=Math.min(count,this.length);this.head=(this.head+count)%this.times.length;this.length-=count;if(!this.length)this.head=0;return count}
  discardBefore(time){return this.discard(plotLowerBound(this,time-1e-9))}
- compact(){if(this.times.length>Math.max(32,this.length)*4)this.resize(Math.max(32,this.length*2))}
+ compact(force=false){const size=Math.max(32,Math.ceil(this.length*1.125));if(force?this.times.length>size:this.times.length>Math.max(32,this.length)*4)this.resize(size)}
  slice(start=0,end=this.length){return copyPlotSamples(this,start,end)}
+ visitRange(start,end,accept,point){
+  start=Math.max(0,start);end=Math.min(this.length,end);if(end<=start)return;
+  const capacity=this.times.length,logical=p=>(p-this.head+capacity)%capacity;
+  const visit=(node,lo,hi,a,b)=>{
+   const left=lo*SAMPLE_BLOCK,right=Math.min(hi*SAMPLE_BLOCK,capacity);if(left>=b||right<=a)return;
+   runtimeStats.indexNodes++;
+   if(left>=a&&right<=b&&accept(logical(left),logical(left)+(right-left),this.minimum[node]<0?-1:logical(this.minimum[node]),this.maximum[node]<0?-1:logical(this.maximum[node]),this.gaps[node]))return;
+   if(hi-lo===1){for(let i=Math.max(a,left);i<Math.min(b,right);i++){runtimeStats.rawScans++;point(logical(i),Number.isFinite(this.values[i])?this.values[i]:null)}return}
+   const mid=(lo+hi)>>>1;visit(node*2,lo,mid,a,b);visit(node*2+1,mid,hi,a,b);
+  };
+  const first=(this.head+start)%capacity,count=end-start,tail=Math.min(capacity,first+count);visit(1,0,this.treeSize,first,tail);if(tail-first<count)visit(1,0,this.treeSize,0,count-(tail-first));
+ }
+ rangeSummary(start,end){
+  let min=Infinity,max=-Infinity,minIndex=-1,maxIndex=-1,gaps=0;
+  const take=(i,v)=>{if(!Number.isFinite(v)){gaps++;return}if(v<min||v===min&&(minIndex<0||i<minIndex)){min=v;minIndex=i}if(v>max||v===max&&(maxIndex<0||i<maxIndex)){max=v;maxIndex=i}};
+  this.visitRange(start,end,(a,b,mi,ma,g)=>{gaps+=g;if(mi>=0)take(mi,this.valueAt(mi));if(ma>=0)take(ma,this.valueAt(ma));return true},take);
+  return {min,max,minIndex,maxIndex,gaps};
+ }
 }
 class PlotSampleView{
- constructor(source,start,end=source.length){this.source=source;this.start=start;this.length=Math.max(0,end-start)}
+ constructor(source,start,end=source.length){while(source instanceof PlotSampleView){start+=source.start;end+=source.start;source=source.source}this.source=source;this.start=start;this.length=Math.max(0,end-start)}
  timeAt(index){return plotTimeAt(this.source,this.start+index)}
  valueAt(index){return plotValueAt(this.source,this.start+index)}
  at(index){if(index<0)index+=this.length;return index>=0&&index<this.length?[this.timeAt(index),this.valueAt(index)]:undefined}
  slice(start=0,end=this.length){return copyPlotSamples(this,start,end)}
+ visitRange(start,end,accept,point){this.source.visitRange(this.start+start,this.start+Math.min(end,this.length),(a,b,mi,ma,g)=>accept(a-this.start,b-this.start,mi<0?-1:mi-this.start,ma<0?-1:ma-this.start,g),(i,v)=>point(i-this.start,v))}
+ rangeSummary(start,end){const r=this.source.rangeSummary(this.start+start,this.start+Math.min(end,this.length));return {...r,minIndex:r.minIndex<0?-1:r.minIndex-this.start,maxIndex:r.maxIndex<0?-1:r.maxIndex-this.start}}
 }
 function plotTimeAt(points,index){return points.timeAt?points.timeAt(index):points[index][0]}
 function plotValueAt(points,index){return points.valueAt?points.valueAt(index):points[index][1]}
-function copyPlotSamples(points,start,end){const copy=new PlotSamples(Math.max(32,end-start));for(let i=start;i<end;i++)copy.push([plotTimeAt(points,i),plotValueAt(points,i)]);return copy}
+function copyPlotSamples(points,start,end){
+ const count=Math.max(0,end-start),copy=new PlotSamples(Math.max(32,count),true);let source=points,offset=start;
+ while(source instanceof PlotSampleView){offset+=source.start;source=source.source}
+ if(source instanceof PlotSamples){const at=(source.head+offset)%source.times.length,n=Math.min(count,source.times.length-at);copy.times.set(source.times.subarray(at,at+n));copy.values.set(source.values.subarray(at,at+n));if(n<count){copy.times.set(source.times.subarray(0,count-n),n);copy.values.set(source.values.subarray(0,count-n),n)}}
+ else for(let i=0;i<count;i++){copy.times[i]=plotTimeAt(points,start+i);const value=plotValueAt(points,start+i);copy.values[i]=Number.isFinite(value)?value:NaN}
+ copy.length=count;copy.buildIndex();return copy;
+}
+function plotSummary(points,start,end){if(points.rangeSummary)return points.rangeSummary(start,end);let min=Infinity,max=-Infinity,minIndex=-1,maxIndex=-1,gaps=0;for(let i=start;i<end;i++){const v=plotValueAt(points,i);runtimeStats.rawScans++;if(!Number.isFinite(v)){gaps++;continue}if(v<min){min=v;minIndex=i}if(v>max){max=v;maxIndex=i}}return {min,max,minIndex,maxIndex,gaps}}
+
 function plotLowerBound(points,time){let lo=0,hi=points.length;while(lo<hi){const mid=(lo+hi)>>>1;if(plotTimeAt(points,mid)<time)lo=mid+1;else hi=mid}return lo}
 function plotNearest(points,time){
  if(!points.length||time<plotTimeAt(points,0)||time>points.at(-1)[0])return null;
@@ -299,6 +447,48 @@ function plotNumber(value,step=0){
  return value.toFixed(decimals).replace(/(\.\d*?[1-9])0+$|\.0+$/,'$1');
 }
 function plotValue(value){return Number.isSafeInteger(value)?String(value):plotNumber(value)}
+// Keep full-resolution samples in the cache. Only dense on-screen paths use
+// first/min/max/last points per physical pixel, in their original time order.
+function strokePlotSamples(c,points,first,last,start,span,left,right,top,bottom,lo,hi,dpr){
+ const scaleX=(right-left)/span,scaleY=(bottom-top)/(hi-lo);let pen=false,pathPoints=0,lastX=0,lastY=0;
+ c.beginPath();
+ const emit=index=>{
+  const x=left+(plotTimeAt(points,index)-start)*scaleX,y=bottom-(plotValueAt(points,index)-lo)*scaleY;
+  if(!Number.isFinite(x)||!Number.isFinite(y)){pen=false;return}
+  // Avoid handing an arbitrarily large native path to Canvas/Skia.
+  if(pathPoints>=2048){c.stroke();c.beginPath();pathPoints=0;if(pen){c.moveTo(lastX,lastY);pathPoints++}}
+  if(pen)c.lineTo(x,y);else c.moveTo(x,y);
+  lastX=x;lastY=y;pen=true;pathPoints++;
+ };
+ if(last-first<=Math.max(1,(right-left)*dpr)*4){
+  runtimeStats.rawScans+=last-first;for(let i=first;i<last;i++)if(Number.isFinite(plotValueAt(points,i)))emit(i);else pen=false;
+ }else{
+  let column=NaN,a=-1,z=-1,min=-1,max=-1,minValue=Infinity,maxValue=-Infinity;
+  const flush=()=>{
+   if(a<0)return;
+   emit(a);let previous=a;
+   for(const i of min<max?[min,max]:[max,min])if(i!==previous&&i!==a){emit(i);previous=i}
+   if(z!==previous)emit(z);
+   a=z=min=max=-1;minValue=Infinity;maxValue=-Infinity;
+  };
+  const consume=(i,value)=>{
+   if(!Number.isFinite(value)){flush();pen=false;column=NaN;return}
+   const next=Math.floor((left+(plotTimeAt(points,i)-start)*scaleX)*dpr);
+   if(next!==column){flush();column=next}if(a<0)a=i;z=i;
+   if(value<minValue){minValue=value;min=i}if(value>maxValue){maxValue=value;max=i}
+  };
+  if(points.visitRange)points.visitRange(first,last,(from,to,mi,ma,gaps)=>{
+   if(gaps===to-from){flush();pen=false;column=NaN;return true}if(gaps)return false;
+   const next=Math.floor((left+(plotTimeAt(points,from)-start)*scaleX)*dpr);
+   if(next!==Math.floor((left+(plotTimeAt(points,to-1)-start)*scaleX)*dpr))return false;
+   if(next!==column){flush();column=next}if(a<0)a=from;z=to-1;
+   const low=plotValueAt(points,mi),high=plotValueAt(points,ma);if(low<minValue){minValue=low;min=mi}if(high>maxValue){maxValue=high;max=ma}return true;
+  },consume);else for(let i=first;i<last;i++){runtimeStats.rawScans++;consume(i,plotValueAt(points,i))}
+
+  flush();
+ }
+ c.stroke();
+}
 const MAX_PLOTS=6,CHANNEL_MIME='application/x-foc-channel';
 const PLOT_MIN_SPAN=.001,PLOT_MAX_SPAN=86400;
 function plotDuration(value){return value>0&&value<1?plotNumber(value*1000)+' ms':plotNumber(value)+' s'}
@@ -308,36 +498,113 @@ const channelCatalog=new Map(),plots=[];
 // the canvas explicitly reports the shorter retained history; CSV stays intact.
 const MAX_CACHE_POINTS=2000000;
 let cacheRevision=0,cacheDropTime=-Infinity;
-function cacheHorizon(){return plots.length?Math.max(...plots.map(plot=>plot.view.cacheSeconds)):10}
-function retainLiveCache(compact=false,limit=MAX_CACHE_POINTS){
- const cutoff=latestTime-cacheHorizon();let count=0;
- for(const source of series.values()){source.points.discardBefore(cutoff);source.points.compact();count+=source.points.length}
- while(count>limit){
-  let oldest=null,time=Infinity;
-  for(const source of series.values())if(source.points.length&&source.points.timeAt(0)<time){oldest=source.points;time=oldest.timeAt(0)}
-  if(!oldest)break;cacheDropTime=Math.max(cacheDropTime,time);oldest.discard(1);count--;
- }
- if(compact||count===limit)for(const source of series.values())source.points.compact();
- cacheRevision++;
+const CACHE_MEMORY_BYTES=128*1024*1024;
+function sampleStorage(points){while(points instanceof PlotSampleView)points=points.source;return points}
+function cacheMemory(){
+ const live=new Set(),snapshots=new Set();let livePoints=0,snapshotPoints=0,liveBytes=0,snapshotBytes=0,indexBytes=0;
+ for(const entry of series.values())live.add(sampleStorage(entry.points));
+ for(const plot of plots)if(plot.view.frozen)for(const entry of plot.view.frozen.values())snapshots.add(sampleStorage(entry.points));
+ for(const store of live){livePoints+=store.length;liveBytes+=store.byteLength;indexBytes+=store.byteLength-store.times.byteLength-store.values.byteLength}
+ for(const store of snapshots)if(!live.has(store)){snapshotPoints+=store.length;snapshotBytes+=store.byteLength;indexBytes+=store.byteLength-store.times.byteLength-store.values.byteLength}
+ return {livePoints,snapshotPoints,liveBytes,snapshotBytes,indexBytes,totalBytes:liveBytes+snapshotBytes,budgetBytes:CACHE_MEMORY_BYTES,snapshotStores:snapshots.size};
 }
+function rememberRuntimeError(message,source='page'){
+ message=String(message||'未知错误').slice(0,2048);const previous=runtimeStats.errors.at(-1),now=Date.now();
+ if(previous&&previous.message===message&&now-previous.at<1000)return;
+ runtimeStats.errors.push({at:now,source,message});if(runtimeStats.errors.length>100)runtimeStats.errors.shift();
+}
+let runtimeCheckpoint=null,runtimeMeasurement=null,runtimePrevious={at:performance.now(),frames:0,refreshes:0,paints:0,paintMs:0,mode:''};
+function runtimeMode(){return demo?'demo':replaying?'replay':connected?'serial':'offline'}
+function runtimeSnapshot(){
+ const memory=cacheMemory(),timings=runtimeStats.paintTimes.slice().sort((a,b)=>a-b),p95=timings.length?timings[Math.min(timings.length-1,Math.floor(timings.length*.95))]:0;
+ return {format:'FOC-browser-diagnostics',version:1,at:new Date().toISOString(),uptimeSeconds:(performance.now()-runtimeStats.startedAt)/1000,browser:{userAgent:navigator.userAgent||'',dpr:globalThis.devicePixelRatio||1,width:globalThis.innerWidth||0,height:globalThis.innerHeight||0},
+  source:runtimeMode(),connected,outputFormat,firmware:boardConfig?.firmware??null,parser:{frames:received,crcErrors:parser.crc_errors,lost:parser.lost,resets:parser.resets,discarded:parser.discarded},
+  sampling:{frames:runtimeStats.liveFrames,parsedPoints:runtimeStats.parsedPoints,rateHz:runtimeMeasurement?.mode===runtimeMode()?runtimeMeasurement.frameHz:null},
+  rendering:{automaticHz:runtimeMeasurement?.refreshHz??0,paints:runtimeStats.paints,averageMs:runtimeStats.paints?runtimeStats.paintMs/runtimeStats.paints:0,recentP95Ms:p95,maxMs:runtimeStats.maxPaintMs,indexNodes:runtimeStats.indexNodes,rawScans:runtimeStats.rawScans},
+  memory,plots:plots.map(p=>({number:p.index+1,shown:p.index<visiblePlots,inViewport:p.inViewport,paused:!!p.view.frozen,cacheSeconds:p.view.cacheSeconds,spanSeconds:p.view.span,selected:[...p.selected]})),
+  motion:document.documentElement?.dataset?.efMotion||'full',theme:document.documentElement?.dataset?.theme||'light',errors:runtimeStats.errors.slice(),history:runtimeStats.history.slice(),previousSession:runtimeCheckpoint};
+}
+function sampleRuntimeDiagnostics(){
+ const now=performance.now(),elapsed=(now-runtimePrevious.at)/1000,mode=runtimeMode(),changed=runtimePrevious.mode!==mode;
+ if(elapsed<.75)return;
+ runtimeMeasurement={at:new Date().toISOString(),mode,frameHz:changed||mode==='replay'||mode==='offline'?null:(runtimeStats.liveFrames-runtimePrevious.frames)/elapsed,refreshHz:(runtimeStats.refreshes-runtimePrevious.refreshes)/elapsed,
+  paints:runtimeStats.paints-runtimePrevious.paints,averagePaintMs:runtimeStats.paints===runtimePrevious.paints?0:(runtimeStats.paintMs-runtimePrevious.paintMs)/(runtimeStats.paints-runtimePrevious.paints),memoryBytes:cacheMemory().totalBytes};
+ runtimePrevious={at:now,frames:runtimeStats.liveFrames,refreshes:runtimeStats.refreshes,paints:runtimeStats.paints,paintMs:runtimeStats.paintMs,mode};
+ runtimeStats.history.push(runtimeMeasurement);if(runtimeStats.history.length>120)runtimeStats.history.shift();
+}
+
+function cacheHorizon(){return plots.length?Math.max(...plots.map(plot=>plot.view.cacheSeconds)):10}
+function trimLiveCount(limit){
+ let count=0,lo=Infinity,hi=-Infinity;for(const s of series.values()){count+=s.points.length;if(s.points.length){lo=Math.min(lo,s.points.timeAt(0));hi=Math.max(hi,s.points.at(-1)[0])}}
+ if(count<=limit)return;
+ if(count-limit>128){
+  for(let i=0;i<48;i++){const mid=(lo+hi)/2;let keep=0;for(const s of series.values())keep+=s.points.length-plotLowerBound(s.points,mid);if(keep>limit)lo=mid;else hi=mid}
+  for(const s of series.values()){const n=plotLowerBound(s.points,hi);if(n){cacheDropTime=Math.max(cacheDropTime,s.points.timeAt(n-1));s.points.discard(n)}}
+  count=0;for(const s of series.values())count+=s.points.length;
+ }
+ while(count>limit){let oldest=null,time=Infinity;for(const s of series.values())if(s.points.length&&s.points.timeAt(0)<time){oldest=s.points;time=oldest.timeAt(0)}if(!oldest)break;cacheDropTime=Math.max(cacheDropTime,time);oldest.discard(1);count--}
+}
+function retainLiveCache(compact=false,limit=MAX_CACHE_POINTS){
+ const cutoff=latestTime-cacheHorizon();for(const s of series.values()){s.points.discardBefore(cutoff);s.points.compact()}
+ trimLiveCount(limit);
+ let memory=cacheMemory();
+ if(memory.totalBytes>CACHE_MEMORY_BYTES){
+  for(const s of series.values())s.points.compact(true);memory=cacheMemory();
+  if(memory.totalBytes>CACHE_MEMORY_BYTES){const available=Math.max(0,CACHE_MEMORY_BYTES-memory.snapshotBytes);trimLiveCount(Math.max(0,Math.floor(available/23)-series.size*32));for(const s of series.values())s.points.compact(true)}
+ }
+ if(compact)for(const s of series.values())s.points.compact();cacheRevision++;
+}
+function freezePlotGroup(targets){
+ const pool=[],plans=[],prepared=[];
+ for(const p of plots)if(p.view.frozen)for(const entry of p.view.frozen.values())if(entry.captureRevision===cacheRevision)pool.push({source:entry.captureSource,from:entry.captureFrom,to:entry.captureTo,store:sampleStorage(entry.points)});
+ for(const {plot,end}of [...targets].sort((a,b)=>b.plot.view.cacheSeconds-a.plot.view.cacheSeconds)){
+  const entries=[];for(const [id,s]of plot.source())if(plot.selected.has(id)){
+   const source=sampleStorage(s.points),from=s.points instanceof PlotSampleView?s.points.start:0,to=from+s.points.length;
+   let plan=pool.find(p=>p.source===source&&p.from<=from&&p.to>=to);
+   if(!plan){plan={source,from,to,view:s.points,store:null,bytes:sampleAllocation(s.points.length)};pool.push(plan);plans.push(plan)}
+   entries.push({id,s,plan,from,to});
+  }prepared.push({plot,end,entries});
+ }
+ const memory=cacheMemory(),extra=plans.reduce((n,p)=>n+p.bytes,0);
+ if(memory.totalBytes+extra>CACHE_MEMORY_BYTES){setText($('error'),'暂停所需快照超过共享的 128 MiB 采样缓冲预算。请缩短缓存时长或继续其他暂停画布后重试；已有快照保持不变。');log('暂停未执行：采样缓冲预算不足');return false}
+ try{for(const plan of plans)plan.store=copyPlotSamples(plan.view,0,plan.view.length)}catch(error){setText($('error'),'无法分配暂停快照，现有画布保持原状态：'+error.message);return false}
+ for(const {plot,end,entries}of prepared){const map=new Map();for(const {id,s,plan,from,to}of entries)map.set(id,{...s,points:new PlotSampleView(plan.store,from-plan.from,to-plan.from),captureSource:plan.source,captureRevision:cacheRevision,captureFrom:plan.from,captureTo:plan.to});plot.installSnapshot(map,end)}
+ for(const {plot}of prepared)plot.draw();return true;
+}
+function trimFrozenCache(plot){
+ for(const entry of plot.view.frozen.values()){
+  const cut=plotLowerBound(entry.points,plot.view.origin-plot.view.cacheSeconds-1e-9);if(!cut)continue;
+  const store=sampleStorage(entry.points);let references=0;for(const p of plots)if(p.view.frozen)for(const e of p.view.frozen.values())if(sampleStorage(e.points)===store)references++;
+  const view=new PlotSampleView(entry.points,cut);entry.points=references===1?copyPlotSamples(view,0,view.length):view;entry.captureRevision=-1;
+ }
+}
+
 let visiblePlots=1,activePlotIndex=0,plotView=null,plotLayout=null;
 function plotDomId(id,index){return index?id+'-'+(index+1):id}
 function activePlot(){return plots[activePlotIndex]}
 function publishPlot(index,view,layout){if(index===activePlotIndex){plotView=view;plotLayout=layout}}
 function plotBounds(){return activePlot()?.bounds()||{lo:latestTime,hi:latestTime}}
 function plotGroups(){return activePlot()?.groups()||[]}
-function freezePlot(){activePlot()?.freeze()}
+function freezePlot(){return activePlot()?.freeze()}
 function followPlot(reset=false){activePlot()?.follow(reset)}
 function scrubPlot(value){activePlot()?.scrub(value)}
 function draw(){for(let i=0;i<visiblePlots;++i)plots[i]?.draw()}
-let livePlotFrame=0;
+let livePlotFrame=0,livePlotAt=-Infinity;
+let plotObserver=null;const observedPlots=new WeakMap();
+function observePlot(plot){
+ if(!globalThis.IntersectionObserver)return;
+ if(!plotObserver)plotObserver=new IntersectionObserver(entries=>{for(const entry of entries){const p=observedPlots.get(entry.target);if(!p)continue;p.inViewport=entry.isIntersecting;if(p.inViewport&&!p.root.hidden)p.draw()}},{rootMargin:'64px 0px'});
+ const canvas=plot.control('plot');observedPlots.set(canvas,plot);plotObserver.observe(canvas);
+}
+if(document.addEventListener)document.addEventListener('visibilitychange',()=>{if(!document.hidden)queueLivePlots()});
 function queueLivePlots(){
  if(livePlotFrame||!globalThis.requestAnimationFrame)return;
- livePlotFrame=requestAnimationFrame(()=>{livePlotFrame=0;for(let i=0;i<visiblePlots;++i)if(!plots[i]?.view.frozen)plots[i]?.draw()});
+ const paint=now=>{if(now-livePlotAt<1000/30){livePlotFrame=requestAnimationFrame(paint);return}livePlotFrame=0;livePlotAt=now;if(document.hidden)return;let painted=false;for(let i=0;i<visiblePlots;++i)if(!plots[i]?.view.frozen&&plots[i]?.inViewport!==false){plots[i]?.draw();painted=true}if(painted)runtimeStats.refreshes++};
+ livePlotFrame=requestAnimationFrame(paint);
 }
 function syncPauseControls(){paused=plots.slice(0,visiblePlots).every(plot=>plot.view.frozen);$('pause').textContent=paused?'继续绘图':'暂停绘图'}
 function resetPlotData(){
- for(const plot of plots){if(plot.autoSelect)plot.selected.clear();plot.resetData()}
+ for(const plot of plots)plot.resetData();
  paused=false;$('pause').textContent='暂停绘图';renderPlotChannels();
 }
 function activatePlot(index,force=false){
@@ -359,13 +626,13 @@ function setPlotCount(count){
   const index=plots.length,root=document.createElement('article');root.id='plotCard-'+(index+1);root.className='plot-card';root.dataset.plot=String(index+1);
   root.innerHTML=template.replace(/\b(id|for)="([^"]+)"/g,(full,attribute,id)=>PLOT_CONTROLS.has(id)?attribute+'="'+plotDomId(id,index)+'"':full);
   $('plotCanvases').append(root);
-  const plot=createPlot(index,root,index===0?selected:new Set());plots.push(plot);plot.bind();
+  const plot=createPlot(index,root,index===0?selected:new Set());plots.push(plot);plot.bind();observePlot(plot);
   plot.control('plotTitle').textContent='画布 '+(index+1);
   root.setAttribute('aria-labelledby',plotDomId('plotTitle',index));
   plot.control('plot').setAttribute('aria-label','画布 '+(index+1)+'，可拖入通道、平移和缩放');
   plot.control('plotSelect').onclick=()=>activatePlot(index);
   plot.control('plotPause').onclick=()=>{activatePlot(index);plot.view.frozen?plot.resume():plot.freeze();syncPauseControls();draw()};
-  plot.control('plotClear').onclick=()=>{activatePlot(index);plot.autoSelect=false;plot.selected.clear();plot.follow(true);renderPlotChannels();renderSignals()};
+   plot.control('plotClear').onclick=()=>{activatePlot(index);plot.selected.clear();plot.follow(true);renderPlotChannels();renderSignals()};
   root.addEventListener('pointerdown',()=>activatePlot(index),true);
   root.addEventListener('focusin',()=>activatePlot(index));
   root.ondragover=e=>{
@@ -396,7 +663,7 @@ function startChannelDrag(e,id){
 function endChannelDrag(){for(const plot of plots)delete plot.root.dataset.drop}
 function assignPlotChannel(index,id,enabled){
  if(!Number.isInteger(index)||index<0||index>=visiblePlots||!channelCatalog.has(id))return false;
- const plot=plots[index],had=plot.selected.has(id);plot.autoSelect=false;
+ const plot=plots[index],had=plot.selected.has(id);
  if(enabled){plot.selected.add(id);if(!had){plot.view.y.clear();plot.follow()}}
  else{plot.selected.delete(id);plot.view.frozen?.delete(id);if(had){plot.view.y.clear();plot.view.hover=null}}
  activatePlot(index);renderPlotChannels();renderSignals();plot.draw();return true;
@@ -404,7 +671,7 @@ function assignPlotChannel(index,id,enabled){
 function renderPlotChannels(){
  for(let index=0;index<plots.length;++index){
   const plot=plots[index],box=plot.control('plotChannels');box.replaceChildren();
-  if(!plot.selected.size){const note=document.createElement('span');note.className='muted';note.textContent='将上方通道拖入画布，或选择此画布后勾选。';box.append(note)}
+  if(!plot.selected.size){const note=document.createElement('div'),title=document.createElement('b'),detail=document.createElement('span');note.className='ui-empty ui-empty-channel';title.textContent='画布中还没有通道。';detail.textContent='选择此画布后勾选上方通道，或将通道拖入画布。';note.append(title,detail);box.append(note)}
   for(const id of plot.selected){
    const info=channelInfo(id),chip=document.createElement('span'),remove=document.createElement('button');
    chip.className='plot-channel'+(series.has(id)?'':' waiting');chip.style.color=info.color;chip.draggable=true;chip.dataset.channel=id;
@@ -430,14 +697,14 @@ function renderSignals(){
 }
 function addAllPlotChannels(){
  const plot=activePlot();if(!plot||!series.size)return;
- plot.autoSelect=false;let changed=false;
+ let changed=false;
  for(const id of series.keys())if(!plot.selected.has(id)){plot.selected.add(id);changed=true}
  if(changed){plot.view.y.clear();plot.follow()}
  activatePlot(activePlotIndex,true);renderPlotChannels();
 }
 function pauseAllPlots(){
  const resume=paused;
- for(let i=0;i<visiblePlots;++i)resume?plots[i].resume():plots[i].freeze();
+ if(resume){for(let i=0;i<visiblePlots;++i)plots[i].resume()}else if(!freezePlotGroup(plots.slice(0,visiblePlots).filter(p=>!p.view.frozen).map(plot=>({plot,end:plot.end()}))))return false;
  syncPauseControls();draw();
 }
 function bindPlot(){
@@ -455,13 +722,13 @@ function bindPlot(){
 function createPlot(index,root,selected){
  const $=id=>document.getElementById(PLOT_CONTROLS.has(id)?plotDomId(id,index):id);
  const plotView={span:10,cacheSeconds:10,offset:0,end:null,frozen:null,origin:null,frozenDropTime:-Infinity,y:new Map(),hover:null,drag:null};
- let plotLayout=null,plotFrame=0,valuesAt=-Infinity,valuesSelection='',sourceCache=null;
+ let plotLayout=null,plotFrame=0,valuesAt=-Infinity,valuesSelection='',sourceCache=null,valueRows=new Map(),valueKeys='';
 function plotSource(){
  const source=plotView.frozen||series,version=plotView.frozen?0:cacheRevision,origin=plotOrigin();
- if(sourceCache?.source===source&&sourceCache.version===version&&sourceCache.seconds===plotView.cacheSeconds&&sourceCache.origin===origin)return sourceCache.result;
+ if(sourceCache?.source===source&&sourceCache.version===version&&sourceCache.seconds===plotView.cacheSeconds&&sourceCache.origin===origin&&sourceCache.selection===[...selected].join('\0'))return sourceCache.result;
  const result=new Map(),cutoff=origin-plotView.cacheSeconds;
  for(const [id,entry]of source){const points=new PlotSampleView(entry.points,plotLowerBound(entry.points,cutoff-1e-9));result.set(id,{...entry,points,value:points.length?points.valueAt(points.length-1):null})}
- sourceCache={source,version,seconds:plotView.cacheSeconds,origin,result};return result;
+ sourceCache={source,version,seconds:plotView.cacheSeconds,origin,selection:[...selected].join('\0'),result};return result;
 }
 function plotBounds(){
  let lo=Infinity,hi=-Infinity;
@@ -476,9 +743,11 @@ function setPlotEnd(end){
  if(plotView.frozen)plotView.end=end;
 }
 function freezePlot(end=plotEnd()){
- if(!plotView.frozen){plotView.frozen=new Map([...plotSource()].filter(([id])=>selected.has(id)).map(([id,s])=>[id,{...s,points:s.points.slice()}]));plotView.origin=latestTime;plotView.frozenDropTime=cacheDropTime}
- plotView.end=end;cancelGesture();valuesAt=-Infinity;draw();
+ if(!plotView.frozen)return freezePlotGroup([{plot:plots[index],end}]);
+ plotView.end=end;cancelGesture();valuesAt=-Infinity;draw();return true;
 }
+function installSnapshot(map,end){sourceCache=null;plotView.frozen=map;plotView.origin=latestTime;plotView.frozenDropTime=cacheDropTime;plotView.end=end;cancelGesture();valuesAt=-Infinity}
+
 function cancelGesture(){
  const d=plotView.drag;plotView.drag=plotView.hover=null;
  delete $('plotBuffer').dataset.drag;$('plotBufferTip').hidden=true;$('plotTip').hidden=true;
@@ -505,7 +774,7 @@ function applyCacheDuration(){
  const value=Number($('window').value),valid=$('window').value!==''&&Number.isFinite(value)&&value>=PLOT_MIN_SPAN&&value<=PLOT_MAX_SPAN;
  cacheValidity(valid);if(!valid)return false;
  cancelGesture();plotView.cacheSeconds=plotView.span=value;
- if(plotView.frozen)for(const entry of plotView.frozen.values()){entry.points.discardBefore(plotOrigin()-value);entry.points.compact()}
+ if(plotView.frozen)trimFrozenCache(plots[index]);sourceCache=null;
  retainLiveCache(true);valuesAt=-Infinity;setPlotEnd(plotOrigin());draw();return true;
 }
 function fitPlotX(){const b=plotBounds();plotView.span=clampPlot(b.hi-b.lo,PLOT_MIN_SPAN,PLOT_MAX_SPAN);setPlotEnd(b.hi);draw()}
@@ -527,8 +796,8 @@ function syncBufferBar(){
   visible=Math.max(visible,last-first+(last<s.points.length&&plotTimeAt(s.points,last)<=end?1:0));
  }
  for(const [id,position,time]of controls){const el=$(id);el.style.left=bufferCss(position);el.disabled=!cached;el.setAttribute('aria-valuemin',String(domain.lo-o));el.setAttribute('aria-valuemax',String(domain.hi-o));el.setAttribute('aria-valuenow',String(time-o));el.setAttribute('aria-valuetext',plotNumber(time-o)+' 秒，相对最新')}
- $('plotBufferStats').textContent='可视 '+visible+' / 缓存 '+cached+' 点/通道 · 窗口 '+plotDuration(plotView.span)+' · '+plotDuration(plotLayout?.xStep||plotView.span/10)+'/格';
- $('plotBufferTip').textContent='左端 '+plotNumber(start-o)+' s → 右端 '+plotNumber(end-o)+' s（相对最新）\n'+$('plotBufferStats').textContent+'\n点数取所选通道最大值。红色：改起点；紫色：改终点；绿色／选区：整体平移。';
+ setText($('plotBufferStats'),'可视 '+visible+' / 缓存 '+cached+' 点/通道 · 窗口 '+plotDuration(plotView.span)+' · '+plotDuration(plotLayout?.xStep||plotView.span/10)+'/格');
+ setText($('plotBufferTip'),'左端 '+plotNumber(start-o)+' s → 右端 '+plotNumber(end-o)+' s（相对最新）\n'+$('plotBufferStats').textContent+'\n点数取所选通道最大值。红色：改起点；紫色：改终点；绿色／选区：整体平移。');
 }
 function setBufferRange(d,delta){
  let a=d.start,b=d.end;const minimum=Math.min(PLOT_MIN_SPAN,d.hi-d.lo);
@@ -582,7 +851,7 @@ function plotRange(group,start,end){
  let lo=Infinity,hi=-Infinity;
  for(const {s}of group.items){
   const first=Math.max(0,plotLowerBound(s.points,start)-1),last=Math.min(s.points.length,plotLowerBound(s.points,end)+1);
-  for(let i=first;i<last;++i){const v=plotValueAt(s.points,i);if(Number.isFinite(v)){lo=Math.min(lo,v);hi=Math.max(hi,v)}}
+  const summary=plotSummary(s.points,first,last);lo=Math.min(lo,summary.min);hi=Math.max(hi,summary.max);
  }
  if(!Number.isFinite(lo)){lo=-1;hi=1}
  const pad=hi>lo?(hi-lo)*.08:Math.max(Math.abs(lo)*.02,1);
@@ -595,29 +864,32 @@ function syncPlotControls(){
  syncBufferBar();
  const duration=value=>plotDuration(Number(value.toPrecision(5))),offset=plotEnd()-plotOrigin();
  const limited=plotOrigin()-plotView.cacheSeconds<=(plotView.frozen?plotView.frozenDropTime:cacheDropTime);
- $('plotWindowState').textContent='当前窗口 '+duration(plotView.span)+' / 缓存跨度 '+duration(Math.max(0,b.hi-b.lo))+' / 保留 '+duration(plotView.cacheSeconds)+(Math.abs(offset)>1e-6?' / '+(offset>0?'右侧留白 ':'滞后 ')+duration(Math.abs(offset)):'')+(limited?' / 已达内存上限，缓存不足设定时长':'');
+ setText($('plotWindowState'),'当前窗口 '+duration(plotView.span)+' / 缓存跨度 '+duration(Math.max(0,b.hi-b.lo))+' / 保留 '+duration(plotView.cacheSeconds)+(Math.abs(offset)>1e-6?' / '+(offset>0?'右侧留白 ':'滞后 ')+duration(Math.abs(offset)):'')+(limited?' / 已达内存上限，缓存不足设定时长':''));
  $('plotWindowState').dataset.limited=String(limited);
  const origin=$('plotTime').value==='board'?0:plotOrigin();
  $('plotWindowState').title='X 轴范围 '+plotNumber(plotEnd()-plotView.span-origin)+' ～ '+plotNumber(plotEnd()-origin)+' s；缩放和缓冲条只改视图，应用缓存恢复设定时长；缓存以外的时段显示空白。';
- $('plotFollow').textContent=replaying?'回放末尾':'跟随最新';
+ setText($('plotFollow'),replaying?'回放末尾':'跟随最新');
  $('plotFollow').className=!plotView.frozen&&Math.abs(plotView.offset)<1e-9?'primary':'';
- $('plotPause').textContent=plotView.frozen?'继续此图':'暂停此图';
+ setText($('plotPause'),plotView.frozen?'继续此图':'暂停此图');
  $('plotAutoY').checked=plotGroups().every(group=>!plotView.y.has(group.key));
- $('plotValuesLabel').textContent=plotView.frozen?'暂停快照的末值':'最新接收值';
- $('plotViewState').textContent=(replaying?'CSV 回放':plotView.frozen?'已暂停':'实时更新')+' · '+plotNumber(plotView.span)+' s'+(Math.abs(plotView.offset)>1e-6?' · '+(plotView.offset<0?'滞后 ':'前留 ')+plotNumber(Math.abs(plotView.offset))+' s':'');
+ setText($('plotValuesLabel'),plotView.frozen?'暂停快照的末值':'最新接收值');
+ setText($('plotViewState'),(replaying?'CSV 回放':plotView.frozen?'已暂停':'实时更新')+' · '+plotNumber(plotView.span)+' s'+(Math.abs(plotView.offset)>1e-6?' · '+(plotView.offset<0?'滞后 ':'前留 ')+plotNumber(Math.abs(plotView.offset))+' s':''));
 }
 function renderPlotValues(){
  const source=plotSource(),selection=[...selected].join('\0'),now=performance.now();
  if(now-valuesAt<100&&selection===valuesSelection)return;
  valuesAt=now;valuesSelection=selection;
- const latest=$('latest');latest.replaceChildren();
- for(const [id,s]of plotSource())if(selected.has(id)){
-  const el=document.createElement('div'),b=document.createElement('b');el.className='value';
-  el.append(document.createTextNode(s.key));b.textContent=plotValue(s.value)+' '+s.unit;el.append(b);latest.append(el);
+ const keys=[...source.keys()].filter(id=>selected.has(id)),signature=keys.join('\0');
+ if(signature!==valueKeys){
+  const rows=new Map();for(const id of keys){let row=valueRows.get(id);if(!row){const el=document.createElement('div'),value=document.createElement('b');el.className='value';el.dataset.channel=id;el.append(document.createTextNode(source.get(id).key),value);row={el,value}}rows.set(id,row)}
+  valueRows=rows;valueKeys=signature;$('latest').replaceChildren(...keys.map(id=>rows.get(id).el));
  }
+ for(const id of keys){const entry=source.get(id);setText(valueRows.get(id).value,plotValue(entry.value)+' '+entry.unit)}
 }
+
 function draw(){
  if(index>=visiblePlots||root.hidden)return;
+ const paintStarted=performance.now();
  if(!plotView.frozen)plotView.offset=constrainPlotEnd(latestTime+plotView.offset)-latestTime;
  const canvas=$('plot'),groups=plotGroups(),rect=canvas.getBoundingClientRect(),width=Math.max(1,rect.width),dpr=devicePixelRatio||1;
  const band=visiblePlots>1?240:420,height=band+48;
@@ -648,12 +920,9 @@ function draw(){
   c.strokeStyle=plotPalette.border;c.strokeRect(left,p.top,right-left,p.bottom-p.top);
   c.save();c.beginPath();c.rect(left,p.top,right-left,p.bottom-p.top);c.clip();
   for(const {s,color}of p.items){
-   c.strokeStyle=color;c.lineWidth=1.5;c.beginPath();let pen=false;
+    c.strokeStyle=color;c.lineWidth=1.5;
    const first=Math.max(0,plotLowerBound(s.points,start)-1),last=Math.min(s.points.length,plotLowerBound(s.points,end)+1);
-   for(let i=first;i<last;++i){const t=plotTimeAt(s.points,i),v=plotValueAt(s.points,i);if(!Number.isFinite(v)){pen=false;continue}
-    const x=left+(t-start)/plotView.span*(right-left),y=p.bottom-(v-p.lo)/(p.hi-p.lo)*(p.bottom-p.top);
-    if(pen)c.lineTo(x,y);else{c.moveTo(x,y);pen=true}
-   }c.stroke();
+    strokePlotSamples(c,s.points,first,last,start,plotView.span,left,right,p.top,p.bottom,p.lo,p.hi,dpr);
   }c.restore();
   const latestX=left+(plotOrigin()-start)/plotView.span*(right-left);
   if(relative&&latestX>=left&&latestX<=right){c.save();c.setLineDash([3,3]);c.strokeStyle=plotPalette.origin;c.beginPath();c.moveTo(latestX,p.top);c.lineTo(latestX,p.bottom);c.stroke();c.restore()}
@@ -669,6 +938,7 @@ function draw(){
  }
  c.fillStyle=plotPalette.label;c.textAlign='center';c.fillText(relative?'相对最新 / '+(timeScale===1000?'ms':'s'):'板端时间 / s',(left+right)/2,height-8);
  drawPlotHover(c);drawPlotBox(c);
+ const duration=performance.now()-paintStarted;runtimeStats.paints++;runtimeStats.paintMs+=duration;runtimeStats.maxPaintMs=Math.max(runtimeStats.maxPaintMs,duration);runtimeStats.paintTimes.push(duration);if(runtimeStats.paintTimes.length>240)runtimeStats.paintTimes.shift();
 }
 function plotPoint(e){const r=$('plot').getBoundingClientRect();return {x:e.clientX-(r.left||0),y:e.clientY-(r.top||0)}}
 function plotHit(point){
@@ -792,10 +1062,30 @@ function bindPlot(){
  $('plotFitX').onclick=fitPlotX;
  $('window').value=String(plotView.cacheSeconds);$('plotTime').value='relative';$('plotAxis').value='xy';$('plotTool').value='pan';
 }
- return {index,root,selected,autoSelect:index===0,view:plotView,get layout(){return plotLayout},control:$,draw,bind:bindPlot,resetData:resetPlotData,follow:followPlot,freeze:freezePlot,resume:resumePlot,scrub:scrubPlot,bounds:plotBounds,groups:plotGroups,cancelGesture};
+ return {index,root,selected,inViewport:true,source:plotSource,end:plotEnd,installSnapshot,view:plotView,get layout(){return plotLayout},control:$,draw,bind:bindPlot,resetData:resetPlotData,follow:followPlot,freeze:freezePlot,resume:resumePlot,scrub:scrubPlot,bounds:plotBounds,groups:plotGroups,cancelGesture};
 }
 
-function status(s){lastStatus=s;const box=$('status');box.replaceChildren();if(!s.work){box.textContent='等待板端状态帧';return}const head=document.createElement('div');head.textContent=s.work+' · '+s.drive+' · '+s.stream;box.append(head);for(let i=0;i<2;i++){const f=s.flags[i],el=document.createElement('div');el.className='axis';if(!(f&128)){el.textContent=inactiveAxisLabel(i);box.append(el);continue;}const strong=document.createElement('strong');strong.textContent='M'+(i+1)+' · '+s.axis_status[i];el.append(strong,document.createElement('br'),document.createTextNode(s.mode[i]+' / '+s.input[i]+' / '+(f&8?'请求运行':'停止')),document.createElement('br'),document.createTextNode('Curr Loop '+(f&16?'ON':'OFF')+' · E'+(i+1)+' '+(s.encoders[i]?'OK':'LOST')));box.append(el)}const tail=document.createElement('div');tail.textContent=statusBanner(s);box.append(tail);const result=document.createElement('div');result.textContent='最近命令 '+s.control_result+' · HSO '+s.hso_result+' · '+s.command_status;box.append(result);const p=s.detect_result&255,pp=p>127?p-256:p;$('detect').textContent=s.detect_status+' · PP '+pp+' · R '+((s.detect_result>>>8)&65535)/1000+' Ω · Ls '+s.detect_ls_uh+' µH · Flux '+s.detect_flux_uwb+' µWb'}
+let statusNodes=null;
+function status(s){
+ lastStatus=s;const box=$('status');
+ if(!s.work){if(statusNodes){box.replaceChildren();statusNodes=null}setText(box,'等待板端状态帧');return}
+ if(!statusNodes){
+  const head=document.createElement('div'),tail=document.createElement('div'),result=document.createElement('div'),axes=[];
+  for(let i=0;i<2;i++){const root=document.createElement('div'),title=document.createElement('strong'),mode=document.createElement('span'),current=document.createElement('span');root.className='axis';axes.push({root,title,mode,current,active:null})}
+  statusNodes={head,tail,result,axes};box.replaceChildren(head,...axes.map(a=>a.root),tail,result);
+ }
+ const nodes=statusNodes;setText(nodes.head,s.work+' · '+s.drive+' · '+s.stream);
+ for(let i=0;i<2;i++){
+  const f=s.flags[i],axis=nodes.axes[i],active=!!(f&128);
+  if(axis.active!==active){axis.active=active;if(active)axis.root.replaceChildren(axis.title,document.createElement('br'),axis.mode,document.createElement('br'),axis.current);else axis.root.replaceChildren()}
+  if(!active){setText(axis.root,inactiveAxisLabel(i));continue}
+  setText(axis.title,'M'+(i+1)+' · '+s.axis_status[i]);setText(axis.mode,s.mode[i]+' / '+s.input[i]+' / '+(f&8?'请求运行':'停止'));
+  setText(axis.current,'Curr Loop '+(f&16?'ON':'OFF')+' · E'+(i+1)+' '+(s.encoders[i]?'OK':'LOST'));
+ }
+ setText(nodes.tail,statusBanner(s));setText(nodes.result,'最近命令 '+s.control_result+' · HSO '+s.hso_result+' · '+s.command_status);
+ const p=s.detect_result&255,pp=p>127?p-256:p;setText($('detect'),s.detect_status+' · PP '+pp+' · R '+((s.detect_result>>>8)&65535)/1000+' Ω · Ls '+s.detect_ls_uh+' µH · Flux '+s.detect_flux_uwb+' µWb');
+}
+
 /* All transport, parsing and recording run locally in this document. */
 const WIRE_LENGTHS={1:26,2:26,3:50,4:38,5:26,6:30,7:30,8:48,9:48,10:44,11:38,16:96,32:92,33:64};
 const WORK=['Single M1','Single M2','Independent','Sync Speed','Sync Position','Master M1','Master M2'];
@@ -849,7 +1139,7 @@ let outputFormat='Unknown',formatVerified=false;
 const formatProbe=new JustFloatProbe();
 let port=null,reader=null,readTask=null,writer=null,parser=new WireParser(),connected=false,closing=false,received=0,lastRx=0,lastEpoch=0,nextRequest=1,pending=new Map(),txChain=Promise.resolve(),boardConfig=null,recordChunks=[],recordBytes=0,recordWriter=null,recordOpening=false;
 const configKeys=['speed_x10','voltage_x100','position_x100','flags','led_brightness','speed_step_x10','torque_step_x100','position_step_x100','control_config','gear_ratio_x100','gear_offset_x100','axis2_flags','axis2_speed_x10','axis2_voltage_x100','axis2_position_x100','axis2_speed_step_x10','axis2_torque_step_x100','axis2_position_step_x100','motor_detect','motor_detect_l_uh','motor_detect_flux_uwb'];
-function decodeReply(f){const b=f.payload,v=new DataView(b.buffer,b.byteOffset,b.length),settings={};for(let i=0;i<configKeys.length;i++)settings[configKeys[i]]=v.getInt32(8+i*4,true);const cfg=settings.control_config,work=cfg&7;return {id:v.getUint16(0,true),result:v.getInt8(2),source:b[3],schema:b[4],firmware:b[5],capabilities:15,save:b[6],focus:b[7],profiles:[(settings.flags>>>24)&1,(cfg>>>4)&1],drive:work===0?(cfg&16384?2:cfg&8?1:0):0,work,settings}}
+function decodeReply(f){const b=f.payload,v=new DataView(b.buffer,b.byteOffset,b.length),settings={};for(let i=0;i<configKeys.length;i++)settings[configKeys[i]]=v.getInt32(8+i*4,true);const cfg=settings.control_config,work=cfg&7;return {id:v.getUint16(0,true),result:v.getInt8(2),source:b[3],schema:b[4],firmware:b[5],capabilities:15,save:b[6],focus:b[7],customMask:b[5]>=105?(cfg>>>28)&7:0,profiles:[0,1].map(a=>b[5]>=105&&((cfg>>>(24+2*a))&3)?((cfg>>>(24+2*a))&3)+2:a?(cfg>>>4)&1:(settings.flags>>>24)&1),drive:work===0?(cfg&16384?2:cfg&8?1:0):0,work,settings}}
 function failPending(reason){for(const p of pending.values()){clearTimeout(p.timer);p.reject(Error(reason))}pending.clear();refreshControlChoices()}
 function download(name,data,type){const url=URL.createObjectURL(new Blob([data],{type})),a=document.createElement('a');a.href=url;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000)}
 function recordFrame(f){if(!recording)return;const stamp=new Date().toISOString(),rows=f.kind===16?[['status','json',JSON.stringify(decodeStatus(f))]]:f.kind===32?[['configuration','json',JSON.stringify(decodeReply(f))]]:f.kind===33?[['diagnostic','json',JSON.stringify(decodeRow(f))]]:(f.values||channels(f));const quote=s=>'"'+String(s).replaceAll('"','""')+'"';let text='';for(const [key,unit,n]of rows)text+=[stamp,f.ms,f.sequence,f.epoch,f.kind,key,unit,n===null?'':typeof n==='string'?quote(n):n].join(',')+'\r\n';
@@ -858,8 +1148,8 @@ function recordFrame(f){if(!recording)return;const stamp=new Date().toISOString(
 }
 let txRecord=Promise.resolve(),recordQueuedBytes=0,recordEpoch=0,seenParserEpoch=0;
 async function toggleRecord(){if(recordOpening)return;recordOpening=true;try{if(recording||recordWriter||recordChunks.length){recording=false;await txRecord;if(recordWriter){const sink=recordWriter;try{await sink.close()}finally{recordWriter=null}}else download('motor-'+Date.now()+'.csv',recordChunks.join(''),'text/csv;charset=utf-8');recordChunks=[];recordBytes=0;return}const header='\ufeffhost_time,board_ms,sequence,epoch,packet_kind,field,unit,value\r\n';if(typeof showSaveFilePicker==='function'){const handle=await showSaveFilePicker({suggestedName:'motor-'+Date.now()+'.csv',types:[{description:'CSV',accept:{'text/csv':['.csv']}}]});recordWriter=await handle.createWritable();await recordWriter.write(header);recordPath=handle.name}else{recordChunks=[header];recordBytes=header.length;recordPath='浏览器内存 · 16 MiB 自动导出'}recording=true}finally{recordOpening=false}}
-function consume(f){received++;lastRx=performance.now();if(f.epoch!==lastEpoch){lastEpoch=f.epoch;failPending('板端已重启，命令结果未知；请重新读取');boardConfig=null;renderConfig();log('检测到板端重启');}try{recordFrame(f)}catch(e){recording=false;$('error').textContent='记录失败：'+e.message}if(f.kind===33){consumeRow(f);return}if(f.kind===16)status(decodeStatus(f));else if(f.kind===32){const r=decodeReply(f);if(!pending.has(r.id))return;const p=pending.get(r.id);pending.delete(r.id);clearTimeout(p.timer);if(!((r.schema===1&&r.firmware===87)||(r.schema===2&&r.firmware>=88&&r.firmware<=103))){p.reject(Error('配置协议不匹配'));return}if((p.command.startsWith('GetRow:')&&r.result===1)||(boardConfig&&r.source!==boardConfig.source)){p.reject(Error('回执类型／来源不匹配'));return}r.read_at=new Date().toISOString();if(p.command==='Get'&&r.result===1){setOutputFormat('Native');formatProbe.reset()}const previous=boardConfig;boardConfig=r;renderConfig();controlReply(p.command,r,previous);if(r.result===1)p.resolve(r);else p.reject(Error('板端拒绝 #'+r.id+'：'+({[-1]:'当前状态不允许／检查轴与停机条件',[-2]:'参数或命令格式错误',[-3]:'忙／来源冲突',[-4]:'请求取消／过期，请重新确认状态'}[r.result]||r.result)));}else if(!replaying){f.values=channels(f);if(f.values.length)add(f)}}
-async function connect(){if(demo)throw Error('请先退出离线演示');if(connecting||port||connected||closing)throw Error('请先断开当前连接');if(!globalThis.isSecureContext||!navigator.serial)throw Error('请用支持 Web Serial 的桌面 Chrome／Edge 打开此文件');connecting=true;const token=++sessionToken;let selectedPort;try{selectedPort=await navigator.serial.requestPort();await selectedPort.open({baudRate:115200,dataBits:8,stopBits:1,parity:'none',flowControl:'none',bufferSize:8192});}finally{connecting=false}if(token!==sessionToken){await selectedPort.close();return}port=selectedPort;connected=true;parser=new WireParser();received=0;lastRx=0;seenParserEpoch=0;lastEpoch=++recordEpoch;boardConfig=null;lastStatus={};status(lastStatus);clear();replaying=false;$('replay').textContent='';writer=port.writable.getWriter();reader=port.readable.getReader();readTask=(async()=>{try{while(connected){const r=await reader.read();if(r.done)break;const frames=parser.feed(r.value);if(frames.length)formatProbe.reset();else if((outputFormat==='Native'||outputFormat==='JustFloat')&&formatProbe.feed(r.value)){noticeJustFloat()}for(const frame of frames){if(frame.epoch!==seenParserEpoch){seenParserEpoch=frame.epoch;++recordEpoch}frame.epoch=recordEpoch;consume(frame)}}}catch(e){if(!closing)$('error').textContent='通信中断：'+e.message}finally{reader.releaseLock();reader=null;connected=false;boardConfig=null;setOutputFormat('Unknown');formatProbe.reset();renderConfig();failPending('连接已断开，命令结果未知');}})();log('已连接，先切换 Native 再查询配置，不自动运行');await selectOutputFormat('Native')}
+function consume(f){received++;lastRx=performance.now();if(f.epoch!==lastEpoch){lastEpoch=f.epoch;failPending('板端已重启，命令结果未知；请重新读取');boardConfig=null;renderConfig();log('检测到板端重启');}try{recordFrame(f)}catch(e){recording=false;$('error').textContent='记录失败：'+e.message}if(f.kind===33){consumeRow(f);return}if(f.kind===16)status(decodeStatus(f));else if(f.kind===32){const r=decodeReply(f);if(!pending.has(r.id))return;const p=pending.get(r.id);pending.delete(r.id);clearTimeout(p.timer);if(!((r.schema===1&&r.firmware===87)||(r.schema===2&&r.firmware>=88&&r.firmware<=105))){p.reject(Error('配置协议不匹配'));return}if((p.command.startsWith('GetRow:')&&r.result===1)||(boardConfig&&r.source!==boardConfig.source)){p.reject(Error('回执类型／来源不匹配'));return}r.read_at=new Date().toISOString();if(p.command==='Get'&&r.result===1){setOutputFormat('Native');formatProbe.reset()}const previous=boardConfig;boardConfig=r;renderConfig();controlReply(p.command,r,previous);if(r.result===1)p.resolve(r);else p.reject(Error('板端拒绝 #'+r.id+'：'+({[-1]:'当前状态不允许／检查轴与停机条件',[-2]:'参数或命令格式错误',[-3]:'忙／来源冲突',[-4]:'请求取消／过期，请重新确认状态'}[r.result]||r.result)));}else if(!replaying){f.values=channels(f);if(f.values.length)add(f)}}
+async function connect(){if(demo)throw Error('请先退出离线演示');if(connecting||port||connected||closing)throw Error('请先断开当前连接');if(!globalThis.isSecureContext||!navigator.serial)throw Error('请用支持 Web Serial 的桌面 Chrome／Edge 打开此文件');connecting=true;const token=++sessionToken;let selectedPort;try{selectedPort=await navigator.serial.requestPort();await selectedPort.open({baudRate:115200,dataBits:8,stopBits:1,parity:'none',flowControl:'none',bufferSize:8192});}finally{connecting=false}if(token!==sessionToken){await selectedPort.close();return}port=selectedPort;connected=true;parser=new WireParser();received=0;lastRx=0;seenParserEpoch=0;lastEpoch=++recordEpoch;boardConfig=null;lastStatus={};status(lastStatus);cancelCsvLoad();clear();replaying=false;$('replay').textContent='';writer=port.writable.getWriter();reader=port.readable.getReader();readTask=(async()=>{try{while(connected){const r=await reader.read();if(r.done)break;const frames=parser.feed(r.value);if(frames.length)formatProbe.reset();else if((outputFormat==='Native'||outputFormat==='JustFloat')&&formatProbe.feed(r.value)){noticeJustFloat()}for(const frame of frames){if(frame.epoch!==seenParserEpoch){seenParserEpoch=frame.epoch;++recordEpoch}frame.epoch=recordEpoch;consume(frame)}}}catch(e){if(!closing)$('error').textContent='通信中断：'+e.message}finally{reader.releaseLock();reader=null;connected=false;boardConfig=null;setOutputFormat('Unknown');formatProbe.reset();renderConfig();failPending('连接已断开，命令结果未知');}})();log('已连接，先切换 Native 再查询配置，不自动运行');await selectOutputFormat('Native')}
 async function disconnect(){if(closing)return;++sessionToken;closing=true;connected=false;failPending('连接已断开，命令结果未知');try{if(reader)await reader.cancel();if(readTask)await readTask;if(writer){await writer.abort().catch(()=>{});await txChain.catch(()=>{});writer.releaseLock();writer=null}if(port){await port.close();port=null}}finally{closing=false;boardConfig=null;renderConfig();log('已断开通信')}}
 async function transmit(text){if(!connected||!writer)throw Error('尚未连接串口');const bytes=new TextEncoder().encode(text+'\n'),sink=writer;const job=txChain.catch(()=>{}).then(()=>{if(sink!==writer||!connected)throw Error('连接已改变');return sink.write(bytes)});txChain=job;return job}
 async function send(command){command=String(command);if(replaying&&command!=='Stop'&&command!=='Get'&&!command.startsWith('GetRow:'))throw Error('当前为历史回放，请先返回实时');if(!/^[\x20-\x7e]+$/.test(command)||command.includes('@')||command.length>52)throw Error('命令须为 1～52 个 ASCII 字符，不能包含换行或 @');if(!connected)throw Error('尚未连接串口');if(command==='Format:Native')return selectOutputFormat('Native');if(command==='Format:JustFloat')return selectOutputFormat('JustFloat');if(outputFormat==='JustFloat'){if(/^(?:M[12]:)?Stop$/.test(command)){++batchEpoch;failPending('已发送停止');await transmit(command);log('TX '+command+' · JustFloat 无命令回执，请核对电机状态');return null}throw Error('板端为 JustFloat，请先切换 Native 使用控制台')}if(command!=='Get'&&command!=='Stop'&&!boardConfig)throw Error('请先读取配置并核对固件');if(pending.size&&!/^(?:M[12]:)?Stop$/.test(command))throw Error('请等待上一条命令回执');if(/^(?:M[12]:)?Stop$/.test(command))++batchEpoch;if(/^(?:M[12]:)?Stop$/.test(command))failPending('已发送停止，先前命令结果请重新查询');const id=nextRequest;nextRequest=nextRequest%65535+1;let resolve,reject;const reply=new Promise((a,b)=>{resolve=a;reject=b});reply.catch(()=>{});const timer=setTimeout(()=>{pending.delete(id);refreshControlChoices();reject(Error('#'+id+' 等待回执超时；结果未知，不自动重发，请读取确认'))},2500);pending.set(id,{resolve,reject,timer,command});refreshControlChoices();log('TX #'+id+' '+command);if(!boardConfig&&/^(?:M[12]:)?Stop$/.test(command))transmit('\n'+command).catch(()=>{});transmit('@'+id+':'+command).catch(e=>{if(pending.has(id)){clearTimeout(timer);pending.delete(id);refreshControlChoices();reject(e)}});const r=await reply;log('ACK #'+id+' '+command+' · 板端已受理，实际目标见实时曲线');return r}
@@ -894,12 +1184,15 @@ async function selectOutputFormat(format){
 const WORK_LABELS=['单电机 M1','单电机 M2','双机独立','双机同步速度','双机同步位置','M1 主机 → M2 从机','M2 主机 → M1 从机'];
 const DRIVE_COMMANDS=['Encoder','HSO','SixStep'];
 const DRIVE_LABELS={Encoder:'编码器 FOC',HSO:'HSO 无感',SixStep:'六步无感'};
+const MOTOR_COMMANDS=['2804','4015','ESC','Custom1','Custom2','Custom3'];
+const MOTOR_LABELS={ESC:'ESC \u901a\u7528',Custom1:'Custom 1',Custom2:'Custom 2',Custom3:'Custom 3'};
+const availableModels=()=>['2804','4015',...[0,1,2].filter(i=>(boardConfig?.customMask||0)&(1<<i)).map(i=>'Custom'+(i+1))];
 const ACTION_LABELS={Speed:'Speed · 速度',Angle:'Angle · 位置',Torque:'Torque · 转矩',Throttle:'Throttle · 油门'};
 function controlRules(work,motorAxis,drive,model){
  const axes=work===0?['M1']:work===1?['M2']:['M1','M2'],follow=work===5||work===6;
  return {axes,runAxes:follow?[work===5?'M2':'M1']:axes,follow,
   drives:work===0&&motorAxis==='M1'?DRIVE_COMMANDS:['Encoder'],
-  models:work===0&&motorAxis==='M1'&&drive==='SixStep'?['2804','4015','ESC']:['2804','4015'],
+  models:[...availableModels(),...(work===0&&motorAxis==='M1'&&drive==='SixStep'?['ESC']:[])],
   actions:follow?[]:work===3?['Speed']:work===4?['Angle']:work===0&&drive==='HSO'?['Speed']:
    work===0&&drive==='SixStep'?(model==='ESC'?['Throttle']:['Speed','Throttle']):['Speed','Angle','Torque']};
 }
@@ -914,7 +1207,7 @@ function selectChoices(id,values,labels={},preferred){
 }
 function confirmedModel(r,axis){
  if(!r)return '2804';
- return axis==='M1'&&r.work===0&&r.drive===2&&(r.settings.control_config&32768)?'ESC':r.profiles[axis==='M2'?1:0]?'4015':'2804';
+ return axis==='M1'&&r.work===0&&r.drive===2&&(r.settings.control_config&32768)?'ESC':MOTOR_COMMANDS[r.profiles[axis==='M2'?1:0]];
 }
 function controlSelection(){
  const work=WORK_COMMANDS.indexOf($('workMode').value),motorAxis=$('motorAxis').value,axis=$('axis').value,drive=$('driveMode').value,model=$('motorModel').value;
@@ -933,8 +1226,8 @@ function refreshControlChoices({readMotor=false,readDrive=false,focus}={}){
  selectChoices('driveMode',rules.drives,DRIVE_LABELS);
  rules=controlRules(work,$('motorAxis').value,$('driveMode').value,$('motorModel').value);
  let confirmed=confirmedModel(r,$('motorAxis').value);
- if(!rules.models.includes(confirmed))confirmed=r?.profiles[$('motorAxis').value==='M2'?1:0]?'4015':'2804';
- selectChoices('motorModel',rules.models,{ESC:'ESC 通用'},readMotor||!rules.models.includes($('motorModel').value)?confirmed:undefined);
+ if(!rules.models.includes(confirmed))confirmed=MOTOR_COMMANDS[r?.profiles[$('motorAxis').value==='M2'?1:0]||0];
+ selectChoices('motorModel',rules.models,MOTOR_LABELS,readMotor||!rules.models.includes($('motorModel').value)?confirmed:undefined);
  const state=controlSelection();rules=state.rules;
  const oldAction=$('action').value;
  selectChoices('action',rules.actions,ACTION_LABELS);
@@ -1014,11 +1307,23 @@ function controlReply(command,r,previous){
  }
 }
 function appendConfig(label,value){const row=document.createElement('div'),name=document.createElement('span'),n=document.createElement('b');row.className='config-row';name.textContent=label;n.textContent=value;row.append(name,n);$('configValues').append(row)}
-function renderConfig(){refreshSettingsCapabilities();refreshControlChoices();const box=$('configValues');box.replaceChildren();if(!boardConfig){box.textContent='连接后读取板端当前配置';return}const r=boardConfig,s=r.settings;appendConfig('读回时间',r.read_at||'--');appendConfig('通信来源',r.source===1?'USB CDC':'USART1');appendConfig('固件／配置接口','R'+r.firmware+' / '+r.schema);appendConfig('工作模式',at(WORK,r.work));appendConfig('M1 / M2 型号',r.profiles.map(x=>at(['2804','4015'],x)).join(' / '));appendConfig('M1 驱动',r.drive===2&&(s.control_config&32768)?'6STEP ESC':at(DRIVE,r.drive));appendConfig('板端 View','M'+(r.focus+1));appendConfig('保存状态',at(SAVE_STATES,r.save));for(let a=0;a<2;a++){const flags=(a?s.axis2_flags:s.flags)>>>0,p=a?'axis2_':'';const speed=(flags>>>14)&1023;const pos=((flags>>>8)&63)|(((flags>>>25)&15)<<6);appendConfig('M'+(a+1)+' Curr Loop',(a===0&&r.drive===1)?'ON（HSO）':(a===0&&r.drive===2)?'OFF（六步）':flags&1?'ON':'OFF');appendConfig('M'+(a+1)+' Speed Limit / Pos Speed',(speed||100)+' / '+(pos||30)+' rad/s');appendConfig('M'+(a+1)+' 保存的 Speed / Uq / Position',s[p+'speed_x10']/10+' rad/s · '+s[p+'voltage_x100']/100+' V · '+s[p+'position_x100']/100+' rad');appendConfig('M'+(a+1)+' 调节步长',s[p+'speed_step_x10']/10+' rad/s · '+s[p+'torque_step_x100']/100+' V/A · '+s[p+'position_step_x100']/100+' rad')}appendConfig('齿轮比例／偏移',s.gear_ratio_x100/100+' / '+s.gear_offset_x100/100+' rad');appendConfig('IBUS 阈值',(((s.control_config>>>8)&63)||30)/10+' A');appendConfig('LED',((s.flags&2)?'ON':'OFF')+' · '+s.led_brightness+'%');appendConfig('保存的油门',(s.control_config>>>16&127)+'%');appendConfig('辨识结果','PP '+(s.motor_detect<<24>>24)+' · R '+((s.motor_detect>>>8)&65535)/1000+' Ω · L '+s.motor_detect_l_uh+' µH · Flux '+s.motor_detect_flux_uwb+' µWb');}
-function toggleDemo(){if(port||connecting||connected||closing)throw Error('请先断开串口');if(recording||recordWriter||recordChunks.length)throw Error('请先结束记录');demo=!demo;clear();lastStatus={};boardConfig=null;status({});renderConfig();demoStart=performance.now();demoSequence=0;log(demo?'离线模拟数据，不连接开发板':'已退出离线演示')}
-function demoFrame(){const t=(performance.now()-demoStart)/1000,frame={kind:1,ms:Math.round(t*1000),sequence:demoSequence++&65535,epoch:-1,values:[['m1.target_speed','rad/s',50],['m1.feedback_speed','rad/s',50+5*Math.sin(t)],['m1.target_position','rad',null],['m1.position','rad',50*t+5-5*Math.cos(t)],['m1.iq','A',.2+.05*Math.sin(4*t)],['vbus','V',20]]};if(!replaying)add(frame);try{recordFrame(frame)}catch(e){recording=false;$('error').textContent='记录失败：'+e.message}$('connection').textContent='离线演示 · 模拟数据';$('connection').className='bad';$('demo').textContent='退出离线演示';$('metrics').textContent='模拟数据，不连接串口、不控制电机';}
-function updateMetrics(){$('pending').textContent=pending.size?'等待板端回执：'+[...pending].map(([id,p])=>'#'+id+' '+p.command).join('；'):'';$('connection').textContent=connected?'串口已连接':'未连接';$('connection').className=connected?(lastRx&&performance.now()-lastRx<500?'good':'bad'):'';$('metrics').textContent='收到 '+received+' 帧 · 数据年龄 '+(lastRx?Math.round(performance.now()-lastRx):'--')+' ms\nCRC 错误 '+parser.crc_errors+' · 序号丢帧 '+parser.lost+'\n板端重启 '+parser.resets+' · 控制峰值 '+(lastStatus.max_us??'--')+' µs';$('record').textContent=recording||recordWriter||recordChunks.length?'结束记录并保存 CSV':'开始记录 CSV';$('recordPath').textContent=recording?recordPath:'';if(demo)demoFrame();else $('demo').textContent='离线演示';if(!paused)draw();setTimeout(updateMetrics,100)}
+function renderConfig(){refreshSettingsCapabilities();refreshControlChoices();const box=$('configValues');box.replaceChildren();if(!boardConfig){box.textContent='连接后读取板端当前配置';return}const r=boardConfig,s=r.settings;appendConfig('读回时间',r.read_at||'--');appendConfig('通信来源',r.source===1?'USB CDC':'USART1');appendConfig('固件／配置接口','R'+r.firmware+' / '+r.schema);appendConfig('工作模式',at(WORK,r.work));appendConfig('M1 / M2 型号',r.profiles.map(x=>MOTOR_LABELS[MOTOR_COMMANDS[x]]||MOTOR_COMMANDS[x]).join(' / '));appendConfig('M1 驱动',r.drive===2&&(s.control_config&32768)?'6STEP ESC':at(DRIVE,r.drive));appendConfig('板端 View','M'+(r.focus+1));appendConfig('保存状态',at(SAVE_STATES,r.save));for(let a=0;a<2;a++){const flags=(a?s.axis2_flags:s.flags)>>>0,p=a?'axis2_':'';const speed=(flags>>>14)&1023;const pos=((flags>>>8)&63)|(((flags>>>25)&15)<<6);appendConfig('M'+(a+1)+' Curr Loop',(a===0&&r.drive===1)?'ON（HSO）':(a===0&&r.drive===2)?'OFF（六步）':flags&1?'ON':'OFF');appendConfig('M'+(a+1)+' Speed Limit / Pos Speed',(speed||100)+' / '+(pos||30)+' rad/s');appendConfig('M'+(a+1)+' 保存的 Speed / Uq / Position',s[p+'speed_x10']/10+' rad/s · '+s[p+'voltage_x100']/100+' V · '+s[p+'position_x100']/100+' rad');appendConfig('M'+(a+1)+' 调节步长',s[p+'speed_step_x10']/10+' rad/s · '+s[p+'torque_step_x100']/100+' V/A · '+s[p+'position_step_x100']/100+' rad')}appendConfig('齿轮比例／偏移',s.gear_ratio_x100/100+' / '+s.gear_offset_x100/100+' rad');appendConfig('IBUS 阈值',(((s.control_config>>>8)&63)||30)/10+' A');appendConfig('LED',((s.flags&2)?'ON':'OFF')+' · '+s.led_brightness+'%');appendConfig('保存的油门',(s.control_config>>>16&127)+'%');appendConfig('辨识结果','PP '+(s.motor_detect<<24>>24)+' · R '+((s.motor_detect>>>8)&65535)/1000+' Ω · L '+s.motor_detect_l_uh+' µH · Flux '+s.motor_detect_flux_uwb+' µWb');}
+function toggleDemo(){if(port||connecting||connected||closing)throw Error('请先断开串口');if(recording||recordWriter||recordChunks.length)throw Error('请先结束记录');cancelCsvLoad();replaying=false;$('replay').textContent='';demo=!demo;clear();lastStatus={};boardConfig=null;status({});renderConfig();demoStart=performance.now();demoSequence=0;log(demo?'离线模拟数据，不连接开发板':'已退出离线演示')}
+function demoFrame(){const t=(performance.now()-demoStart)/1000,frame={kind:1,ms:Math.round(t*1000),sequence:demoSequence++&65535,epoch:-1,values:[['m1.target_speed','rad/s',50],['m1.feedback_speed','rad/s',50+5*Math.sin(t)],['m1.target_position','rad',null],['m1.position','rad',50*t+5-5*Math.cos(t)],['m1.iq','A',.2+.05*Math.sin(4*t)],['vbus','V',20]]};if(!replaying)add(frame);try{recordFrame(frame)}catch(e){recording=false;$('error').textContent='记录失败：'+e.message}setText($('connection'),'离线演示 · 模拟数据');$('connection').className='bad';$('demo').textContent='退出离线演示';setText($('metrics'),'模拟数据，不连接串口、不控制电机');}
+function updateMetrics(){setText($('pending'),pending.size?'等待板端回执：'+[...pending].map(([id,p])=>'#'+id+' '+p.command).join('；'):'');setText($('connection'),connected?'串口已连接':'未连接');$('connection').className=connected?(lastRx&&performance.now()-lastRx<500?'good':'bad'):'';setText($('metrics'),'收到 '+received+' 帧 · 数据年龄 '+(lastRx?Math.round(performance.now()-lastRx):'--')+' ms\nCRC 错误 '+parser.crc_errors+' · 序号丢帧 '+parser.lost+'\n板端重启 '+parser.resets+' · 控制峰值 '+(lastStatus.max_us??'--')+' µs');setText($('record'),recording||recordWriter||recordChunks.length?'结束记录并保存 CSV':'开始记录 CSV');setText($('recordPath'),recording?recordPath:'');if(demo)demoFrame();else $('demo').textContent='离线演示';setTimeout(updateMetrics,100)}
 
+// Work counts come from the operation, never from elapsed animation time.
+const taskProgress={csv:null,diagnostics:null};
+let taskProgressSerial=0,onTaskProgress=null,csvGeneration=0,csvActiveReader=null;
+function publishTaskProgress(kind,state){taskProgress[kind]=state;try{onTaskProgress?.(kind,state)}catch{}}
+function beginTaskProgress(kind,total,unit,label){const token=++taskProgressSerial;publishTaskProgress(kind,{token,status:'running',completed:0,total:Number.isFinite(total)&&total>=0?total:null,unit,label,message:''});return token}
+function updateTaskProgress(kind,token,patch){const state=taskProgress[kind];if(state?.token===token)publishTaskProgress(kind,{...state,...patch})}
+function cancelCsvLoad(){
+ csvGeneration++;const reader=csvActiveReader;csvActiveReader=null;
+ if(reader)try{Promise.resolve(reader.cancel()).catch(()=>{})}catch{}
+ const state=taskProgress.csv;if(state?.status==='running')updateTaskProgress('csv',state.token,{status:'cancelled',message:'CSV 载入已取消'});
+ return csvGeneration;
+}
 function csvRows(text){let rows=[],row=[],cell='',quote=false;for(let i=0;i<text.length;i++){const ch=text[i];if(ch==='"'){if(quote&&text[i+1]==='"'){cell+='"';i++}else quote=!quote}else if(ch===','&&!quote){row.push(cell);cell=''}else if((ch==='\n'||ch==='\r')&&!quote){if(ch==='\r'&&text[i+1]==='\n')i++;row.push(cell);if(row.some(v=>v!==''))rows.push(row);row=[];cell=''}else cell+=ch}if(cell||row.length){row.push(cell);rows.push(row)}return rows}
 function statusBanner(s){
   if(s.drive==='HSO')return 'HSO '+s.hso+' / '+s.hso_reason+' · 相对位置 '+(s.hso_position_valid?'有效':'无效');
@@ -1027,26 +1332,38 @@ function statusBanner(s){
 }
 function inactiveAxisLabel(index){return 'M'+(index+1)+' 未启用'}
 async function loadCsv(file){
-  clear();replaying=true;refreshControlChoices();let pending='',header=false,current=null,currentId='',start=null;
-  const flush=()=>{if(!current)return;if(epoch!==null&&(epoch!==current.epoch||lastKind!==current.kind))start=null;add(current);if(start===null)start=current.ms/1000;current=null};
-  const line=text=>{const r=csvRows(text.replace(/^\uFEFF/,'')+'\n')[0];if(!r)return;
-    if(!header){if(r.join(',')!=='host_time,board_ms,sequence,epoch,packet_kind,field,unit,value')throw Error('不是本工具的 CSV 格式');header=true;return}
-    if(r.length<8||r[5]==='status'||r[5]==='configuration'||r[5]==='diagnostic')return;
-    const ms=Number(r[1]),sequence=Number(r[2]),kind=Number(r[4]),ep=Number(r[3]);
-    if(![ms,sequence,kind,ep].every(Number.isFinite))throw Error('CSV 时间或帧编号无效');
-    const id=ep+'/'+ms+'/'+sequence+'/'+kind;
-    if(id!==currentId){flush();currentId=id;current={ms,seq:sequence,epoch:ep,kind,values:[]}}
-    const value=r[7]===''?null:Number(r[7]);current.values.push([r[5],r[6],value===null||!Number.isFinite(value)?null:value]);
-  };
-  $('replay').textContent='正在流式载入 CSV…';
-  const reader=file.stream().pipeThrough(new TextDecoderStream()).getReader();
-  try{while(true){const chunk=await reader.read();if(chunk.done)break;pending+=chunk.value;let end;
-    while((end=pending.indexOf('\n'))>=0){line(pending.slice(0,end).replace(/\r$/,''));pending=pending.slice(end+1)}
-    if(pending.length>1024*1024)throw Error('CSV 单行过长');
-  }if(pending)line(pending);flush();if(!header)throw Error('CSV 为空');}
-  finally{await reader.cancel();reader.releaseLock()}
-  replayEnd=latestTime;replayStart=Math.max(start??latestTime,latestTime-cacheHorizon());$('scrub').value='1000';
-  $('replay').textContent='CSV 历史回放 · 最后一段／按缓存时长保留';draw();log('载入 '+file.name);
+  const generation=cancelCsvLoad(),job=beginTaskProgress('csv',file.size,'bytes',file.name||'CSV');
+  let bytes=0;
+  try{
+    clear();replaying=true;refreshControlChoices();let pending='',header=false,current=null,currentId='',start=null;
+    const flush=()=>{if(!current)return;if(epoch!==null&&(epoch!==current.epoch||lastKind!==current.kind))start=null;add(current);if(start===null)start=current.ms/1000;current=null};
+    const line=text=>{const r=csvRows(text.replace(/^\uFEFF/,'')+'\n')[0];if(!r)return;
+      if(!header){if(r.join(',')!=='host_time,board_ms,sequence,epoch,packet_kind,field,unit,value')throw Error('不是本工具的 CSV 格式');header=true;return}
+      if(r.length<8||r[5]==='status'||r[5]==='configuration'||r[5]==='diagnostic')return;
+      const ms=Number(r[1]),sequence=Number(r[2]),kind=Number(r[4]),ep=Number(r[3]);
+      if(![ms,sequence,kind,ep].every(Number.isFinite))throw Error('CSV 时间或帧编号无效');
+      const id=ep+'/'+ms+'/'+sequence+'/'+kind;
+      if(id!==currentId){flush();currentId=id;current={ms,seq:sequence,epoch:ep,kind,values:[]}}
+      const value=r[7]===''?null:Number(r[7]);current.values.push([r[5],r[6],value===null||!Number.isFinite(value)?null:value]);
+    };
+    $('replay').textContent='正在流式载入 CSV…';
+    const reader=file.stream().getReader(),decoder=new TextDecoder();csvActiveReader=reader;let yieldedAt=performance.now();
+    try{
+      while(true){
+        const chunk=await reader.read();if(generation!==csvGeneration)return {cancelled:true};if(chunk.done)break;
+        bytes+=chunk.value.byteLength;pending+=decoder.decode(chunk.value,{stream:true});let end;
+        while((end=pending.indexOf('\n'))>=0){line(pending.slice(0,end).replace(/\r$/,''));pending=pending.slice(end+1)}
+        if(pending.length>1024*1024)throw Error('CSV 单行过长');
+        updateTaskProgress('csv',job,{completed:bytes});
+        if(globalThis.requestAnimationFrame&&performance.now()-yieldedAt>12){await new Promise(resolve=>setTimeout(resolve,0));yieldedAt=performance.now();if(generation!==csvGeneration)return {cancelled:true}}
+      }
+      pending+=decoder.decode();if(pending)line(pending);flush();if(!header)throw Error('CSV 为空');
+    }finally{if(csvActiveReader===reader)csvActiveReader=null;try{await reader.cancel()}catch{}finally{reader.releaseLock()}}
+    if(generation!==csvGeneration)return {cancelled:true};
+    replayEnd=latestTime;replayStart=Math.max(start??latestTime,latestTime-cacheHorizon());$('scrub').value='1000';
+    $('replay').textContent='CSV 历史回放 · 最后一段／按缓存时长保留';draw();log('载入 '+file.name);
+    updateTaskProgress('csv',job,{status:'done',completed:bytes});
+  }catch(error){if(generation!==csvGeneration)return {cancelled:true};updateTaskProgress('csv',job,{status:'error',completed:bytes,message:error.message});throw error}
 }
 // Native integer units match app_control.h, not AppSettings byte offsets.
 const EDITORS=[
@@ -1063,14 +1380,16 @@ const EDITORS=[
  [5,'ibusLimit','M1 IBUS 阈值','A',.5,4,.1]
 ];
 let batchEpoch=0;
-function requireExtensions(){if(!boardConfig||boardConfig.schema!==2||(boardConfig.firmware<88||boardConfig.firmware>103))throw Error('此操作需要 UI-R88-PC；请升级固件后重新读取设置')}
+function requireExtensions(){if(!boardConfig||boardConfig.schema!==2||(boardConfig.firmware<88||boardConfig.firmware>105))throw Error('此操作需要 UI-R88-PC；请升级固件后重新读取设置')}
 function axisOptions(r,a){const s=r.settings,p=a?'axis2_':'',f=(a?s.axis2_flags:s.flags)>>>0;return {posSpeed:((f>>>8)&63)|(((f>>>25)&15)<<6)||30,speedLimit:(f>>>14)&1023||100,currentLoop:f&1,speedStep:s[p+'speed_step_x10']/10,torqueStep:s[p+'torque_step_x100']/100,positionStep:s[p+'position_step_x100']/100}}
 function editableConfig(r){const s=r.settings;return {work:r.work,profiles:r.profiles.slice(),drive:r.drive,esc:!!(s.control_config&32768),focus:r.focus,axes:[axisOptions(r,0),axisOptions(r,1)],ledBrightness:s.led_brightness,ledEnable:(s.flags>>>1)&1,gearRatio:s.gear_ratio_x100/100,gearOffset:s.gear_offset_x100/100,ibusLimit:(((s.control_config>>>8)&63)||30)/10}}
 function editorScope(k){return k===1||k===2||k===6||k>=8}
 for(const [key,id,title,unit,min,max,step]of EDITORS){const label=document.createElement('label'),input=document.createElement('input');label.className='row';label.append(document.createTextNode(title+' '));input.id=id;input.type=(key===6||key===7)?'checkbox':'number';input.min=min;input.max=max;input.step=step;input.setAttribute?.('aria-label',title);label.append(input,document.createTextNode(' '+unit));$(editorScope(key)?'axisEditors':'globalEditors').append(label)}
 function refreshSettingsCapabilities(){
- const r=boardConfig,a=Number($('settingsAxis').value||1)-1,enabled=r?.schema===2&&r?.firmware>=88&&r?.firmware<=103;
- for(const id of ['pauseMotors','applySettings','saveSettings','clearIbus','resetSettings','startDetect','saveDetect','readDiag','importConfig'])$(id).disabled=!enabled;
+ const r=boardConfig,a=Number($('settingsAxis').value||1)-1,enabled=r?.schema===2&&r?.firmware>=88&&r?.firmware<=105;
+ for(const id of ['pauseMotors','applySettings','saveSettings','clearIbus','resetSettings','startDetect','saveDetect','readDiag','importConfig','applyDetection','restoreMotorPreset','readMotorParams'])$(id).disabled=!enabled;
+ for(const id of ['applyDetection','restoreMotorPreset','readMotorParams'])$(id).disabled=!(enabled&&r.firmware>=104);
+ $('saveCustom').disabled=!(enabled&&r.firmware>=105);
  if(!r){$('settingsNote').textContent='连接并读取 UI-R88-PC 设置后可编辑。';return}
  const forced=a===0&&r.drive!==0,wasForced=$('currentLoop').disabled;
  $('currentLoop').disabled=forced;
@@ -1085,32 +1404,54 @@ function checkedEditor(key,id,value){const d=EDITORS.find(x=>x[0]===key),n=Numbe
 async function runBatch(commands){const token=++batchEpoch;for(const command of commands){if(token!==batchEpoch)throw Error('批量操作已被停止／取消');await send(command)}if(token!==batchEpoch)throw Error('批量操作已取消');return token}
 async function applyEditorSettings(){requireExtensions();const a=Number($('settingsAxis').value||1),c=editableConfig(boardConfig),commands=[];const pos=checkedEditor(1,'Pos Speed',$('posSpeed').value),limit=checkedEditor(2,'Speed Limit',$('speedLimit').value);if(pos>limit)throw Error('Pos Speed 不能大于 Speed Limit');for(const [k,id]of EDITORS){if(k===6&&$('currentLoop').disabled)continue;const v=checkedEditor(k,id,k===6||k===7?$(''+id).checked:$(id).value),old=nativeValue(k,(editorScope(k)?c.axes[a-1]:c)[id]);if(v!==old)commands.push('App:'+(editorScope(k)?a:0)+','+k+','+v)}// Increase the cap first; decreasing it clamps Pos Speed on the board.
 commands.sort((x,y)=>x.startsWith('App:'+a+',2,')?-1:y.startsWith('App:'+a+',2,')?1:0);await runBatch(commands);log('本页设置已应用；保存结果以读回的 Save 为准')}
+function formatMotorParams(value){const m=/^([MP]):(\d+)\/(\d+)\/(\d+)$/.exec(value);return m?(m[1]==='M'?'MEASURED':'PRESET')+' · R '+(Number(m[2])/1000).toFixed(3)+' Ω · Ls '+m[3]+' µH · Flux '+(Number(m[4])/1000).toFixed(3)+' mWb':value}
 function decodeRow(f){const b=f.payload,v=new DataView(b.buffer,b.byteOffset,b.length),str=(at,n)=>new TextDecoder().decode(b.subarray(at,at+n)).split('\0')[0];return {id:v.getUint16(0,true),result:v.getInt8(2),source:b[3],axis:b[4],group:b[5],row:b[6],count:b[7],label:str(8,24),value:str(32,32),ms:f.ms}}
 function consumeRow(f){const r=decodeRow(f),p=pending.get(r.id);if(!p||p.command!==`GetRow:${r.axis},${r.group},${r.row}`)return;pending.delete(r.id);clearTimeout(p.timer);if(r.result===1&&r.count>r.row&&r.source===boardConfig?.source)p.resolve(r);else p.reject(Error('诊断查询被板端拒绝'))}
-async function readDiagnostics(){requireExtensions();const axis=Number($('diagAxis').value||1),group=Number($('diagGroup').value||0),token=++batchEpoch;$('diagRows').replaceChildren();let count=1;for(let row=0;row<count;row++){if(token!==batchEpoch)throw Error('诊断查询已取消');const r=await send(`GetRow:${axis},${group},${row}`);count=r.count;if(count>112)throw Error('诊断行数非法');const el=document.createElement('div');el.className='config-row';const key=document.createElement('span'),value=document.createElement('b');key.textContent=r.label;value.textContent=r.value+' · '+r.ms+' ms';el.append(key,value);$('diagRows').append(el)}}
-function validateImport(data){if(data?.format!=='FOC-console-settings'||data.version!==1||!data.editable)throw Error('请选择本工具导出的配置 JSON');const c=data.editable;if(!Number.isInteger(c.work)||c.work<0||c.work>6||!Number.isInteger(c.drive)||c.drive<0||c.drive>2||!Number.isInteger(c.focus)||c.focus<0||c.focus>1||!Array.isArray(c.profiles)||c.profiles.length!==2||!c.profiles.every(x=>x===0||x===1)||!Array.isArray(c.axes)||c.axes.length!==2||typeof c.esc!=='boolean')throw Error('工作模式／型号格式错误');if(c.work!==0&&(c.drive!==0||c.esc)||c.esc&&c.drive!==2)throw Error('无感与 ESC 仅支持 Single M1');for(let a=0;a<2;a++){if(!c.axes[a]||c.axes[a].posSpeed>c.axes[a].speedLimit)throw Error('Pos Speed 不能超过 Speed Limit');for(const [k,id]of EDITORS)if(editorScope(k))checkedEditor(k,id,c.axes[a][id])}for(const [k,id]of EDITORS)if(!editorScope(k))checkedEditor(k,id,c[id]);return c}
-function importCommands(c){const commands=['App:0,14,0','Work:SingleM1','Feedback:Encoder','Motor1:'+['2804','4015'][c.profiles[0]],'Motor2:'+['2804','4015'][c.profiles[1]]];for(let a=0;a<2;a++)for(const k of [2,1,6,8,9,10]){const id=EDITORS.find(x=>x[0]===k)[1];commands.push(`App:${a+1},${k},${checkedEditor(k,id,c.axes[a][id])}`)}for(const [k,id]of EDITORS)if(!editorScope(k))commands.push(`App:0,${k},${checkedEditor(k,id,c[id])}`);commands.push('Feedback:'+['Encoder','HSO','SixStep'][c.drive]);if(c.esc)commands.push('Motor1:ESC');commands.push('Work:'+WORK_COMMANDS[c.work],'Focus:M'+(c.focus+1),'App:0,16,0');return commands}
+async function readDiagnostics(){
+ requireExtensions();const axis=Number($('diagAxis').value||1),group=Number($('diagGroup').value||0),token=++batchEpoch;
+ const job=beginTaskProgress('diagnostics',null,'rows','M'+axis+' / '+($('diagGroup').selectedOptions?.[0]?.textContent||group));
+ $('diagRows').replaceChildren();let count=1,completed=0;
+ try{
+  for(let row=0;row<count;row++){
+   if(token!==batchEpoch)throw Error('诊断查询已取消');
+   const r=await send(`GetRow:${axis},${group},${row}`);
+   if(token!==batchEpoch)throw Error('诊断查询已取消');
+   count=r.count;if(!Number.isInteger(count)||count<1||count>112||count<=row)throw Error('诊断行数非法');
+   const el=document.createElement('div');el.className='config-row';const key=document.createElement('span'),value=document.createElement('b');key.textContent=r.label;value.textContent=(r.label==='R/L/Flux'?formatMotorParams(r.value):r.value)+' · '+r.ms+' ms';el.append(key,value);$('diagRows').append(el);
+   completed=row+1;updateTaskProgress('diagnostics',job,{completed,total:count});
+  }
+  updateTaskProgress('diagnostics',job,{status:'done',completed,total:count});
+ }catch(error){updateTaskProgress('diagnostics',job,{status:token!==batchEpoch?'cancelled':'error',completed,message:error.message});throw error}
+}
+function validateImport(data){if(data?.format!=='FOC-console-settings'||data.version!==1||!data.editable)throw Error('请选择本工具导出的配置 JSON');const c=data.editable;if(!Number.isInteger(c.work)||c.work<0||c.work>6||!Number.isInteger(c.drive)||c.drive<0||c.drive>2||!Number.isInteger(c.focus)||c.focus<0||c.focus>1||!Array.isArray(c.profiles)||c.profiles.length!==2||!c.profiles.every(x=>x===0||x===1||(Number.isInteger(x)&&x>=3&&x<=5&&((boardConfig?.customMask||0)&(1<<(x-3)))))||!Array.isArray(c.axes)||c.axes.length!==2||typeof c.esc!=='boolean')throw Error('工作模式／型号格式错误');if(c.work!==0&&(c.drive!==0||c.esc)||c.esc&&c.drive!==2)throw Error('无感与 ESC 仅支持 Single M1');for(let a=0;a<2;a++){if(!c.axes[a]||c.axes[a].posSpeed>c.axes[a].speedLimit)throw Error('Pos Speed 不能超过 Speed Limit');for(const [k,id]of EDITORS)if(editorScope(k))checkedEditor(k,id,c.axes[a][id])}for(const [k,id]of EDITORS)if(!editorScope(k))checkedEditor(k,id,c[id]);return c}
+function importCommands(c){const commands=['App:0,14,0','Work:SingleM1','Feedback:Encoder','Motor1:'+MOTOR_COMMANDS[c.profiles[0]],'Motor2:'+MOTOR_COMMANDS[c.profiles[1]]];for(let a=0;a<2;a++)for(const k of [2,1,6,8,9,10]){const id=EDITORS.find(x=>x[0]===k)[1];commands.push(`App:${a+1},${k},${checkedEditor(k,id,c.axes[a][id])}`)}for(const [k,id]of EDITORS)if(!editorScope(k))commands.push(`App:0,${k},${checkedEditor(k,id,c[id])}`);commands.push('Feedback:'+['Encoder','HSO','SixStep'][c.drive]);if(c.esc)commands.push('Motor1:ESC');commands.push('Work:'+WORK_COMMANDS[c.work],'Focus:M'+(c.focus+1),'App:0,16,0');return commands}
 function importDiff(c){const old=editableConfig(boardConfig),rows=[];for(const k of ['work','profiles','drive','esc','focus','axes','ledBrightness','ledEnable','gearRatio','gearOffset','ibusLimit'])if(JSON.stringify(old[k])!==JSON.stringify(c[k]))rows.push(k+': '+JSON.stringify(old[k])+' → '+JSON.stringify(c[k]));return rows}
-async function importSettings(file){requireExtensions();if(file.size>65536)throw Error('配置文件过大');const c=validateImport(JSON.parse(await file.text())),diff=importDiff(c);if(!diff.length){log('导入配置与读回值相同');return}if(!confirm('电机会停止。逐项应用以下设置？\n'+diff.join('\n')+'\n遇到拒绝即中止，已应用项不会自动撤回。'))return;await send('Stop');await runBatch(importCommands(c));await send('Get');log('导入完成，保持 GLOBAL STOP；检查状态，需对齐时显式请求，再手动运行')}
+async function importSettings(file){requireExtensions();if(file.size>65536)throw Error('配置文件过大');const c=validateImport(JSON.parse(await file.text())),diff=importDiff(c);if(!diff.length){log('导入配置与读回值相同');return}if(!await confirmAction('电机会停止。逐项应用以下设置？\n'+diff.join('\n')+'\n遇到拒绝即中止，已应用项不会自动撤回。',{title:'导入配置',action:'停止并应用配置'}))return {cancelled:true};await send('Stop');await runBatch(importCommands(c));await send('Get');log('导入完成，保持 GLOBAL STOP；检查状态，需对齐时显式请求，再手动运行')}
 $('settingsAxis').value='1';$('diagAxis').value='1';$('diagGroup').value='0';
 $('pauseMotors').onclick=()=>act(async()=>{requireExtensions();await send('Stop');await send('App:0,14,0')});
 $('settingsAxis').onchange=populateSettings;$('loadSettings').onclick=populateSettings;
 $('speedLimit').oninput=()=>{$('posSpeed').max=$('speedLimit').value};
 $('applySettings').onclick=()=>act(applyEditorSettings);
 $('saveSettings').onclick=()=>act(()=>{requireExtensions();return send('App:0,16,0')});
-$('align').onclick=()=>act(async()=>{if(confirm('电机会转动以重新对齐，继续？'))await send('Align:M'+$('settingsAxis').value)});
-$('clearIbus').onclick=()=>act(async()=>{requireExtensions();if(confirm('停止 M1 并清除 IBUS 锁存？'))await send('App:0,12,0')});
-$('resetSettings').onclick=()=>act(async()=>{requireExtensions();if(confirm('恢复所有板端设置并可能自动对齐电机，继续？')){await send('Stop');await send('App:0,11,0');await send('Get')}});
-$('startDetect').onclick=()=>act(async()=>{requireExtensions();const ma=Number($('detectCurrent').value);if(!Number.isInteger(ma)||ma<100||ma>500)throw Error('测试电流范围 100～500 mA');if(confirm('开始 Single M1 参数辨识？电机会转动。'))await send('App:0,13,'+ma)});
+$('align').onclick=()=>act(async()=>{const axis=$('settingsAxis').value;if(!await confirmAction('M'+axis+' 电机会转动以重新对齐，继续？',{title:'重新对齐 M'+axis,action:'开始对齐'}))return {cancelled:true};await send('Align:M'+axis)});
+$('clearIbus').onclick=()=>act(async()=>{requireExtensions();if(!await confirmAction('停止 M1 并清除 IBUS 锁存？',{title:'清除 IBUS 锁存',action:'停止并清除'}))return {cancelled:true};await send('App:0,12,0')});
+$('resetSettings').onclick=()=>act(async()=>{requireExtensions();if(!await confirmAction('恢复所有板端设置并可能自动对齐电机，继续？',{title:'恢复板端默认设置',action:'恢复默认设置'}))return {cancelled:true};await send('Stop');await send('App:0,11,0');await send('Get')});
+$('startDetect').onclick=()=>act(async()=>{requireExtensions();const ma=Number($('detectCurrent').value);if(!Number.isInteger(ma)||ma<100||ma>500)throw Error('测试电流范围 100～500 mA');if(!await confirmAction('以 '+ma+' mA 开始 Single M1 参数辨识？电机会转动。',{title:'开始参数辨识',action:'开始辨识'}))return {cancelled:true};await send('App:0,13,'+ma)});
 $('stopDetect').onclick=()=>act(()=>send('Stop'));
 $('saveDetect').onclick=()=>act(()=>{requireExtensions();return send('App:0,15,0')});
-$('applyHso').onclick=()=>act(async()=>{if(confirm('执行 HSO:'+ $('hsoAction').value+'？Use 会切换反馈。'))await send('M1:HSO:'+$('hsoAction').value)});
+function requireCalibration(){requireExtensions();if(boardConfig.firmware<104)throw Error('Calibration requires R104');}
+$('applyDetection').onclick=()=>act(async()=>{requireCalibration();const axis=Number($('calibrationAxis').value);if(!await confirmAction('将已保存的测量电参应用到 M'+axis+'？两轴均需停止，应用后会重新对齐。',{title:'应用测量值到 M'+axis,action:'应用测量值'}))return {cancelled:true};await send('App:'+axis+',18,0')});
+$('restoreMotorPreset').onclick=()=>act(async()=>{requireCalibration();const axis=Number($('calibrationAxis').value);if(!await confirmAction('恢复 M'+axis+' 的型号预设电参？两轴均需停止，恢复后会重新对齐。',{title:'恢复 M'+axis+' 预设电参',action:'恢复预设电参'}))return {cancelled:true};await send('App:'+axis+',19,0')});
+$('readMotorParams').onclick=()=>act(async()=>{requireCalibration();$('diagAxis').value=$('calibrationAxis').value;$('diagGroup').value='0';await readDiagnostics()});
+$('saveCustom').onclick=()=>act(async()=>{requireCalibration();if(boardConfig.firmware<105)throw Error('Custom slots require R105');const n=Number($('customSlot').value);if(!await confirmAction('将已保存的辨识结果存入 Custom '+n+'？已有槽位数据会被覆盖。两轴均需停止，并先选择其他电机型号。',{title:'保存到 Custom '+n,action:'保存到槽位'}))return {cancelled:true};await send('App:0,20,'+n)});
+
+$('applyHso').onclick=()=>act(async()=>{const action=$('hsoAction').value;if(!await confirmAction('执行 HSO:'+action+'？Use 会切换反馈。',{title:'执行 HSO 操作',action:'执行 '+action}))return {cancelled:true};await send('M1:HSO:'+action)});
 $('readDiag').onclick=()=>act(readDiagnostics);
 $('clearDiag').onclick=()=>act(clearDiagnostics);
-async function clearDiagnostics(){if(!boardConfig||boardConfig.firmware<95)throw Error('清除诊断需要 R95 或更新固件');if(confirm('清除首次故障、CPU 异常记录和时序统计？请先停止两路电机。'))await send('App:0,17,0')}
-$('importConfig').onchange=()=>act(async()=>{const file=$('importConfig').files[0];try{if(file)await importSettings(file)}finally{$('importConfig').value=''}});
+async function clearDiagnostics(){if(!boardConfig||boardConfig.firmware<95)throw Error('清除诊断需要 R95 或更新固件');if(!await confirmAction('清除首次故障、CPU 异常记录和时序统计？请先停止两路电机。',{title:'清除诊断记录',action:'清除记录'}))return {cancelled:true};await send('App:0,17,0')}
+$('importConfig').onchange=()=>act(async()=>{const file=$('importConfig').files[0];try{if(file)return await importSettings(file)}finally{$('importConfig').value=''}});
 
-$('file').onchange=()=>act(async()=>{const file=$('file').files[0];if(file)await loadCsv(file)});
+$('file').onchange=()=>act(async()=>{const file=$('file').files[0];try{if(file)return await loadCsv(file)}finally{$('file').value=''}});
 $('demo').onclick=()=>act(async()=>toggleDemo());
 $('connect').onclick=()=>act(connect);
 $('disconnect').onclick=()=>act(disconnect);
@@ -1136,7 +1477,7 @@ $('readConfig').onclick=()=>act(()=>send('Get'));
 $('exportConfig').onclick=()=>act(async()=>{if(!boardConfig)throw Error('请先读取配置');download('motor-config-'+Date.now()+'.json',JSON.stringify({format:'FOC-console-settings',version:1,time:new Date().toISOString(),editable:editableConfig(boardConfig),configuration:boardConfig,status:lastStatus},null,2),'application/json')});
 $('record').onclick=()=>act(toggleRecord);
 $('pause').onclick=pauseAllPlots;
-$('live').onclick=()=>{replaying=false;$('replay').textContent='';clear();refreshControlChoices()};
+$('live').onclick=()=>{cancelCsvLoad();replaying=false;$('replay').textContent='';clear();refreshControlChoices()};
 addEventListener('resize',draw);
 if(!globalThis.isSecureContext||!navigator.serial)$('error').textContent='当前浏览器不支持串口访问，请用桌面 Chrome／Edge 打开这个 HTML 文件。';
 $('workMode').value='SingleM1';refreshControlChoices({readMotor:true,readDrive:true});
@@ -1146,6 +1487,9 @@ bindPlot();if(globalThis.location?.hash==='#demo')toggleDemo();updateMetrics();r
 /* Presentation only: native actions run immediately; motion never gates a command. */
 (()=>{
  const root=document.documentElement,toggle=$('themeToggle'),reduced=matchMedia('(prefers-reduced-motion: reduce)');
+ let savedMotion;try{savedMotion=localStorage.getItem('foc-console-motion')}catch{}
+ root.dataset.efMotion=savedMotion==='calm'?'calm':'full';$('motionMode').value=root.dataset.efMotion;
+ const calmMotion=()=>root.dataset.efMotion==='calm';
  const curve={snap:'cubic-bezier(.16,1,.3,1)',mech:'cubic-bezier(.7,0,.2,1)'};
  const animations=new Set(),owned=new WeakMap(),ghosts=new Set(),floors=new Set(),flashTimers=new Map();
  root.classList.add('motion-ready');
@@ -1154,10 +1498,13 @@ bindPlot();if(globalThis.location?.hash==='#demo')toggleDemo();updateMetrics();r
  function visible(element){const r=element.getBoundingClientRect();return r.width>0&&r.height>0&&r.bottom>70&&r.top<innerHeight}
  function play(element,frames,options={},name='response'){
   owned.get(element)?.get(name)?.cancel();
-  if(reduced.matches||!element.isConnected||!element.animate)return null;
+  if(reduced.matches||!element.isConnected||!element.animate||calmMotion()&&['page-enter','theme','theme-floor'].includes(name))return null;
   const animation=element.animate(frames,{duration:280,easing:curve.mech,...options,id:'ui-'+name});
   let slots=owned.get(element);if(!slots){slots=new Map();owned.set(element,slots)}slots.set(name,animation);animations.add(animation);
-  animation.finished.catch(()=>{}).then(()=>{animations.delete(animation);if(slots.get(name)===animation)slots.delete(name)});
+  // Detach settled effects before dropping their JS ownership.
+  const cleanup=()=>{animation.removeEventListener('finish',cleanup);animation.removeEventListener('cancel',cleanup);animation.cancel();animation.effect=null;animations.delete(animation);if(slots.get(name)===animation)slots.delete(name)};
+  animation.addEventListener('finish',cleanup,{once:true});animation.addEventListener('cancel',cleanup,{once:true});
+  animation.finished.catch(()=>{});
   return animation;
  }
  function after(animation,fn){if(animation)animation.finished.catch(()=>{}).then(fn);else fn()}
@@ -1181,9 +1528,111 @@ bindPlot();if(globalThis.location?.hash==='#demo')toggleDemo();updateMetrics();r
   layer.append(copy);ghosts.add(copy);return copy;
  }
  function exit(copy){if(copy)after(play(copy,[{opacity:1,clipPath:'inset(0 0 0 0)',transform:'none'},{opacity:0,clipPath:'inset(0 0 0 100%)',transform:'translateX(12px)'}],{duration:200},'exit'),()=>{ghosts.delete(copy);copy.remove()})}
+ // Keep the global Stop at its usual screen position inside the modal top layer.
+ const confirmDialog=document.createElement('dialog');confirmDialog.id='uiConfirm';confirmDialog.className='ui-confirm';
+ confirmDialog.setAttribute('aria-labelledby','uiConfirmTitle');confirmDialog.setAttribute('aria-describedby','uiConfirmText');
+ confirmDialog.innerHTML='<div class="ui-confirm-card"><span class="eyebrow">// CONFIRM</span><h2 id="uiConfirmTitle"></h2><div id="uiConfirmText" class="ui-confirm-copy"></div><div class="ui-confirm-actions"><button type="button" id="confirmCancel" autofocus>取消</button><button type="button" id="confirmAccept" class="primary">继续</button></div></div>';
+ const confirmCard=confirmDialog.firstElementChild,confirmStop=$('stop').cloneNode(true);confirmStop.id='confirmStop';confirmStop.classList.add('ui-confirm-stop');confirmStop.type='button';confirmStop.setAttribute('aria-label','全局停止并取消待确认操作');confirmDialog.append(confirmStop);document.body.append(confirmDialog);
+ let question=null,questionSerial=0;
+ function placeConfirm(){
+  if(!confirmDialog.open)return;
+  const original=$('stop'),style=getComputedStyle(original),r=original.getBoundingClientRect(),bar=document.querySelector('.command-bar').getBoundingClientRect();
+  Object.assign(confirmStop.style,{left:r.left+'px',top:r.top+'px',width:r.width+'px',height:r.height+'px',font:style.font,fontStretch:style.fontStretch,padding:style.padding,gap:style.gap,whiteSpace:'nowrap'});
+  const label=getComputedStyle(original.querySelector('b'));Object.assign(confirmStop.querySelector('b').style,{font:label.font,fontStretch:label.fontStretch,letterSpacing:label.letterSpacing});
+  const available=Math.max(100,innerHeight-bar.bottom-32);confirmDialog.style.setProperty('--ui-dialog-height',available+'px');
+  confirmDialog.style.top=Math.max(bar.bottom+16,(innerHeight-confirmCard.getBoundingClientRect().height)/2)+'px';confirmDialog.style.bottom='auto';
+ }
+ function restoreQuestionFocus(previous){if(previous?.isConnected&&!previous.disabled)previous.focus({preventScroll:true})}
+ function finishQuestion(accepted){
+  const current=question;if(!current)return;
+  question=null;const serial=questionSerial;confirmDialog.dataset.closing='';$('confirmAccept').disabled=$('confirmCancel').disabled=true;
+  const allowed=accepted&&current.valid();current.resolve(!!allowed);
+  after(play(confirmCard,[{opacity:1,clipPath:'inset(0 0 0 0)'},{opacity:0,clipPath:'inset(100% 0 0 0)'}],{duration:180},'confirmation-exit'),()=>{
+   if(serial!==questionSerial)return;confirmDialog.close();delete confirmDialog.dataset.closing;restoreQuestionFocus(current.previous);
+  });
+ }
+ function checkQuestion(){
+  if(question&&!question.valid()){finishQuestion(false);toast('连接或运行状态已变化，已取消待确认操作。','error')}
+ }
+ requestConfirmation=(message,options,valid)=>{
+  if(typeof confirmDialog.showModal!=='function')return Promise.resolve(confirm(message));
+  if(question){question.resolve(false);question=null}
+  ++questionSerial;owned.get(confirmCard)?.get('confirmation-exit')?.cancel();
+  if(confirmDialog.open)confirmDialog.close();delete confirmDialog.dataset.closing;
+  return new Promise(resolve=>{
+   question={resolve,valid,previous:document.activeElement};$('uiConfirmTitle').textContent=options.title||'确认操作';$('uiConfirmText').textContent=message;
+   $('confirmAccept').textContent=options.action||'确认执行';$('confirmAccept').disabled=$('confirmCancel').disabled=false;
+   try{confirmDialog.showModal();placeConfirm();$('confirmCancel').focus({preventScroll:true});play(confirmCard,[{opacity:.35,clipPath:'inset(0 0 100% 0)'},{opacity:1,clipPath:'inset(0 0 0 0)'}],{duration:280},'confirmation-enter')}
+   catch{question=null;confirmDialog.close();resolve(false)}
+  });
+ };
+ $('confirmCancel').onclick=()=>finishQuestion(false);$('confirmAccept').onclick=()=>finishQuestion(true);
+ confirmStop.onclick=()=>{if(question)question.previous=$('stop');finishQuestion(false);$('stop').click()};
+ confirmDialog.addEventListener('cancel',event=>{event.preventDefault();finishQuestion(false)});
+ confirmDialog.addEventListener('keydown',event=>{
+  if(event.key!=='Tab')return;
+  const controls=Array.from(confirmDialog.querySelectorAll('button')).filter(button=>!button.disabled),first=controls[0],last=controls.at(-1);
+  if(!first)return;
+  if(event.shiftKey&&document.activeElement===first){event.preventDefault();last.focus({preventScroll:true})}
+  else if(!event.shiftKey&&document.activeElement===last){event.preventDefault();first.focus({preventScroll:true})}
+ });
+ confirmDialog.addEventListener('close',()=>{if(question&&!confirmDialog.open){const current=question;question=null;current.resolve(false);restoreQuestionFocus(current.previous)}});
+ let backdropDown=false;
+ const outsideCard=event=>{const r=confirmCard.getBoundingClientRect();return event.clientX<r.left||event.clientX>r.right||event.clientY<r.top||event.clientY>r.bottom};
+ confirmDialog.addEventListener('pointerdown',event=>{backdropDown=event.target===confirmDialog&&outsideCard(event)});
+ confirmDialog.addEventListener('click',event=>{if(backdropDown&&event.target===confirmDialog&&outsideCard(event))finishQuestion(false);backdropDown=false});
+ document.addEventListener('click',event=>{if(event.target.closest?.('#stop'))finishQuestion(false)},true);
+ addEventListener('resize',placeConfirm);
+ if(globalThis.ResizeObserver){const observer=new ResizeObserver(placeConfirm);observer.observe(document.querySelector('.command-bar'));observer.observe($('stop'))}
+
+
+ // Native controls remain the source of truth for values, guards and events.
+ const segments=new Map();
+ const shortSelect=element=>element.tagName==='SELECT'&&(/^(plotTool|plotAxis|plotTime)(-\d+)?$/.test(element.id)||['plotColumns','settingsAxis','motionMode'].includes(element.id));
+ function syncSegment(select,animate=true){
+  const state=segments.get(select);if(!state||!select.isConnected)return;
+  const options=Array.from(select.options),signature=JSON.stringify(options.map(option=>[option.value,option.textContent,option.disabled]));
+  if(state.signature!==signature){
+   state.signature=signature;state.group.replaceChildren(state.marker);state.group.style.setProperty('--ui-segment-count',String(Math.max(1,options.length)));state.buttons=[];
+   for(const option of options){
+    const button=document.createElement('button');button.type='button';button.className='ui-segment-option';button.setAttribute('role','radio');button.dataset.value=option.value;button.textContent=option.textContent;button.draggable=false;
+    button.onclick=()=>{if(select.disabled||option.disabled)return;if(select.value!==option.value){select.value=option.value;select.dispatchEvent(new Event('change',{bubbles:true}))}syncSegment(select);button.focus({preventScroll:true})};
+    state.buttons.push(button);state.group.append(button);
+   }
+  }
+  state.group.setAttribute('aria-disabled',String(select.disabled));
+  for(let i=0;i<state.buttons.length;i++){const button=state.buttons[i],checked=select.value===options[i].value;button.disabled=select.disabled||options[i].disabled;button.setAttribute('aria-checked',String(checked));button.tabIndex=checked&&!button.disabled?0:-1}
+  const active=state.buttons.find(button=>button.dataset.value===select.value);if(!active){state.marker.hidden=true;return}state.marker.hidden=false;
+  const g=state.group.getBoundingClientRect(),r=active.getBoundingClientRect();if(!r.width)return;
+  const key=[r.left-g.left,r.top-g.top,r.width,r.height].join('/');if(state.position===key)return;
+  const previous=state.marker.getBoundingClientRect(),had=state.position!==null;owned.get(state.marker)?.get('segment')?.cancel();
+  const x=r.left-g.left,y=r.top-g.top;Object.assign(state.marker.style,{width:r.width+'px',height:r.height+'px',transform:`translate(${x}px,${y}px)`});state.position=key;
+  if(had&&animate)play(state.marker,[{transform:`translate(${previous.left-g.left}px,${previous.top-g.top}px)`},{transform:`translate(${x}px,${y}px)`}],{duration:280},'segment');
+ }
+ function enhanceForms(scope=document){
+  const controls=[];if(scope.matches?.('input[type=checkbox],select'))controls.push(scope);controls.push(...scope.querySelectorAll('input[type=checkbox],select'));
+  for(const control of controls){
+   if(control.closest('#uiMotionLayer'))continue;
+   if(['currentLoop','ledEnable'].includes(control.id)){control.classList.add('ui-switch');control.setAttribute('role','switch')}
+   if(!shortSelect(control)||segments.has(control))continue;
+   const wrapper=document.createElement('span'),group=document.createElement('span'),marker=document.createElement('span');wrapper.className='ui-segment-field';group.className='ui-segments';group.dataset.selectId=control.id;group.setAttribute('role','radiogroup');group.setAttribute('aria-label',control.getAttribute('aria-label')||(control.id==='settingsAxis'?'设置电机轴':control.id));marker.className='ui-segment-marker';marker.setAttribute('aria-hidden','true');
+   const state={group,marker,buttons:[],signature:'',position:null};segments.set(control,state);control.before(wrapper);wrapper.append(control,group);control.classList.add('ui-segment-source');control.setAttribute('aria-hidden','true');control.tabIndex=-1;
+   control.addEventListener('change',()=>syncSegment(control));
+   new MutationObserver(()=>syncSegment(control)).observe(control,{childList:true,subtree:true,attributes:true,attributeFilter:['disabled','label','selected','value']});
+   group.addEventListener('keydown',event=>{
+    if(!['ArrowLeft','ArrowRight','ArrowUp','ArrowDown','Home','End'].includes(event.key)||control.disabled)return;event.preventDefault();
+    const enabled=state.buttons.filter(button=>!button.disabled);if(!enabled.length)return;let index=enabled.findIndex(button=>button.dataset.value===control.value);
+    index=event.key==='Home'?0:event.key==='End'?enabled.length-1:(index+(event.key==='ArrowLeft'||event.key==='ArrowUp'?-1:1)+enabled.length)%enabled.length;enabled[index].click();
+   });
+   syncSegment(control,false);
+  }
+ }
+ function syncFormControls(){for(const select of segments.keys())if(!select.isConnected)segments.delete(select);else syncSegment(select)}
+
  function buttons(scope=document){
   const all=scope.matches?.('button')?[scope]:[];all.push(...scope.querySelectorAll('button'));
-  for(const button of all)if(!button.matches('.plot-buffer-handle,.plot-channel button,.stop,.ui-toast-close')&&!button.closest('#uiMotionLayer'))button.dataset.uiButton='';
+  for(const button of all)if(!button.matches('.plot-buffer-handle,.plot-channel button,.stop,.ui-toast-close,.ui-segment-option')&&!button.closest('#uiMotionLayer'))button.dataset.uiButton='';
+  enhanceForms(scope);
  }
  buttons();
  new MutationObserver(records=>{for(const record of records)for(const node of record.addedNodes)if(node.nodeType===1&&!node.closest('#uiMotionLayer'))buttons(node)}).observe(document.body,{childList:true,subtree:true});
@@ -1207,15 +1656,15 @@ bindPlot();if(globalThis.location?.hash==='#demo')toggleDemo();updateMetrics();r
  function rememberTrigger(element){trigger=element;const token=++triggerToken;setTimeout(()=>{if(token===triggerToken)trigger=null},0)}
  document.addEventListener('click',event=>rememberTrigger(event.target.closest?.('button')),true);
  document.addEventListener('change',event=>rememberTrigger(event.target),true);
- const confirmActions=new Set(['startDetect','saveDetect','applyHso','clearDiag','resetSettings','align','clearIbus','stopDetect','saveSettings']);
- const messages={connect:'串口连接及配置读取完成',disconnect:'通信已断开',setFormat:'发送格式切换已完成',applyStream:'采集组指令已受理',apply:'目标指令已受理',follow:'主从启动指令已受理',setFocus:'板端 View 切换指令已受理',setWork:'工作模式指令已受理',setMotor:'电机型号指令已受理',setDrive:'驱动切换指令已受理',readConfig:'配置读取完成',exportConfig:'配置快照已导出',readDiag:'诊断读取完成',saveSettings:'保存请求已受理，请以板端保存状态为准',applySettings:'参数设置已处理，请以读回值为准',startDetect:'辨识请求已受理',saveDetect:'辨识结果保存请求已受理',stopDetect:'停止辨识请求已受理',clearDiag:'诊断清除请求已受理',align:'对齐请求已受理',clearIbus:'清除 IBUS 请求已受理',applyHso:'HSO 指令已受理',resetSettings:'恢复默认请求已受理',importConfig:'配置导入已处理，请以读回值为准',file:'CSV 回放已载入'};
+ const confirmActions=new Set(['saveCustom','applyDetection','restoreMotorPreset','startDetect','saveDetect','applyHso','clearDiag','resetSettings','align','clearIbus','stopDetect','saveSettings']);
+ const messages={exportDiagnostics:'浏览器诊断已导出',applyDetection:'测量值应用指令已受理，请读取参数确认',restoreMotorPreset:'恢复预设电参指令已受理',readMotorParams:'已读取电机参数',saveCustom:'槽位保存请求已受理，请等待 Saved',connect:'串口连接及配置读取完成',disconnect:'通信已断开',setFormat:'发送格式切换已完成',applyStream:'采集组指令已受理',apply:'目标指令已受理',follow:'主从启动指令已受理',setFocus:'板端 View 切换指令已受理',setWork:'工作模式指令已受理',setMotor:'电机型号指令已受理',setDrive:'驱动切换指令已受理',readConfig:'配置读取完成',exportConfig:'配置快照已导出',readDiag:'诊断读取完成',saveSettings:'保存请求已受理，请以板端保存状态为准',applySettings:'参数设置已处理，请以读回值为准',startDetect:'辨识请求已受理',saveDetect:'辨识结果保存请求已受理',stopDetect:'停止辨识请求已受理',clearDiag:'诊断清除请求已受理',align:'对齐请求已受理',clearIbus:'清除 IBUS 请求已受理',applyHso:'HSO 指令已受理',resetSettings:'恢复默认请求已受理',importConfig:'配置导入已处理，请以读回值为准',file:'CSV 回放已载入'};
  function busyStart(element){if(!element||element.id==='stop')return;let state=busy.get(element);if(!state){state={count:0,previous:element.getAttribute('aria-busy')};busy.set(element,state)}state.count++;element.setAttribute('aria-busy','true')}
  function busyEnd(element){const state=element&&busy.get(element);if(!state||--state.count)return;if(state.previous===null)element.removeAttribute('aria-busy');else element.setAttribute('aria-busy',state.previous);busy.delete(element)}
  act=function(fn){
   const origin=trigger?.isConnected?trigger:null,beforeLog=$('log').textContent;busyStart(origin);
   return nativeAct(async()=>{
    try{
-    const result=await fn();busyEnd(origin);
+    const result=await fn();busyEnd(origin);if(result?.cancelled)return result;
     if(origin&&(!confirmActions.has(origin.id)||$('log').textContent!==beforeLog)){
      flash(origin);let message=messages[origin.id];
      if(origin.id==='stop'||origin.id==='axisStop')message=outputFormat==='JustFloat'?'停止指令已发送，请核对电机状态':'停止指令已受理';
@@ -1228,21 +1677,63 @@ bindPlot();if(globalThis.location?.hash==='#demo')toggleDemo();updateMetrics();r
  };
  for(const id of ['error','pending']){
   const element=$(id);let previous=element.textContent;
-  new MutationObserver(()=>{const text=element.textContent;if(text===previous)return;previous=text;if(text){play(element,[{clipPath:'inset(0 100% 0 0)',opacity:.4},{clipPath:'inset(0 0 0 0)',opacity:1}],{duration:280},'notice');if(id==='error')toast(text,'error')}}).observe(element,{childList:true,characterData:true,subtree:true});
+  new MutationObserver(()=>{const text=element.textContent;if(text===previous)return;previous=text;if(text){play(element,[{clipPath:'inset(0 100% 0 0)',opacity:.4},{clipPath:'inset(0 0 0 0)',opacity:1}],{duration:280},'notice');if(id==='error'){rememberRuntimeError(text,'application');toast(text,'error')}}}).observe(element,{childList:true,characterData:true,subtree:true});
  }
  // Captions and chips use the same keys before/after DOM replacement.
+ function emptyBox(id,before){
+  const box=document.createElement('div'),title=document.createElement('b'),detail=document.createElement('span');box.id=id;box.className='ui-empty';box.hidden=true;box.setAttribute('role','status');box.append(title,detail);before.before(box);return {box,title,detail};
+ }
+ const sourceEmpty=emptyBox('sourceEmpty',$('signals')),statusEmpty=emptyBox('statusEmpty',$('status'));
+ const emptyConnect=document.createElement('button');emptyConnect.type='button';emptyConnect.textContent='选择串口并连接';emptyConnect.className='primary';emptyConnect.onclick=()=>$('connect').click();sourceEmpty.box.append(emptyConnect);
+ function showEmpty(view,state,title,detail){
+  const hidden=!state;if(view.box.hidden!==hidden)view.box.hidden=hidden;if(hidden)return;
+  if(view.box.dataset.state!==state)view.box.dataset.state=state;
+  if(view.title.textContent!==title)view.title.textContent=title;
+  if(view.detail.textContent!==detail)view.detail.textContent=detail;
+ }
+ function updateEmptyStates(){
+  let state='',title='',detail='';
+  if(!series.size){
+   if(closing){state='closing';title='正在断开通信。';detail='断开连接后可重新选择串口。'}
+   else if(connecting){state='connecting';title='正在连接开发板。';detail='请在浏览器授权窗口选择串口，连接后会读取板端配置。'}
+   else if(replaying){
+    const csv=taskProgress.csv;
+    if(csv?.status==='running'){state='loading';title='正在载入 CSV。';detail='通道将在数据解析后列出，载入进度显示在“记录与回放”。'}
+    else if(csv?.status==='error'){state='error';title='CSV 未能载入。';detail=csv.message||'请检查文件后重新选择。'}
+    else{state='replay-empty';title='CSV 中没有可绘制的通道。';detail='请选择包含遥测采样的 CSV；状态和诊断记录不会作为曲线通道。'}
+   }else if(demo){state='loading';title='正在准备演示数据。';detail='离线演示只生成模拟曲线，不连接开发板。'}
+   else if(connected){
+    if(outputFormat==='JustFloat'){state='format';title='板端正在输出 JustFloat。';detail='切回 Native 后可在本页读取完整控制和遥测数据。'}
+    else if(!boardConfig){state=pending.size?'reading':'unverified';title=pending.size?'正在读取板端配置。':'串口已连接，配置尚未确认。';detail=pending.size?'等待板端回执；不会自动运行电机。':'请读取配置并检查上方通信提示。'}
+    else{state='waiting';title='已连接，等待遥测数据。';detail='收到数据后会列出通道，由你勾选或拖入画布。'}
+   }else{state='disconnected';title='尚未连接开发板。';detail='连接串口后可选择需要的通道，也可以使用上方的离线演示。'}
+  }
+  showEmpty(sourceEmpty,state,title,detail);emptyConnect.hidden=state!=='disconnected';
+  const hasStatus=!!lastStatus.work;if($('status').hidden===hasStatus)$('status').hidden=!hasStatus;
+  if(hasStatus&&connected)showEmpty(statusEmpty,'','','');
+  else if(demo)showEmpty(statusEmpty,'demo','离线演示。','当前只显示模拟曲线，不提供板端状态。');
+  else if(replaying)showEmpty(statusEmpty,'replay','正在查看历史曲线。',hasStatus?'以下为最近接收的板端状态。':'CSV 回放不提供实时板端状态。');
+  else if(hasStatus)showEmpty(statusEmpty,'stale','通信已断开。','以下为最后收到的板端状态，未继续更新。');
+  else if(connecting)showEmpty(statusEmpty,'connecting','正在连接开发板。','授权和配置读取完成后，将等待板端状态帧。');
+  else if(connected)showEmpty(statusEmpty,'waiting','等待板端状态。','串口已连接；收到状态帧后显示电机和保护状态。');
+  else showEmpty(statusEmpty,'disconnected','尚无板端状态。','连接开发板后将在这里显示实际状态。');
+  checkQuestion();
+ }
+ const nativeStatus=status;status=function(...args){const result=nativeStatus(...args);updateEmptyStates();return result};
+
+
  function keyed(scope,selector){return new Map(Array.from(scope.querySelectorAll(selector)).filter(visible).map(element=>[element.dataset.channel,{element,rect:element.getBoundingClientRect()}]))}
  function keyedAfter(scope,selector,before){
   let index=0;const after=keyed(scope,selector);
   for(const [key,item]of after){const old=before.get(key);if(!old)enter(item.element,index++);else{const x=old.rect.left-item.rect.left,y=old.rect.top-item.rect.top;if(Math.abs(x)+Math.abs(y)>.5)play(item.element,[{transform:`translate(${x}px,${y}px)`},{transform:'none'}],{duration:250,easing:curve.snap},'move')}}
  }
  const nativeSignals=renderSignals,nativeChannels=renderPlotChannels,nativeCount=setPlotCount;
- renderSignals=function(...args){const before=keyed($('signals'),'.signal-source');const result=nativeSignals(...args);keyedAfter($('signals'),'.signal-source',before);return result};
+ renderSignals=function(...args){const before=keyed($('signals'),'.signal-source');const result=nativeSignals(...args);keyedAfter($('signals'),'.signal-source',before);updateEmptyStates();return result};
  renderPlotChannels=function(...args){
   const groups=plots.map(plot=>{const scope=plot.control('plotChannels'),before=keyed(scope,'.plot-channel'),expected=plot.selected;
    for(const [id,item]of before)if(!expected.has(id))exit(ghost(item.element,item.rect));return {scope,before};
   });
-  const result=nativeChannels(...args);for(const {scope,before}of groups)keyedAfter(scope,'.plot-channel',before);return result;
+  const result=nativeChannels(...args);for(const {scope,before}of groups)keyedAfter(scope,'.plot-channel',before);updateEmptyStates();return result;
  };
  setPlotCount=function(count){
   const value=Number(count);if(!Number.isInteger(value)||value<1||value>MAX_PLOTS||value===visiblePlots)return nativeCount(count);
@@ -1251,6 +1742,29 @@ bindPlot();if(globalThis.location?.hash==='#demo')toggleDemo();updateMetrics();r
   const result=nativeCount(count);if(!result)return result;
   buttons($('plotCanvases'));flip(before);for(let i=old;i<value;i++)enter(plots[i].root,i-old);return result;
  };
+ // Only measured bytes/returned rows drive these 24 cells. No timer advances progress.
+ const progressViews=new Map(),progressQueue=new Map();let progressFrame=0;
+ function createProgress(kind,parent,before=null){
+  const box=document.createElement('div'),heading=document.createElement('div'),title=document.createElement('span'),percent=document.createElement('b'),bar=document.createElement('div'),detail=document.createElement('p');
+  box.id=kind+'Progress';box.className='ui-task';box.hidden=true;box.setAttribute('role','group');box.setAttribute('aria-label',kind==='csv'?'CSV 载入状态':'诊断查询状态');heading.className='ui-task-heading';percent.className='ui-task-percent';percent.setAttribute('aria-hidden','true');bar.className='ui-task-bar';bar.setAttribute('role','progressbar');bar.setAttribute('aria-label',kind==='csv'?'CSV 载入进度':'诊断查询进度');bar.setAttribute('aria-valuemin','0');bar.setAttribute('aria-valuemax','100');detail.className='ui-task-detail';
+  const cells=Array.from({length:24},()=>{const cell=document.createElement('i');cell.setAttribute('aria-hidden','true');bar.append(cell);return cell});heading.append(title,percent);box.append(heading,bar,detail);parent.insertBefore(box,before);progressViews.set(kind,{box,title,percent,bar,detail,cells,token:null});
+ }
+ createProgress('csv',$('replayPanel'),$('file').nextSibling);createProgress('diagnostics',$('diagnosticsPanel'),$('diagRows'));
+ function renderProgress(kind,state){
+  const view=progressViews.get(kind);if(!view)return;
+  const known=state.total!==null,done=state.status==='done',number=done?100:known&&state.total>0?Math.min(99,Math.floor(state.completed/state.total*100)):0;
+  const units=state.unit==='bytes'?'字节':'行',amount=state.completed.toLocaleString()+(known?' / '+state.total.toLocaleString():'')+' '+units;
+  view.title.textContent=(kind==='csv'?'CSV 载入':'诊断查询')+' / '+state.label;view.percent.textContent=known||done?String(number).padStart(3,'0')+'%':'—';view.bar.dataset.unknown=String(!known&&state.status==='running');
+  if(known||done)view.bar.setAttribute('aria-valuenow',String(number));else view.bar.removeAttribute('aria-valuenow');
+  const status={running:'进行中',done:'已完成',error:'失败',cancelled:'已取消'}[state.status];
+  view.detail.textContent=(state.unit==='bytes'?'已读取 ':'已收到 ')+amount+' / '+status+(!known&&state.status==='running'?' / 等待总量':'')+(state.message?' / '+state.message:'');view.bar.setAttribute('aria-valuetext',view.detail.textContent);
+  for(let i=0;i<24;i++)view.cells[i].dataset.filled=String(i<Math.floor(number*24/100));
+  view.box.dataset.status=state.status;view.box.dataset.completed=String(state.completed);view.box.dataset.total=known?String(state.total):'';view.box.setAttribute('aria-busy',String(state.status==='running'));
+  const opening=view.box.hidden||view.token!==state.token;view.box.hidden=false;view.token=state.token;if(opening)play(view.box,[{clipPath:'inset(0 100% 0 0)',opacity:.4},{clipPath:'inset(0 0 0 0)',opacity:1}],{duration:280},'progress');
+ }
+ onTaskProgress=(kind,state)=>{progressQueue.set(kind,state);if(!progressFrame)progressFrame=requestAnimationFrame(()=>{progressFrame=0;for(const [key,value]of progressQueue)renderProgress(key,value);progressQueue.clear()})};
+ for(const [kind,state]of Object.entries(taskProgress))if(state)renderProgress(kind,state);
+
  const guide=$('plotGuideToggle'),guideText=$('plotGuideText');
  guide.addEventListener('click',()=>{
   const open=guide.getAttribute('aria-expanded')!=='true',before=positions([$('signals'),$('plotCanvases')]);
@@ -1306,7 +1820,7 @@ bindPlot();if(globalThis.location?.hash==='#demo')toggleDemo();updateMetrics();r
  toggle.addEventListener('click',()=>{
   desiredTheme=desiredTheme==='dark'?'light':'dark';const theme=desiredTheme,token=++themeToken;try{localStorage.setItem('foc-console-theme',theme)}catch{}
   themeTransition?.skipTransition();clearFloors();const r=toggle.getBoundingClientRect(),x=r.left+r.width/2,y=r.top+r.height/2,radius=Math.hypot(Math.max(x,innerWidth-x),Math.max(y,innerHeight-y)),duration=Math.min(600,Math.max(240,radius/3)),clip=[`circle(0px at ${x}px ${y}px)`,`circle(${radius}px at ${x}px ${y}px)`];
-  if(reduced.matches){setTheme(theme);return}
+  if(reduced.matches||calmMotion()){delete root.dataset.themeReveal;setTheme(theme);return}
   if(!series.size&&!connected&&!demo&&document.startViewTransition){
    root.dataset.themeReveal='';let applied=false;
    const apply=()=>{if(token===themeToken&&!applied){applied=true;setTheme(theme)}};
@@ -1320,9 +1834,41 @@ bindPlot();if(globalThis.location?.hash==='#demo')toggleDemo();updateMetrics();r
    after(play(next,{clipPath:clip},{duration},'theme-floor'),()=>{old.remove();next.remove();floors.delete(old);floors.delete(next)});
   }
  });
- reduced.addEventListener('change',event=>{if(!event.matches)return;themeTransition?.skipTransition();setTheme(desiredTheme);delete root.dataset.themeReveal;for(const animation of animations)animation.cancel();for(const item of ghosts)item.remove();ghosts.clear();clearFloors();for(const [button,timer]of flashTimers){clearTimeout(timer);delete button.dataset.uiComplete}flashTimers.clear();placeMarker(false)});
+ function motionNote(){$('motionNote').textContent=reduced.matches?'系统已开启减少动态效果，所有动画暂停；此处选择会保留。':calmMotion()?'简洁：省略首屏展开和主题揭幕，保留操作反馈；仅保存在此浏览器。':'完整：显示首屏展开和主题揭幕；仅保存在此浏览器，不写入板端。'}
+  $('motionMode').addEventListener('change',()=>{root.dataset.efMotion=$('motionMode').value==='calm'?'calm':'full';try{localStorage.setItem('foc-console-motion',root.dataset.efMotion)}catch{}if(calmMotion()){themeTransition?.skipTransition();delete root.dataset.themeReveal;clearFloors();for(const animation of animations)if(['ui-page-enter','ui-theme','ui-theme-floor'].includes(animation.id))animation.cancel();setTheme(desiredTheme)}motionNote();toast(calmMotion()?'已使用简洁动效':'已使用完整动效')});
+  reduced.addEventListener('change',motionNote);motionNote();
+  reduced.addEventListener('change',event=>{if(!event.matches)return;themeTransition?.skipTransition();setTheme(desiredTheme);delete root.dataset.themeReveal;for(const animation of animations)animation.cancel();for(const item of ghosts)item.remove();ghosts.clear();clearFloors();for(const [button,timer]of flashTimers){clearTimeout(timer);delete button.dataset.uiComplete}flashTimers.clear();placeMarker(false)});
+ // Local browser measurements never request or write board settings.
+ const runtimeLabels=[['runtimeRate','遥测采样帧率'],['runtimeRefresh','自动刷新率'],['runtimePaint','绘图耗时'],['runtimeMemory','采样缓冲占用'],['runtimePoints','缓存采样点'],['runtimeViews','画布与快照']];
+ const runtimeValues=$('runtimeValues');
+ for(const [id,label]of runtimeLabels){const row=document.createElement('div'),name=document.createElement('span'),value=document.createElement('b');row.className='config-row';name.textContent=label;value.id=id;value.textContent='--';row.append(name,value);runtimeValues.append(row)}
+ try{const saved=JSON.parse(localStorage.getItem('foc-runtime-checkpoint')||'null');if(saved?.format==='FOC-browser-checkpoint'&&saved.version===1)runtimeCheckpoint=saved}catch{}
+ function refreshRuntime(){
+  sampleRuntimeDiagnostics();const snapshot=runtimeSnapshot(),r=snapshot.rendering,m=snapshot.memory;
+  if($('runtimeDetails').open){
+   const source=snapshot.source==='demo'?'演示':snapshot.source==='serial'?'实时':'无实时数据';
+   setText($('runtimeRate'),snapshot.sampling.rateHz===null?source:plotNumber(snapshot.sampling.rateHz,.1)+' 帧/s / '+source);
+   setText($('runtimeRefresh'),plotNumber(r.automaticHz,.1)+' 次/s');setText($('runtimePaint'),plotNumber(r.recentP95Ms,.01)+' ms / 近期 P95');
+   setText($('runtimeMemory'),plotNumber(m.totalBytes/1048576,.01)+' / '+m.budgetBytes/1048576+' MiB');
+   setText($('runtimePoints'),m.livePoints.toLocaleString()+' 实时 / '+m.snapshotPoints.toLocaleString()+' 快照');
+   setText($('runtimeViews'),plots.filter(p=>p.index<visiblePlots&&p.inViewport!==false).length+' 个可见 / '+plots.filter(p=>p.view.frozen).length+' 个暂停 / '+m.snapshotStores+' 份共享存储');
+  }
+ }
+ let lastCheckpoint=0;
+ function checkpointRuntime(closed=false){
+  const now=performance.now();if(!closed&&now-lastCheckpoint<10000)return;lastCheckpoint=now;
+  const s=runtimeSnapshot(),checkpoint={format:'FOC-browser-checkpoint',version:1,at:s.at,closed,source:s.source,uptimeSeconds:s.uptimeSeconds,sampling:s.sampling,rendering:s.rendering,memory:s.memory,plots:s.plots,errors:s.errors.slice(-20)};
+  try{localStorage.setItem('foc-runtime-checkpoint',JSON.stringify(checkpoint))}catch{}
+ }
+ $('runtimeDetails').addEventListener('toggle',()=>{if($('runtimeDetails').open)refreshRuntime()});
+ $('exportDiagnostics').onclick=()=>act(async()=>{download('foc-browser-diagnostics-'+Date.now()+'.json',JSON.stringify(runtimeSnapshot(),null,2),'application/json')});
+ addEventListener('error',event=>rememberRuntimeError(event.message,'javascript'));
+ addEventListener('unhandledrejection',event=>rememberRuntimeError(event.reason?.message||event.reason,'promise'));
+ addEventListener('pagehide',()=>checkpointRuntime(true));
+ setInterval(()=>{refreshRuntime();checkpointRuntime()},1000);refreshRuntime();
+
  function readout(key,unit){const entry=series.get(key+'|'+unit);return Number.isFinite(entry?.value)?plotNumber(entry.value,.1):'--'}
- function refreshReadouts(){$('uiBus').textContent=readout('vbus','V');$('uiM1').textContent=readout('m1.feedback_speed','rad/s');$('uiM2').textContent=readout('m2.feedback_speed','rad/s');$('uiSource').textContent=demo?'离线演示':replaying?'历史回放':connected?'实时接收':'等待连接'}
+ function refreshReadouts(){setText($('uiBus'),readout('vbus','V'));setText($('uiM1'),readout('m1.feedback_speed','rad/s'));setText($('uiM2'),readout('m2.feedback_speed','rad/s'));setText($('uiSource'),demo?'离线演示':replaying?'历史回放':connected?'实时接收':'等待连接');syncFormControls();updateEmptyStates()}
  refreshReadouts();setInterval(refreshReadouts,250);document.fonts.ready.then(()=>{draw();placeMarker(false)});
  if(location.hash==='#demo')addEventListener('load',()=>scrollTo(0,0),{once:true});
  // One initial sequence for visible chrome only; never triggered by scrolling/data.

@@ -20,6 +20,8 @@ static float hand_position;
 static float hand_angle(void) { return hand_position; }
 uint32_t HAL_GetTick(void) { return now; }
 AppSettings *AppStorage_Get(void) { return &settings; }
+static bool flash_ready=true;
+bool AppStorage_IsReady(void) { return flash_ready; }
 bool AppStorage_RequestSave(void) { return false; }
 bool MotorSampling_IsAxisReady(MotorAxis axis) { return axis==MOTOR_AXIS_1 ? ready : ready2; }
 bool MotorSampling_IsAxisOutputRequested(MotorAxis axis) { return axis==MOTOR_AXIS_1 ? output_requested : output2; }
@@ -193,7 +195,7 @@ static void follow_trajectory_limits(void)
             assert(MotorControl_VelocityControl(slave,&saturated,-100,0)==-1.2f);
         }
         const MotorParams *m=MotorParams_GetAxis(slave);
-        const MotorFollowParams *p=current ? &m->follow_current : &m->follow_voltage;
+        const MotorFollowParams *p=current ? m->follow_current : m->follow_voltage;
         float acceleration=fmaxf(p->accel,p->decel);
         float previous=state(slave).target_position, speed=0, master=0;
         for(unsigned n=0;n<2500;++n) {
@@ -227,7 +229,7 @@ static void follow_trajectory_limits(void)
         assert(state(slave).current_loop==!current);
         assert(state(slave).target_position==state(slave).position); /* Discard old chase. */
         float origin=state(slave).position;
-        const MotorFollowParams *next=current ? &m->follow_voltage : &m->follow_current;
+        const MotorFollowParams *next=current ? m->follow_voltage : m->follow_current;
         ms(1,0);
         assert(MotorControl_IsFastFollow(slave)==(next->fast_tracking!=0));
         float first=state(slave).target_position-origin;
@@ -619,6 +621,55 @@ static void check_six_control(void)
     assert(!(settings.control_config & APP_CONFIG_THROTTLE_MASK));
     puts("PASS: real six-step integration: encoder absent, throttle + Speed, strict protocol/axis/unit admission, zero coast, HSO mutual exclusion/persistence, untouched dual encoder modes, KEY1 and explicit restart, live mode/reverse/open-loop refusal");
 }
+static void check_calibration(void)
+{
+    boot(MOTOR_WORK_INDEPENDENT);
+    assert(MotorControl_SelectProfile(MOTOR_AXIS_1,MOTOR_PROFILE_4015));
+    JerryFOC_alignStart();JerryFOC_alignFinish();aligned=healthy=1;
+    MotorCalibration measured={(2U<<24)|(1920U<<8)|(uint8_t)-11,440,9290},empty={0};
+    assert(MotorControl_ApplyCalibration(MOTOR_AXIS_1,&measured));
+    assert(!output_requested && !output2 && !state(MOTOR_AXIS_1).active && JerryFOC_needsAlignment());
+    assert(fabsf(iq_loop_M0.P-.11f)<1e-6f && fabsf(id_loop_M0.I-480)<.001f && selected_pp==-11);
+    assert(!memcmp(&settings.calibration[0],&measured,sizeof(measured)) && !settings.calibration[1].poles_rs);
+    MotorControl_StopAll();MotorControl_Init(); /* Restart from the saved, model-bound record. */
+    assert(MotorParams_IsCalibrated(MOTOR_AXIS_1) && selected_pp==-11 && !output_requested);
+    JerryFOC_alignStart();JerryFOC_alignFinish();aligned=healthy=1;ms(8,0);
+    assert(MotorControl_Command(MOTOR_AXIS_1,JERRYFOC_MODE_VELOCITY,10,0,true));
+    assert(!MotorControl_ApplyCalibration(MOTOR_AXIS_1,&empty)); /* Active request cannot be retuned. */
+    MotorControl_StopAll();encoder_velocity=filtered_velocity_global=0;
+    assert(MotorControl_ApplyCalibration(MOTOR_AXIS_1,&empty));
+    assert(!MotorParams_IsCalibrated(MOTOR_AXIS_1) && !settings.calibration[0].poles_rs);
+    assert(fabsf(iq_loop_M0.P-.325f)<1e-6f && !output_requested);
+    puts("PASS: actual controller parameter apply/reload/PI/polarity, persisted boot restore, alignment invalidation, active rejection and explicit preset restore");
+}
+static void check_custom_motors(void)
+{
+    boot(MOTOR_WORK_INDEPENDENT);
+    MotorCalibration r={(2U<<24)|(1920U<<8)|(uint8_t)-11,440,9290},empty={0};
+    assert(!MotorControl_SelectProfile(MOTOR_AXIS_1,MOTOR_PROFILE_CUSTOM1));
+    flash_ready=false;assert(!MotorControl_SaveCustom(0,&r));flash_ready=true;
+    assert(!MotorControl_SaveCustom(3,&r) && !MotorControl_SaveCustom(0,&empty));
+    assert(MotorControl_SaveCustom(0,&r) && MotorParams_CustomMask()==1);
+    assert(MotorParams_GetActiveProfile()==MOTOR_PROFILE_2804 && !output_requested && !output2);
+    assert(MotorControl_SelectProfile(MOTOR_AXIS_1,MOTOR_PROFILE_CUSTOM1));
+    assert(selected_pp==-11 && fabsf(iq_loop_M0.P-.11f)<1e-6f && JerryFOC_needsAlignment());
+    assert(((settings.control_config>>24)&3U)==1 && (settings.flags&APP_FLAG_MOTOR_4015));
+    assert(!MotorControl_SaveCustom(0,&r) && !MotorControl_ApplyCalibration(MOTOR_AXIS_1,&empty));
+    assert(MotorControl_SelectProfile(MOTOR_AXIS_2,MOTOR_PROFILE_CUSTOM1));
+    assert(((settings.control_config>>26)&3U)==1 && MotorParams_GetAxis(MOTOR_AXIS_2)->encoder_direction==1);
+    MotorControl_StopAll();MotorControl_Init();
+    assert(MotorParams_GetAxisProfile(MOTOR_AXIS_1)==MOTOR_PROFILE_CUSTOM1 && MotorParams_GetAxisProfile(MOTOR_AXIS_2)==MOTOR_PROFILE_CUSTOM1);
+    assert(selected_pp==-11 && !output_requested && !output2);
+    assert(MotorControl_SelectProfile(MOTOR_AXIS_1,MOTOR_PROFILE_4015));
+    assert(!MotorControl_SaveCustom(0,&r)); /* M2 still selects this shared bank. */
+    assert(MotorControl_SelectProfile(MOTOR_AXIS_2,MOTOR_PROFILE_2804));
+    assert(!(settings.control_config&APP_CONFIG_CUSTOM_MASK));
+    output_requested=true;assert(!MotorControl_SaveCustom(1,&r));output_requested=false;
+    r.ls_uh=880;assert(MotorControl_SaveCustom(0,&r) && settings.custom[0].ls_uh==880);
+    assert(MotorParams_GetActive()==&MOTOR_4015 && !output_requested && !output2);
+    puts("PASS: actual Custom save/select/boot, no flash/empty/active/selected-bank rejection, PI and direction reload, no implicit motion and factory isolation");
+}
+
 static void check_profile_settings(void)
 {
     for(unsigned a=0;a<2;++a) for(unsigned p=0;p<2;++p) {
@@ -742,6 +793,7 @@ int main(int argc,char **argv)
 {
     if (argc>1 && !strcmp(argv[1],"follow-model")) { follow_models(false); return 0; }
     if (argc>1 && !strcmp(argv[1],"follow-current")) { follow_current_models(false); return 0; }
+    check_calibration();check_custom_motors();
     check_profile_settings();
     check_global_control_stop();
     check_six_profile_switch();
@@ -895,8 +947,7 @@ int main(int argc,char **argv)
     encoder_velocity=-1; ms(100,0);
     assert(fabsf(MotorControl_GroupError()+0.1f-(hand_position-origin1))<0.001f);
     assert(fabsf(state(MOTOR_AXIS_2).target_position-origin2)<0.21f); /* Offset is planned. */
-    MotorControl_RecordCycles(17000); assert(!output_requested && !output2 && !state(MOTOR_AXIS_2).ready);
-    assert(!MotorControl_StartFollow());
+    MotorControl_StopAll();
 
     /* Fault provenance survives linked coast, a subsequent other-axis loss,
      * recovery, and looking at either axis, including the unpowered master. */
@@ -1019,6 +1070,11 @@ int main(int argc,char **argv)
     assert(MotorControl_SelectWork(MOTOR_WORK_INDEPENDENT));
     ms(100,0);
     assert(global_stopped && !output_requested && !output2 && !JerryFOC_needsAlignment());
+    boot(MOTOR_WORK_INDEPENDENT);
+    assert(MotorControl_Command(MOTOR_AXIS_1,JERRYFOC_MODE_VELOCITY,10,0,true));
+    MotorControl_RecordCycles(17000);assert(!output_requested && !output2 && !state(MOTOR_AXIS_2).ready);
+    MotorControl_Init(); /* Settings/default reload cannot clear a deadline trip. */
+    assert(!state(MOTOR_AXIS_1).ready && !MotorControl_Command(MOTOR_AXIS_1,JERRYFOC_MODE_VELOCITY,10,0,true));
     puts("PASS: real dual FOC: independent/sync, passive hand masters in both directions, multi-turn/reverse/anchors, feedforward, SPI2 reservation, linked encoder faults, explicit restart and deadline");
     return 0;
 }

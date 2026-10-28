@@ -208,7 +208,7 @@ int main(void) {
     assert(JerryFOC_Target_Iq==0 && JerryFOC_Target_Velocity==0 && JerryFOC_Target_Position==0);
     assert(vel_loop_M0.P==MOTOR_4015.vel_P && vel_loop_M0.limit==MOTOR_4015.vel_limit);
     assert(vel_loop_M0.integral_prev==0 && iq_loop_M0.integral_prev==0);
-    assert(iq_loop_M0.P==MOTOR_4015.cur_P && id_loop_M0.I==MOTOR_4015.cur_I);
+    assert(fabsf(iq_loop_M0.P-MOTOR_4015.Ls*MOTOR_CURRENT_BANDWIDTH_RAD_S)<1e-6f && id_loop_M0.I==MOTOR_4015.Rs*MOTOR_CURRENT_BANDWIDTH_RAD_S);
     JerryFOC_setCurrent(99); assert(JerryFOC_Target_Iq==MOTOR_4015.vel_limit);
     JerryFOC_setCurrent(1); JerryFOC_run(); zero_pwm(); /* Alignment is mandatory. */
     JerryFOC_alignStart(); assert(!JerryFOC_needsAlignment());
@@ -221,7 +221,7 @@ int main(void) {
     ready=false; assert(JerryFOC_selectMotor(MOTOR_PROFILE_2804));
     assert(!JerryFOC_isDriveReady()); /* Switching never clears a sampling fault. */
     assert(selected_pp==7 && hso_motor==&MOTOR_2804);
-    assert(vel_loop_M0.limit==6.93f && iq_loop_M0.P==0.215f && !aligned);
+    assert(vel_loop_M0.limit==6.93f && fabsf(iq_loop_M0.P-0.215f)<1e-6f && !aligned);
     JerryFOC_setCurrent(-99); assert(JerryFOC_Target_Iq==-MOTOR_2804.vel_limit);
     ready=true; aligned=1; encoder_velocity=0;
     command("Speed:10"); assert(output_requested);

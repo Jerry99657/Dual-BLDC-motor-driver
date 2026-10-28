@@ -171,10 +171,21 @@ int main(void) {
     assert(AppSettings_Apply(0,APP_SET_LED_ENABLE,1)==1);
     assert(!AppSettings_SaveService(now-1U,true));now+=2000U;
     assert(AppSettings_SaveService(now,true) && saves==1);
+    reset();settings.motor_detect=(1920U<<8)|11;settings.motor_detect_l_uh=440;settings.motor_detect_flux_uwb=9290;
+    assert(AppSettings_Apply(1,APP_ACTION_DETECT_APPLY,0)==-1); /* No trusted profile tag. */
+    assert(!MotorParams_IsCalibrated(MOTOR_AXIS_1));
+    settings.motor_detect|=2U<<24;
+    assert(AppSettings_Apply(1,APP_ACTION_DETECT_APPLY,0)==-1); /* Wrong selected model. */
+    assert(MotorParams_SelectAxis(MOTOR_AXIS_1,MOTOR_PROFILE_4015));
+    assert(AppSettings_Apply(1,APP_ACTION_DETECT_APPLY,0)==1 && MotorParams_IsCalibrated(MOTOR_AXIS_1));
+    assert(settings.calibration[0].ls_uh==440 && App_SaveState()==APP_SAVE_PENDING);
+    requested[0]=true;assert(AppSettings_Apply(1,APP_ACTION_MOTOR_PRESET,0)==-1);
+    requested[0]=false;assert(AppSettings_Apply(1,APP_ACTION_MOTOR_PRESET,0)==1 && !MotorParams_IsCalibrated(MOTOR_AXIS_1));
+    assert(AppSettings_Apply(0,APP_ACTION_DETECT_APPLY,0)==-2 && AppSettings_Apply(1,APP_ACTION_DETECT_APPLY,1)==-1);
     reset();assert(AppSettings_Apply(0,APP_ACTION_DETECT_START,250)==1 && detect_active && detect_current==250);
     detect_result=11U|(1920U<<8);assert(!AppSettings_SaveDetection());detect_active=false;
     assert(AppSettings_Apply(0,APP_ACTION_DETECT_SAVE,0)==1);
-    assert(settings.motor_detect==detect_result && settings.motor_detect_l_uh==440 && settings.motor_detect_flux_uwb==9290);
+    assert((settings.motor_detect&0xFFFFFFU)==detect_result && settings.motor_detect_l_uh==440 && settings.motor_detect_flux_uwb==9290);
     assert(AppSettings_Apply(0,APP_ACTION_DIAG_CLEAR,0)==1 && clears==1);diag_ok=false;
     assert(AppSettings_Apply(0,APP_ACTION_DIAG_CLEAR,0)==-1 && clears==1);
     requested[0]=requested[1]=true;assert(AppSettings_Apply(0,APP_ACTION_PAUSE,0)==1 && pause && !requested[0] && !requested[1]);
@@ -187,10 +198,43 @@ int main(void) {
     assert(AppSettings_SelectMotor(MOTOR_AXIS_1,MOTOR_PROFILE_4015));
     assert(settings.speed_x10==0 && settings.voltage_x100==0 && settings.position_x100==0 && settings.axis2_speed_x10==400);
     assert(settings.speed_step_x10==17 && MotorParams_GetAxisProfile(MOTOR_AXIS_1)==MOTOR_PROFILE_4015);
-    six=true;assert(AppSettings_SelectMotor(MOTOR_AXIS_1,MOTOR_PROFILE_COUNT) && generic);
-    assert(!AppSettings_SelectMotor(MOTOR_AXIS_2,MOTOR_PROFILE_COUNT));
+    six=true;assert(AppSettings_SelectMotor(MOTOR_AXIS_1,MOTOR_PROFILE_ESC) && generic);
+    assert(!AppSettings_SelectMotor(MOTOR_AXIS_2,MOTOR_PROFILE_ESC));
     requested[0]=requested[1]=true;assert(AppSettings_Apply(0,APP_ACTION_DEFAULTS,0)==1);
     assert(!requested[0] && !requested[1] && work==MOTOR_WORK_SINGLE_M1 && focus==MOTOR_AXIS_1);
     assert(settings.led_brightness==100 && !settings.motor_detect && App_SaveState()==APP_SAVE_PENDING);
+    reset();settings.motor_detect=(2U<<24)|(1920U<<8)|11U;
+    settings.motor_detect_l_uh=440;settings.motor_detect_flux_uwb=9290;
+    AppSettings before_custom=settings;
+    for(int n=-1;n<=4;++n) if(n<1 || n>3) {
+        assert(AppSettings_Apply(0,APP_ACTION_CUSTOM_SAVE,n)==-1);equal(&before_custom,&settings);
+    }
+    assert(AppSettings_Apply(1,APP_ACTION_CUSTOM_SAVE,1)==-2);
+    assert(AppSettings_Apply(0,APP_ACTION_CUSTOM_SAVE,2)==1 && settings.custom[1].ls_uh==440 && App_SaveState()==APP_SAVE_PENDING);
+    assert(MotorParams_GetActiveProfile()==MOTOR_PROFILE_2804 && MotorParams_CustomMask()==2);
+    assert(AppSettings_SelectMotor(MOTOR_AXIS_1,MOTOR_PROFILE_CUSTOM2));
+    before_custom=settings;assert(AppSettings_Apply(0,APP_ACTION_CUSTOM_SAVE,2)==-1);equal(&before_custom,&settings);
+    puts("PASS: Custom application key/payload/axis admission, complete saved record, dirty persistence, no implicit model switch and selected-bank refusal");
     puts("PASS: real settings service without UI/LCD: both axes, limits/steps, atomic rejected publication, HSO/six-step preferences, IBUS range/DAC rejection, deferred/forced/in-flight save, stale/wrapped time, defaults/profile/results and pause/clear gates");
+}
+
+MotorProfile MotorDetect_Profile(void) { return MotorParams_GetActiveProfile(); }
+bool MotorControl_SaveCustom(unsigned slot,const MotorCalibration *r) {
+    if(slot>=3 || !storage_ready || requested[0] || requested[1] || aligning[0] || aligning[1] ||
+       !r->poles_rs || MotorParams_GetAxisProfile(MOTOR_AXIS_1)==slot+MOTOR_PROFILE_CUSTOM1 ||
+       MotorParams_GetAxisProfile(MOTOR_AXIS_2)==slot+MOTOR_PROFILE_CUSTOM1 || !MotorParams_SetCustom(slot,r)) return false;
+    settings.custom[slot]=*r;return true;
+}
+bool MotorControl_ApplyCalibration(MotorAxis axis,const MotorCalibration *r) {
+    if(requested[0] || requested[1] || aligning[axis] || MotorControl_GetDrive(axis)!=MOTOR_DRIVE_ENCODER ||
+       (r->poles_rs && r->poles_rs>>24!=(unsigned)MotorParams_GetAxisProfile(axis)+1U)) return false;
+    if(!MotorParams_SetCalibration(axis,r)) return false;
+    settings.calibration[axis]=*r; return true;
+}
+void MotorControl_Init(void) {
+    work=MOTOR_WORK_SINGLE_M1;focus=MOTOR_AXIS_1;hso=six=generic=false;
+    for(unsigned a=0;a<2;++a) {
+        (void)MotorParams_SetCalibration((MotorAxis)a,&settings.calibration[a]);
+        (void)MotorParams_SelectAxis((MotorAxis)a,MOTOR_PROFILE_2804);
+    }
 }

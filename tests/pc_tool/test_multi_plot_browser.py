@@ -23,6 +23,7 @@ with sync_playwright() as p:
             errors = []
             page.on("pageerror", lambda error: errors.append(str(error)))
             page.goto((ROOT / "pc_tool/index.html").as_uri())
+            assert page.evaluate("plots[0].selected.size===0 && plots[0].layout.panels[0].items.length===0"), "Initial canvas is empty"
             page.evaluate("""()=>{
                 window.canvasCommands=[];window.send=async command=>{canvasCommands.push(command)};
                 clear();for(let i=0;i<1200;i++)add({kind:1,epoch:0,ms:i*20,values:[
@@ -30,7 +31,15 @@ with sync_playwright() as p:
                     ['m2.position','rad',.5*Math.sin(i/30)],['m2.iq','A',.2*Math.sin(i/20)],
                     ['vbus','V',20+.02*Math.sin(i/3)]]});draw();
             }""")
-            assert page.evaluate("plots[0].layout.panels.length===1 && plots[0].layout.panels[0].items.length===5"), "Different units must overlay in one XY pair by default"
+            assert page.evaluate("plots[0].selected.size===0 && plots[0].layout.panels[0].items.length===0"), "Incoming channels never populate the empty canvas"
+            assert page.locator('#signals input:checked').count() == 0
+            page.locator('#signals [data-channel="m1.target_speed|rad/s"] input').check()
+            assert page.evaluate("[...plots[0].selected].join('')==='m1.target_speed|rad/s' && plots[0].layout.panels[0].items.length===1"), "Only the user-selected channel is plotted"
+            page.click('#plotClear')
+            page.evaluate("add({kind:1,epoch:0,ms:24000,values:[['m1.feedback_speed','rad/s',50]]});draw()")
+            assert page.evaluate("plots[0].selected.size===0 && plots[0].layout.panels[0].items.length===0"), "Clear stays empty as data arrives"
+            page.click('#plotAddAll')
+            assert page.evaluate("plots[0].layout.panels.length===1 && plots[0].layout.panels[0].items.length===5"), "Manually added units overlay in one XY pair"
             assert page.locator("#plotMode, #plotDistribute").count() == 0, "No hidden unit-splitting or fixed allocation controls"
             page.select_option("#plotCount", "3")
             assert page.locator("#plotCanvases canvas").count() == 3

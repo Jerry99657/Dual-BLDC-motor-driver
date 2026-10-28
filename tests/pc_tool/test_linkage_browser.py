@@ -26,7 +26,7 @@ with sync_playwright() as p:
         page.goto((ROOT / "pc_tool/index.html").as_uri())
         assert page.title().endswith("R102")
         assert page.locator("#apply").is_disabled()
-        assert not page.locator("details").get_attribute("open")
+        assert not page.locator("#runPanel details").get_attribute("open")
         fixture = (ROOT / "build/console-r87/rpc-fixture.bin").read_bytes()[:106]
         page.evaluate("""bytes=>{
             window.testWrites=[];
@@ -42,7 +42,7 @@ with sync_playwright() as p:
             };
             testReadback(0);
         }""", list(fixture))
-        assert page.evaluate("testConfig.firmware") == 103
+        assert page.evaluate("testConfig.firmware") == 105
         assert page.locator(".monitor-side").evaluate("e=>Array.from(e.children,x=>x.id)") == ["statusPanel", "runPanel"]
 
         def values(selector):
@@ -118,6 +118,6 @@ with sync_playwright() as p:
             assert page.locator("#stop").is_visible()
         page.screenshot(path=str(OUT / "linked-follow-mobile.png"), full_page=True)
         assert not errors, errors
-        print("PASS: real Edge DOM: R103 fixture, Status above Run, target commands beside first/last waveform, all seven work modes, dependent options, M2 readback/focus, action/Follow routing, no preview commands, visible Stop and 1440/768/390px layouts")
+        print("PASS: real Edge DOM: R105 fixture, Status above Run, target commands beside first/last waveform, all seven work modes, dependent options, M2 readback/focus, action/Follow routing, no preview commands, visible Stop and 1440/768/390px layouts")
     finally:
         browser.close()

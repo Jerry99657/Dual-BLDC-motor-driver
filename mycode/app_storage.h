@@ -3,6 +3,7 @@
 
 #include <stdbool.h>
 #include <stdint.h>
+#include "motor_params.h"
 
 #define APP_FLAG_CURRENT_LOOP (1UL << 0)
 #define APP_FLAG_LED_ENABLE   (1UL << 1)
@@ -36,6 +37,8 @@ static inline uint32_t AppSettings_EncodePositionSpeed(uint32_t speed)
 #define APP_CONFIG_ESC (1UL << 15) /* Generic six-step, throttle/electrical Hz; v3 spare bit. */
 #define APP_CONFIG_THROTTLE_SHIFT 16U
 #define APP_CONFIG_THROTTLE_MASK (127UL << APP_CONFIG_THROTTLE_SHIFT)
+#define APP_CONFIG_CUSTOM_SHIFT(a) (24U+2U*(unsigned)(a))
+#define APP_CONFIG_CUSTOM_MASK (15UL<<24)
 /* v3 spare bits: 100mA units, zero/invalid legacy values use 3.0A. */
 #define APP_CONFIG_IBUS_SHIFT 8U
 #define APP_CONFIG_IBUS_MASK (63UL << APP_CONFIG_IBUS_SHIFT)
@@ -73,6 +76,8 @@ typedef struct {
     int32_t axis2_position_step_x100;
     uint32_t motor_detect; /* Signed poles in byte 0, equivalent Rs mOhm in bits[23:8]. Results only. */
     uint32_t motor_detect_l_uh, motor_detect_flux_uwb;
+    MotorCalibration calibration[2]; /* Latest applied record per axis, profile bound. */
+    MotorCalibration custom[MOTOR_CUSTOM_COUNT]; /* Shared named slots; empty entries are hidden. */
     uint32_t crc;
 } AppSettings;
 

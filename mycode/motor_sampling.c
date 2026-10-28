@@ -1,9 +1,11 @@
+#include "compact_text.h"
 #include "motor_sampling.h"
 #include "board_diag.h"
 #include "stm32g4xx_ll_gpio.h"
 #include "stm32g4xx_ll_exti.h"
 
 #include <string.h>
+#include <stddef.h>
 #include "adc.h"
 #include "tim.h"
 #include "comp.h"
@@ -646,6 +648,8 @@ const char *MotorSampling_GetStatusText(void)
 }
 const char *MotorSampling_GetAxisStatusText(MotorAxis axis)
 {
+    static const char faults[]= "INIT ERROR\0ADC ERROR\0ADC PAIR\0FRAME TIMEOUT\0BUS TIMEOUT\0"
+            "BUS LOST\0BUS RANGE\0M1 OVERCURRENT\0\0M1 OVERLOAD\0ADC REF\0M1 IBUS TRIP\0M1 IBUS INIT";
     if ((unsigned)axis >= MOTOR_AXIS_COUNT) return "INVALID AXIS";
     MotorSamplingFault fault = acquisition.fault != MOTOR_SAMPLE_FAULT_NONE ? acquisition.fault : acquisition.axis_fault[axis];
     if (axis == MOTOR_AXIS_2) {
@@ -654,29 +658,23 @@ const char *MotorSampling_GetAxisStatusText(MotorAxis axis)
         if (fault == MOTOR_SAMPLE_FAULT_CURRENT_RANGE)
             return acquisition.zero_fault[axis] ? "M2 ZERO ADC" : "M2 CURRENT ADC";
     }
-    switch (fault) {
-    case MOTOR_SAMPLE_FAULT_INIT:          return "INIT ERROR";
-    case MOTOR_SAMPLE_FAULT_ADC:           return "ADC ERROR";
-    case MOTOR_SAMPLE_FAULT_PAIR:          return "ADC PAIR";
-    case MOTOR_SAMPLE_FAULT_FRAME_TIMEOUT: return "FRAME TIMEOUT";
-    case MOTOR_SAMPLE_FAULT_BUS_TIMEOUT:   return "BUS TIMEOUT";
-    case MOTOR_SAMPLE_FAULT_BUS_LOST:      return "BUS LOST";
-    case MOTOR_SAMPLE_FAULT_BUS_RANGE:     return "BUS RANGE";
-    case MOTOR_SAMPLE_FAULT_OVERCURRENT:   return "M1 OVERCURRENT";
-    case MOTOR_SAMPLE_FAULT_CURRENT_RANGE: {
-        static const char *const zero[] = {"M1 ZERO", "M1 ZERO U", "M1 ZERO V", "M1 ZERO W"};
-        static const char *const run[] = {"M1 CURRENT ADC", "M1 ADC U", "M1 ADC V", "M1 ADC W"};
-        return s_fault_during_zero ? zero[s_fault_phase] : run[s_fault_phase];
+    if(fault==MOTOR_SAMPLE_FAULT_CURRENT_RANGE) {
+        static const char current[]= "M1 CURRENT ADC\0M1 ADC U\0M1 ADC V\0M1 ADC W\0"
+            "M1 ZERO\0M1 ZERO U\0M1 ZERO V\0M1 ZERO W";
+        return CompactText_At(current,(s_fault_during_zero ? 4U : 0U)+s_fault_phase);
     }
-    case MOTOR_SAMPLE_FAULT_OVERLOAD:      return "M1 OVERLOAD";
-    case MOTOR_SAMPLE_FAULT_REFERENCE:     return "ADC REF";
-    case MOTOR_SAMPLE_FAULT_IBUS:          return "M1 IBUS TRIP";
-    case MOTOR_SAMPLE_FAULT_IBUS_INIT:     return "M1 IBUS INIT";
-    default: break;
+    if((unsigned)fault-1U<MOTOR_SAMPLE_FAULT_IBUS_INIT) {
+        _Static_assert(MOTOR_SAMPLE_FAULT_INIT==1 && MOTOR_SAMPLE_FAULT_ADC==2 && MOTOR_SAMPLE_FAULT_PAIR==3 &&
+            MOTOR_SAMPLE_FAULT_FRAME_TIMEOUT==4 && MOTOR_SAMPLE_FAULT_BUS_TIMEOUT==5 && MOTOR_SAMPLE_FAULT_BUS_LOST==6 &&
+            MOTOR_SAMPLE_FAULT_BUS_RANGE==7 && MOTOR_SAMPLE_FAULT_OVERCURRENT==8 && MOTOR_SAMPLE_FAULT_CURRENT_RANGE==9 &&
+            MOTOR_SAMPLE_FAULT_OVERLOAD==10 && MOTOR_SAMPLE_FAULT_REFERENCE==11 && MOTOR_SAMPLE_FAULT_IBUS==12 &&
+            MOTOR_SAMPLE_FAULT_IBUS_INIT==13,"Sampling fault text order");
+
+        return CompactText_At(faults,(unsigned)fault-1U);
     }
     if (!acquisition.running) return "STOPPED";
     if (!bus_fresh()) return "WAIT ADC";
-    if (!acquisition.bus_valid) return acquisition.bus_raw >= 4095U ? "BUS RANGE" : "WAIT BUS";
+    if (!acquisition.bus_valid) return acquisition.bus_raw >= 4095U ? faults+sizeof("INIT ERROR\0ADC ERROR\0ADC PAIR\0FRAME TIMEOUT\0BUS TIMEOUT\0BUS LOST") : "WAIT BUS";
     if (!reference_fresh()) return "WAIT VREF";
     if (axis==MOTOR_AXIS_1 && !acquisition.ibus_ref_valid) return "WAIT IBUS";
     if (!MotorSampling_IsCalibrated()) return "ZERO CAL";
@@ -777,43 +775,19 @@ void MotorSampling_Stop(void)
     acquisition.reference_valid = false;
 }
 
-bool MotorSampling_Start(void)
+__attribute__((noinline,noclone)) bool MotorSampling_Start(void)
 {
     if (acquisition.running) MotorSampling_Stop();
-    acquisition.running = false;
-    acquisition.fault = MOTOR_SAMPLE_FAULT_NONE;
-    memset((void *)acquisition.axis_fault, 0, sizeof(acquisition.axis_fault));
+    /* Reset the acquisition prefix only. Hardware IBUS/global-stop latches,
+     * their history and six-step selection live after this boundary. Neither
+     * an ADC restart nor default settings may clear those protections. */
+    memset((void *)&acquisition,0,offsetof(__typeof__(acquisition),ibus_started));
     if (acquisition.ibus_latched) acquisition.axis_fault[0]=MOTOR_SAMPLE_FAULT_IBUS;
     else if (acquisition.ibus_init_failed) acquisition.axis_fault[0]=MOTOR_SAMPLE_FAULT_IBUS_INIT;
     acquisition.ibus_ref_valid=false; acquisition.ibus_reference_updates=0;
-    memset(acquisition.energy, 0, sizeof(acquisition.energy));
-    memset(acquisition.trip_raw, 0, sizeof(acquisition.trip_raw));
-    memset(acquisition.trip_phase, 0, sizeof(acquisition.trip_phase));
-    memset(acquisition.zero_fault, 0, sizeof(acquisition.zero_fault));
-    memset((void *)acquisition.arm_frames, 0, sizeof(acquisition.arm_frames));
-    s_requested[1] = s_monitored[1] = false;
-    acquisition.bus_valid = false;
-    acquisition.bus_seen = false;
-    acquisition.bus_good_tracking = false;
-    acquisition.power_enabled = false;
-    acquisition.bus_samples = 0U;
-    acquisition.bus_raw = 0U;
-    acquisition.bus_voltage = 0.0f;
-    s_adc_volts = REFERENCE_START_VOLTS / ADC_FULL_SCALE;
-    acquisition.reference_valid = false;
-    acquisition.reference_sum = acquisition.reference_count = 0U;
-    acquisition.reference_at = acquisition.reference_updates = acquisition.reference_errors = 0U;
-    acquisition.reference_raw = 0U;
-    acquisition.reference_cal = *VREFINT_CAL_ADDR;
-    acquisition.offset_count = 0U;
-    s_overload_energy = 0.0f;
-    s_fault_phase = 0U;
-    s_fault_during_zero = false;
-    acquisition.bus_divider = 0U;
-    memset(s_fault_current_raw, 0, sizeof(s_fault_current_raw));
-    memset(acquisition.offsets, 0, sizeof(acquisition.offsets));
-    memset(&acquisition.frame, 0, sizeof(acquisition.frame));
-    memset(acquisition.offset_sum, 0, sizeof(acquisition.offset_sum));
+    acquisition.reference_cal=*VREFINT_CAL_ADDR;
+    s_requested[1]=s_monitored[1]=false;
+    s_adc_volts=REFERENCE_START_VOLTS/ADC_FULL_SCALE;
 
     __HAL_TIM_MOE_DISABLE_UNCONDITIONALLY(&htim1);
     __HAL_TIM_MOE_DISABLE_UNCONDITIONALLY(&htim8);

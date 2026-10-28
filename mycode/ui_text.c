@@ -4,12 +4,12 @@
 #include <stdarg.h>
 
 typedef struct { char *buffer; size_t capacity,length; } TextWriter;
-static void put_char(TextWriter *out,char c)
+__attribute__((noinline,noclone)) static void put_char(TextWriter *out,char c)
 {
     if(out->length+1<out->capacity) out->buffer[out->length]=c;
     ++out->length;
 }
-static int finish(TextWriter *out,int result)
+__attribute__((noinline,noclone)) static int finish(TextWriter *out,int result)
 {
     if(out->capacity)
         out->buffer[out->length<out->capacity ? out->length : out->capacity-1]='\0';

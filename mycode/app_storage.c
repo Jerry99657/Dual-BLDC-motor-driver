@@ -7,7 +7,7 @@
 #include <string.h>
 
 #define APP_SETTINGS_MAGIC 0x464F4331UL  /* "FOC1" */
-#define APP_SETTINGS_VER   5U
+#define APP_SETTINGS_VER   7U
 #define APP_SETTINGS_ADDR_A 0x00000000UL
 #define APP_SETTINGS_ADDR_B 0x00001000UL
 #define APP_LOG_ADDR        0x00002000UL
@@ -117,12 +117,11 @@ static bool settings_read(uint32_t addr, AppSettings *out)
         return false;
     }
     if (out->magic == APP_SETTINGS_MAGIC &&
-        (out->version >= 1U && out->version <= 4U)) {
-        uint32_t old_crc = out->version == 1U ?
-            (uint32_t)offsetof(AppSettings,speed_step_x10) :
-            out->version == 2U ? (uint32_t)offsetof(AppSettings,control_config) :
-            out->version == 3U ? (uint32_t)offsetof(AppSettings,motor_detect) :
-            (uint32_t)offsetof(AppSettings,motor_detect_l_uh);
+        (out->version >= 1U && out->version <= 6U)) {
+        static const uint8_t crc_offsets[]={offsetof(AppSettings,speed_step_x10),offsetof(AppSettings,control_config),
+            offsetof(AppSettings,motor_detect),offsetof(AppSettings,motor_detect_l_uh),offsetof(AppSettings,calibration),offsetof(AppSettings,custom)};
+        _Static_assert(offsetof(AppSettings,custom)<256,"Legacy storage offsets");
+        uint32_t old_crc=crc_offsets[out->version-1U];
         uint32_t stored_crc;
         if (out->size != old_crc+sizeof(uint32_t)) return false;
         memcpy(&stored_crc,(const uint8_t *)out+old_crc,sizeof(stored_crc));
@@ -131,7 +130,13 @@ static bool settings_read(uint32_t addr, AppSettings *out)
             out->speed_step_x10=out->torque_step_x100=out->position_step_x100=5;
         if (out->version <= 2U) extended_defaults(out);
         if(out->version<=3U) out->motor_detect=0U;
-        out->motor_detect_l_uh=out->motor_detect_flux_uwb=0;
+        if(out->version<=4U) out->motor_detect_l_uh=out->motor_detect_flux_uwb=0;
+        if(out->version<=5U) {
+            out->motor_detect&=0xFFFFFFU; /* Legacy measurements have no trusted model binding. */
+            memset(out->calibration,0,sizeof(out->calibration));
+        }
+        out->control_config&=~APP_CONFIG_CUSTOM_MASK;
+        memset(out->custom,0,sizeof(out->custom));
         out->version=APP_SETTINGS_VER;
         out->size=sizeof(*out);
         out->crc=crc32_bytes((const uint8_t *)out,(uint32_t)offsetof(AppSettings,crc));

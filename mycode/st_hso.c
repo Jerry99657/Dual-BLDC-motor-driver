@@ -1,4 +1,5 @@
 #include "st_hso.h"
+#include "compact_text.h"
 #include "main.h"
 #include "hso.h"
 #include "impedcorr.h"
@@ -487,45 +488,83 @@ void StHso_RecordControlCycles(uint32_t cycles)
 }
 __attribute__((optimize("Os"))) const char *StHso_StateText(StHsoState state)
 {
-    switch (state) {
-    case ST_HSO_OFF:return "OFF";
-    case ST_HSO_WAIT_PARAM:return "WAIT PARAM";
-    case ST_HSO_WAIT_SAMPLE:return "WAIT ADC/STOP";
-    case ST_HSO_READY:return "READY";
-    case ST_HSO_ALIGN:return "DC ALIGN";
-    case ST_HSO_RAMP:return "I/F RAMP";
-    case ST_HSO_LEARNING:return "I/F FLUX";
-    case ST_HSO_CAPTURE:return "CAPTURE";
-    case ST_HSO_CONTROL:return "CONTROL";
-    case ST_HSO_FAULT:return "START/HSO FAIL";
-    case ST_HSO_INPUT_RANGE:return "ADC RANGE";
-    default:return "OBSERVING";
-    }
+    static const char names[]=
+        "OFF\0"
+        "WAIT PARAM\0"
+        "WAIT ADC/STOP\0"
+        "OBSERVING\0"
+        "I/F FLUX\0"
+        "OBSERVING\0"
+        "ADC RANGE\0"
+        "OBSERVING\0"
+        "READY\0"
+        "DC ALIGN\0"
+        "I/F RAMP\0"
+        "CAPTURE\0"
+        "CONTROL\0"
+        "START/HSO FAIL\0"
+        "OBSERVING";
+    _Static_assert(ST_HSO_OFF==0,"Text enum order");
+    _Static_assert(ST_HSO_WAIT_PARAM==1,"Text enum order");
+    _Static_assert(ST_HSO_WAIT_SAMPLE==2,"Text enum order");
+    _Static_assert(ST_HSO_OBSERVING==3,"Text enum order");
+    _Static_assert(ST_HSO_LEARNING==4,"Text enum order");
+    _Static_assert(ST_HSO_TRACKING==5,"Text enum order");
+    _Static_assert(ST_HSO_INPUT_RANGE==6,"Text enum order");
+    _Static_assert(ST_HSO_TIMING==7,"Text enum order");
+    _Static_assert(ST_HSO_READY==8,"Text enum order");
+    _Static_assert(ST_HSO_ALIGN==9,"Text enum order");
+    _Static_assert(ST_HSO_RAMP==10,"Text enum order");
+    _Static_assert(ST_HSO_CAPTURE==11,"Text enum order");
+    _Static_assert(ST_HSO_CONTROL==12,"Text enum order");
+    _Static_assert(ST_HSO_FAULT==13,"Text enum order");
+    return CompactText_At(names,(unsigned)state<14U ? (unsigned)state : 14U);
 }
 __attribute__((optimize("Os"))) const char *StHso_ReasonText(StHsoReason reason)
 {
-    switch (reason) {
-    case ST_HSO_REASON_NONE:return "OK";
-    case ST_HSO_REASON_OFF:return "OFF";
-    case ST_HSO_REASON_PARAM:return "PARAM";
-    case ST_HSO_REASON_SAMPLE:return "SAMPLE";
-    case ST_HSO_REASON_SEQUENCE:return "SEQUENCE";
-    case ST_HSO_REASON_RANGE:return "ADC RANGE";
-    case ST_HSO_REASON_ENCODER:return "ENCODER";
-    case ST_HSO_REASON_SPEED:return "SPEED";
-    case ST_HSO_REASON_ANGLE:return "ANGLE";
-    case ST_HSO_REASON_FREQUENCY:return "FREQUENCY";
-    case ST_HSO_REASON_FLUX:return "FLUX";
-    case ST_HSO_REASON_NUMERIC:return "NUMERIC";
-    case ST_HSO_REASON_TIMING:return "TIMING";
-    case ST_HSO_REASON_STARTUP:return "START TIMEOUT";
-    case ST_HSO_REASON_STANDSTILL:return "WAIT FOR STOP";
-    case ST_HSO_REASON_SETTLE:return "EMF SETTLE";
-    case ST_HSO_REASON_EMF_LOW:return "EMF LOW";
-    case ST_HSO_REASON_FLUX_RIPPLE:return "FLUX RIPPLE";
-    case ST_HSO_REASON_LEARN_TIMEOUT:return "FLUX TIMEOUT";
-    case ST_HSO_REASON_CAPTURE_TIMEOUT:return "LOCK TIMEOUT";
-    case ST_HSO_REASON_PHASE_DRIFT:return "PHASE DRIFT";
-    default:return "UNKNOWN";
-    }
+    static const char names[]=
+        "OK\0"
+        "OFF\0"
+        "PARAM\0"
+        "SAMPLE\0"
+        "SEQUENCE\0"
+        "ADC RANGE\0"
+        "ENCODER\0"
+        "SPEED\0"
+        "ANGLE\0"
+        "FREQUENCY\0"
+        "FLUX\0"
+        "NUMERIC\0"
+        "TIMING\0"
+        "START TIMEOUT\0"
+        "WAIT FOR STOP\0"
+        "EMF SETTLE\0"
+        "EMF LOW\0"
+        "FLUX RIPPLE\0"
+        "FLUX TIMEOUT\0"
+        "LOCK TIMEOUT\0"
+        "PHASE DRIFT\0"
+        "UNKNOWN";
+    _Static_assert(ST_HSO_REASON_NONE==0,"Text enum order");
+    _Static_assert(ST_HSO_REASON_OFF==1,"Text enum order");
+    _Static_assert(ST_HSO_REASON_PARAM==2,"Text enum order");
+    _Static_assert(ST_HSO_REASON_SAMPLE==3,"Text enum order");
+    _Static_assert(ST_HSO_REASON_SEQUENCE==4,"Text enum order");
+    _Static_assert(ST_HSO_REASON_RANGE==5,"Text enum order");
+    _Static_assert(ST_HSO_REASON_ENCODER==6,"Text enum order");
+    _Static_assert(ST_HSO_REASON_SPEED==7,"Text enum order");
+    _Static_assert(ST_HSO_REASON_ANGLE==8,"Text enum order");
+    _Static_assert(ST_HSO_REASON_FREQUENCY==9,"Text enum order");
+    _Static_assert(ST_HSO_REASON_FLUX==10,"Text enum order");
+    _Static_assert(ST_HSO_REASON_NUMERIC==11,"Text enum order");
+    _Static_assert(ST_HSO_REASON_TIMING==12,"Text enum order");
+    _Static_assert(ST_HSO_REASON_STARTUP==13,"Text enum order");
+    _Static_assert(ST_HSO_REASON_STANDSTILL==14,"Text enum order");
+    _Static_assert(ST_HSO_REASON_SETTLE==15,"Text enum order");
+    _Static_assert(ST_HSO_REASON_EMF_LOW==16,"Text enum order");
+    _Static_assert(ST_HSO_REASON_FLUX_RIPPLE==17,"Text enum order");
+    _Static_assert(ST_HSO_REASON_LEARN_TIMEOUT==18,"Text enum order");
+    _Static_assert(ST_HSO_REASON_CAPTURE_TIMEOUT==19,"Text enum order");
+    _Static_assert(ST_HSO_REASON_PHASE_DRIFT==20,"Text enum order");
+    return CompactText_At(names,(unsigned)reason<21U ? (unsigned)reason : 21U);
 }

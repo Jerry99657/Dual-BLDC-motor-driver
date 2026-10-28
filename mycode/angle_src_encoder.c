@@ -68,7 +68,9 @@ static AngleSource encoder_src = {
 
 AngleSource* AngleSrc_Encoder_Init(int pole_pairs)
 {
-    pp = pole_pairs > 0 ? pole_pairs : 1;
+    DIR=pole_pairs<0 ? -1 : 1;
+    pp=pole_pairs*DIR;
+    if (!pp) pp=1;
     previous_sensor_angle = Angle;
     mechanical_angle = 0.0f;
     mechanical_velocity = 0.0f;
@@ -136,17 +138,8 @@ void AngleSrc_Encoder_Update(float sample_period_s)
     delta *= (float)DIR;
     mechanical_angle += delta;
 
-    float oldest_position =
-        velocity_position_history[velocity_history_index];
-    velocity_position_history[velocity_history_index] = mechanical_angle;
-    velocity_history_index = (uint8_t)(
-        (velocity_history_index + 1U) % ENCODER_VELOCITY_WINDOW);
-
-    if (velocity_history_count < ENCODER_VELOCITY_WINDOW) {
-        velocity_history_count++;
-    }
-    mechanical_velocity = (mechanical_angle - oldest_position) /
-        (sample_period_s * (float)velocity_history_count);
+    mechanical_velocity=MotorMath_WindowVelocity(mechanical_angle,
+        velocity_position_history,&velocity_history_index,&velocity_history_count,sample_period_s);
 }
 
 uint8_t AngleSrc_Encoder_IsAligned(void)

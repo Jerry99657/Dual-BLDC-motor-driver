@@ -2,6 +2,8 @@
 #define __MOTOR_PARAMS_H
 
 #include <stdint.h>
+#define MOTOR_DEFAULT_POSITION_SPEED 30.0f
+#define MOTOR_CURRENT_BANDWIDTH_RAD_S 250.0f
 
 /* 电机参数结构体 */
 typedef struct {
@@ -14,7 +16,8 @@ typedef struct {
 
 typedef struct {
     const char *name;           /* 电机标识名 */
-    int pole_pairs;             /* 极对数 */
+    uint8_t pole_pairs;             /* 极对数 */
+    int8_t encoder_direction;     /* +1/-1, independent of the positive pole count. */
 
     /* === 电气参数 === */
     float Rs;                   /* 相电阻 (ohm) */
@@ -27,15 +30,10 @@ typedef struct {
     float max_current;          /* 峰值软件停机门限 (A)，不作为持续目标 */
     float overload_current;     /* 过载累计基准 (A)，不是铭牌额定值 */
     float overload_budget_s;    /* 超额 I^2 预算 = 基准电流平方 * 此秒数 */
-    float rated_speed_mech;     /* 额定机械角速度 (rad/s) */
+    float rated_speed_mech;     /* Mechanical rated speed used by six-step feedforward. */
     float max_speed_mech;       /* 最高机械角速度 (rad/s) */
 
     /* === 电流环 PI（d/q 轴共用） === */
-    float cur_bandwidth;        /* 目标带宽 (rad/s) */
-    float cur_P;                /* 比例增益 (V/A) */
-    float cur_I;                /* 积分增益 (V/(A*s)) */
-    float cur_limit;            /* 输出电压限幅 (V) */
-    float cur_ramp;             /* 输出变化率限幅 (V/s)，0=不限幅 */
 
     /* === 速度环 PI === */
     float vel_P;
@@ -43,24 +41,26 @@ typedef struct {
     float vel_current_P;        /* Speed PI outputs A with current loop enabled. */
     float vel_current_I;
     float vel_limit;            /* 输出限幅 (V)，通常 = bus_voltage / sqrt(3) */
-    float vel_ramp;             /* 输出变化率限幅 (V/s) */
     float vel_filter_Tf;        /* 速度 LPF 时间常数 (s) */
 
     /* === 位置环 P === */
     float pos_P;
-    float pos_limit;            /* 输出限幅 (rad/s) */
-    float pos_ramp;
 
     /* Current and voltage actuators have different dynamics. Choose using
      * the running controller's mode, not an unconfirmed settings draft. */
-    MotorFollowParams follow_voltage, follow_current;
+    const MotorFollowParams *follow_voltage, *follow_current;
 } MotorParams;
 
 typedef enum {
     MOTOR_PROFILE_2804 = 0,
     MOTOR_PROFILE_4015,
+    MOTOR_PROFILE_ESC, /* Protocol selector only; not a physical parameter set. */
+    MOTOR_PROFILE_CUSTOM1,
+    MOTOR_PROFILE_CUSTOM2,
+    MOTOR_PROFILE_CUSTOM3,
     MOTOR_PROFILE_COUNT
 } MotorProfile;
+#define MOTOR_CUSTOM_COUNT 3U
 
 /* Physical bridge/encoder identity, independent of the attached motor model. */
 typedef enum {
@@ -69,9 +69,20 @@ typedef enum {
     MOTOR_AXIS_COUNT
 } MotorAxis;
 
+/* Equivalent-star result: low 24 bits retain signed poles and Rs; high byte
+ * binds it to profile+1. Zero denotes factory parameters. */
+typedef struct { uint32_t poles_rs,ls_uh,flux_uwb; } MotorCalibration;
+uint8_t MotorParams_SetCalibration(MotorAxis axis,const MotorCalibration *record);
+uint8_t MotorParams_IsCalibrated(MotorAxis axis);
+uint8_t MotorParams_SetCustom(unsigned slot,const MotorCalibration *record);
+unsigned MotorParams_CustomMask(void);
+MotorProfile MotorParams_BaseProfile(MotorProfile profile);
+
 extern const MotorParams MOTOR_2804;
 extern const MotorParams MOTOR_4015;
 const MotorParams *MotorParams_GetProfile(MotorProfile profile);
+/* GetProfile returns the immutable control/protection template. Live measured
+ * electrical parameters, including Custom slots, are returned by GetAxis. */
 /* Invalid axes return NULL / MOTOR_PROFILE_COUNT and cannot change either
  * axis. These functions publish configuration only: the controller must stop
  * the affected axis, reload its PI/limits and invalidate alignment itself. */

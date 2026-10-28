@@ -25,7 +25,7 @@ SEED = """()=>{
             ['m2.target_position','rad',540.2],['m2.position','rad',540.2],
             ['m2.iq','A',0],['vbus','V',11.69+.06*(random/4294967296-.5)]]});
     }
-    draw();
+    addAllPlotChannels();draw();
 }"""
 
 

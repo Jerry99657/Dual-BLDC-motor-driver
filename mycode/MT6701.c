@@ -1,3 +1,4 @@
+#include "compact_text.h"
 #include "MT6701.h"
 #include "spi_port.h"
 #include "kk_oled_driver.h"
@@ -287,16 +288,27 @@ void MT6701_GetDiagnostics(MT6701Diagnostics *out)
 
 const char *MT6701_ErrorText(MT6701Error error)
 {
+    static const char names[]=
+        "ALL 0\0"
+        "ALL 1\0"
+        "CRC\0"
+        "FIELD\0"
+        "TRACK\0"
+        "SPI\0"
+        "DMA TMO\0"
+        "--";
+    unsigned index;
     switch (error) {
-    case MT6701_ERROR_FRAME: return "ALL 0";
-    case MT6701_ERROR_ONES: return "ALL 1";
-    case MT6701_ERROR_CRC: return "CRC";
-    case MT6701_ERROR_FIELD: return "FIELD";
-    case MT6701_ERROR_TRACK: return "TRACK";
-    case MT6701_ERROR_SPI: return "SPI";
-    case MT6701_ERROR_TIMEOUT: return "DMA TMO";
-    default: return "--";
+    case MT6701_ERROR_FRAME: index=0; break;
+    case MT6701_ERROR_ONES: index=1; break;
+    case MT6701_ERROR_CRC: index=2; break;
+    case MT6701_ERROR_FIELD: index=3; break;
+    case MT6701_ERROR_TRACK: index=4; break;
+    case MT6701_ERROR_SPI: index=5; break;
+    case MT6701_ERROR_TIMEOUT: index=6; break;
+    default: index=7; break;
     }
+    return CompactText_At(names,index);
 }
 
 static volatile MT6701_2_Snapshot second;
@@ -468,7 +480,7 @@ void MT6701_2_FastService(void)
         MT6701_2_BusFault();
     }
 }
-void MT6701_2_Service(uint32_t now_ms)
+__attribute__((noinline,noclone)) void MT6701_2_Service(uint32_t now_ms)
 {
     SpiPort_Service(&hspi2);
     uint32_t mask=__get_PRIMASK(); __disable_irq();

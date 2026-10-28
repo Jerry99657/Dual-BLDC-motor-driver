@@ -56,6 +56,7 @@ extern volatile float JerryFOC_Target_Iq WEAK, JerryFOC_Target_Position WEAK;
 static AppSettings settings;
 AppSettings *AppStorage_Get(void) { return &settings; }
 bool AppStorage_RequestSave(void) { return false; }
+bool AppStorage_IsReady(void) { return true; }
 #endif
 #ifdef CONTROL_STUB_UI
 unsigned control_stub_axis_reads;
@@ -178,7 +179,7 @@ static void clear_profile_settings(MotorAxis a)
     AppSettings *s=AppStorage_Get();
     uint32_t flags=(s->flags & APP_FLAG_LED_ENABLE)|AppSettings_EncodePositionSpeed(30)|
         (APP_SPEED_LIMIT_DEFAULT<<APP_SPEED_LIMIT_SHIFT)|
-        (MotorParams_GetAxisProfile(a)==MOTOR_PROFILE_4015 ? APP_FLAG_MOTOR_4015 : 0U);
+        (MotorParams_BaseProfile(MotorParams_GetAxisProfile(a))==MOTOR_PROFILE_4015 ? APP_FLAG_MOTOR_4015 : 0U);
     if(a==MOTOR_AXIS_1) {
         s->flags=flags;s->speed_x10=s->voltage_x100=s->position_x100=0;
         s->control_config&=~APP_CONFIG_THROTTLE_MASK;
@@ -191,7 +192,12 @@ bool MotorControl_SelectProfile(MotorAxis a,MotorProfile p)
         AppStorage_Get()->control_config&=~APP_CONFIG_ESC;
         SixStep_SetGeneric(false);
     }
-    if(ok) clear_profile_settings(a);
+    if(ok) {
+        unsigned shift=APP_CONFIG_CUSTOM_SHIFT(a);
+        AppStorage_Get()->control_config=(AppStorage_Get()->control_config&~(3UL<<shift))|
+            ((p>=MOTOR_PROFILE_CUSTOM1 ? (unsigned)p-MOTOR_PROFILE_CUSTOM1+1U : 0U)<<shift);
+        clear_profile_settings(a);
+    }
     return ok;
 }
 bool MotorControl_SelectGeneric(void) {
@@ -314,3 +320,29 @@ void MT6701_2_GetDiagnostics(MT6701Diagnostics *o) { *o=(MT6701Diagnostics){0}; 
 uint32_t MotorDetect_Inductance(void) { return 0; }
 uint32_t MotorDetect_Flux(void) { return 0; }
 #endif
+
+MotorProfile MotorDetect_Profile(void) { return MotorParams_GetActiveProfile(); }
+bool MotorControl_SaveCustom(unsigned slot,const MotorCalibration *r) {
+    if(slot>=3 || !AppStorage_IsReady() || MotorSampling_IsAxisOutputRequested(MOTOR_AXIS_1) ||
+       MotorSampling_IsAxisOutputRequested(MOTOR_AXIS_2) || !r->poles_rs ||
+       MotorParams_GetAxisProfile(MOTOR_AXIS_1)==slot+MOTOR_PROFILE_CUSTOM1 ||
+       MotorParams_GetAxisProfile(MOTOR_AXIS_2)==slot+MOTOR_PROFILE_CUSTOM1 || !MotorParams_SetCustom(slot,r)) return false;
+    AppStorage_Get()->custom[slot]=*r;return true;
+}
+bool MotorControl_ApplyCalibration(MotorAxis axis,const MotorCalibration *r) {
+    if(MotorSampling_IsAxisOutputRequested(MOTOR_AXIS_1) || MotorSampling_IsAxisOutputRequested(MOTOR_AXIS_2) ||
+       MotorControl_GetDrive(axis)!=MOTOR_DRIVE_ENCODER ||
+       (r->poles_rs && r->poles_rs>>24!=(unsigned)MotorParams_GetAxisProfile(axis)+1U)) return false;
+    if(!MotorParams_SetCalibration(axis,r)) return false;
+    AppStorage_Get()->calibration[axis]=*r;return true;
+}
+
+void MotorControl_Init(void) {
+    AppSettings *s=AppStorage_Get();
+    for(unsigned a=0;a<2;++a) {
+        MotorParams_SetCalibration((MotorAxis)a,&s->calibration[a]);
+        MotorControl_SelectProfile((MotorAxis)a,MOTOR_PROFILE_2804);
+    }
+    MotorControl_SelectWork(MOTOR_WORK_SINGLE_M1);MotorControl_SelectFeedback(false);
+    MotorControl_SetGear(100,0);MotorControl_SetFocus(MOTOR_AXIS_1);
+}

@@ -946,6 +946,28 @@ static void check_r76(void) {
     }
     puts("PASS: R76 both HSO profiles round zero-to-minimum up to 5 rad/s; +/-0.1 configured steps, return to zero and no draft auto-start");
 }
+static void check_custom_motors(void) {
+    reset();MotorControl_StopAll();MotorControl_SelectWork(MOTOR_WORK_SINGLE_M1);MotorControl_SelectFeedback(false);
+    MotorCalibration empty={0};for(unsigned i=0;i<3;++i) assert(MotorParams_SetCustom(i,&empty));
+    assert(App_SelectMotor(MOTOR_AXIS_1,MOTOR_PROFILE_2804));
+    settings.motor_detect=(1U<<24)|(2300U<<8)|7U;settings.motor_detect_l_uh=860;settings.motor_detect_flux_uwb=7500;
+    ui_app_reset(tick);assert(KK_UI_Init(ui_app_get())==KK_UI_OK);settle();
+    const KK_UI_MenuPage *menu=&ui_app_get()->menu_pages[1];
+    assert(menu->item_count==7 && (menu->item_states[1]&63U)==0x15U);
+    assert(KK_UI_GoTo(UI_PAGE_DETECT,tick)==KK_UI_OK);settle();press(KK_UI_KEY_LEFT);probe_frame();
+    assert(drew("Save Custom 3"));press(KK_UI_KEY_OK);settle();
+    assert(MotorParams_CustomMask()==4 && settings.custom[2].ls_uh==860 && MotorParams_GetActiveProfile()==MOTOR_PROFILE_2804);
+    assert((menu->item_states[1]&63U)==5U);step(0,3200);assert(saved_settings.custom[2].ls_uh==860);
+    back();assert(KK_UI_GoTo(UI_PAGE_MOTOR,tick)==KK_UI_OK);settle();
+    for(unsigned i=0;i<8 && kk_ui.current.selected!=6;++i) press(KK_UI_KEY_DOWN);
+    assert(kk_ui.current.selected==6);press(KK_UI_KEY_OK);settle();
+    assert(MotorParams_GetActiveProfile()==MOTOR_PROFILE_CUSTOM3 && !output_requested);
+    assert(!strcmp(MotorParams_GetActive()->name,"Custom 3") && !strcmp(MOTOR_2804.name,"2804"));
+    assert(!strcmp(ui_app_get()->menu_pages[0].title,"M1 Custom 3 Settings"));
+    assert(!strcmp(ui_app_get()->bool_bindings[0].title,"M1 Custom 3 Curr Loop"));
+    snapshot("r105-custom-motor");
+    puts("PASS: actual UI hides empty banks, saves Custom 3 from the detection page, persists parameters and selects the named motor without a Run command");
+}
 static void check_r77(void) {
     reset(); MotorControl_StopAll(); MotorControl_SelectWork(MOTOR_WORK_SINGLE_M1);
     MotorControl_SelectFeedback(false);
@@ -963,8 +985,8 @@ static void check_r77(void) {
     press(KK_UI_KEY_OK);detect_active=false;detect_result=(2300U<<8)|7U;
     probe_frame(); assert(drew("DONE") && drew("PP 7+ R 2.30 ohm") && drew("OK:Save LR:View"));
     snapshot("r77-detect-done");
-    press(KK_UI_KEY_OK); assert(settings.motor_detect==detect_result);
-    step(0,3200); assert(saved_settings.motor_detect==detect_result && !detect_active);
+    press(KK_UI_KEY_OK); assert((settings.motor_detect&0xFFFFFFU)==detect_result);
+    step(0,3200); assert((saved_settings.motor_detect&0xFFFFFFU)==detect_result && !detect_active);
     assert(saved_settings.motor_detect_l_uh==1300 && saved_settings.motor_detect_flux_uwb==7500);
     press(KK_UI_KEY_RIGHT); probe_frame(); assert(drew("Ls 1300 uH"));
     snapshot("r79-detect-inductance");
@@ -972,6 +994,14 @@ static void check_r77(void) {
     snapshot("r79-detect-flux");
     press(KK_UI_KEY_RIGHT);probe_frame();assert(drew("Ke 6.73 V/krpm"));
     snapshot("r79-detect-ke");
+    press(KK_UI_KEY_RIGHT);probe_frame();assert(drew("Apply M1") && drew("OK:Apply LR:View"));
+    press(KK_UI_KEY_OK);assert(MotorParams_IsCalibrated(MOTOR_AXIS_1));
+    char label[24],value[32];assert(App_ReadRow(1,0,15,label,value)==16 && !strcmp(label,"R/L/Flux") && !strcmp(value,"M:2300/1300/7500"));
+    assert(settings.calibration[0].poles_rs>>24==(unsigned)MotorParams_GetActiveProfile()+1U);
+    press(KK_UI_KEY_RIGHT);probe_frame();assert(drew("Preset M1"));
+    press(KK_UI_KEY_OK);assert(!MotorParams_IsCalibrated(MOTOR_AXIS_1) && !settings.calibration[0].poles_rs);
+    press(KK_UI_KEY_LEFT);press(KK_UI_KEY_LEFT);
+
     press(KK_UI_KEY_UP);probe_frame();assert(!detect_result && drew("OK:Start K2:Back"));
     back();
     assert(KK_UI_GoTo(UI_PAGE_DETECT,tick)==KK_UI_OK);settle();probe_frame();assert(drew("Saved"));
@@ -1101,7 +1131,7 @@ static void check_app_bridge(void)
     assert(App_Control(0,13,250)==1);settle();
     assert(KK_UI_GetCurrentPage()==UI_PAGE_DETECT && detect_active && detect_current==250);
     detect_active=false;detect_result=11U|(1920U<<8);
-    assert(App_Control(0,15,0)==1 && settings.motor_detect==detect_result && settings.motor_detect_l_uh==1300 && settings.motor_detect_flux_uwb==7500);
+    assert(App_Control(0,15,0)==1 && (settings.motor_detect&0xFFFFFFU)==detect_result && settings.motor_detect_l_uh==1300 && settings.motor_detect_flux_uwb==7500);
     back();
     MotorControl_StopAll();MotorControl_SelectWork(MOTOR_WORK_INDEPENDENT);
     ControlStub_SetSecondState((MotorAxisSnapshot){.ready=true,.healthy=true,.aligned=true,.status="READY"});
@@ -1124,7 +1154,7 @@ static void check_app_bridge(void)
     assert(!output_requested && settings.speed_x10==0 && settings.voltage_x100==0 && settings.position_x100==0);
     assert(MotorControl_SelectSixStep(true));
     settings.control_config|=30U<<APP_CONFIG_THROTTLE_SHIFT;
-    assert(App_SelectMotor(MOTOR_AXIS_1,MOTOR_PROFILE_COUNT));App_ConfigChanged();settle();
+    assert(App_SelectMotor(MOTOR_AXIS_1,MOTOR_PROFILE_ESC));App_ConfigChanged();settle();
     assert(!output_requested && !(settings.control_config&APP_CONFIG_THROTTLE_MASK));
     assert(App_Control(0,14,0)==1 && global_stopped && !output_requested);
     puts("PASS: R88 shared Settings validation/publication/save, per-axis ranges/steps, actual DAC rejection, local-editor conflict, non-invasive diagnostic rows, remote Run values/OK/Back, modal navigation and remote detection entry/result");
@@ -1201,7 +1231,7 @@ static void check_query_rows(void) {
         const KK_UI_App *app=ui_app_get();
         for(unsigned g=0;g<app->info_page_count;++g) for(unsigned r=0;r<app->info_pages[g].row_count;++r) {
             const KK_UI_InfoPage *p=&app->info_pages[g];
-            assert(App_ReadRow(axis,g,r,label,value)==p->row_count);
+            assert(App_ReadRow(axis,g,r,label,value)==(int)p->row_count+(g==0U ? 1 : 0));
             if(strcmp(label,p->rows[r].name) || strcmp(value,p->rows[r].value))
                 fprintf(stderr,"Query mismatch M%u mode%u group%u row%u: %s=%s vs %s=%s\n",
                     axis,m,g,r,label,value,p->rows[r].name,p->rows[r].value);
@@ -2162,7 +2192,7 @@ int main(int argc,char **argv) {
     check_r76();
     check_r77();
     check_framework_ui();
-    check_app_bridge();
+    check_app_bridge();check_custom_motors();
     puts("PASS: R54 applied Work marker, axis-qualified settings, HSO forced ON with retained encoder preference, Run feedback/bus/stages/actions/ranges, idle focus persistence and durable save states");
     puts("PASS: System/work routes, independent M1/M2 confirmed targets, KEY1 excluded from UI routing, long L/R view-only selection and KEY2 group stop");
     printf("PASS: GPIO, axes, bounce, repeat, Back/cancel, run modes, speed range, stop, fault, position origin, wrap, animations, async DMA (%u submissions)\n",submissions);

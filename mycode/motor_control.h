@@ -52,6 +52,8 @@ bool MotorControl_MotionAllowed(MotorAxis axis);
 bool MotorControl_SelectWork(MotorWorkMode mode);
 bool MotorControl_SelectFeedback(bool hso);
 bool MotorControl_SelectProfile(MotorAxis axis, MotorProfile profile);
+bool MotorControl_ApplyCalibration(MotorAxis axis,const MotorCalibration *record);
+bool MotorControl_SaveCustom(unsigned slot,const MotorCalibration *record);
 bool MotorControl_SelectGeneric(void);
 bool MotorControl_SetGear(int32_t ratio_x100, int32_t offset_x100);
 bool MotorControl_RequestAlign(MotorAxis axis);

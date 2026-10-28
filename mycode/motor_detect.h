@@ -18,4 +18,5 @@ uint32_t MotorDetect_Result(void);
  * Result only after the complete run; zero also denotes a legacy R/poles record. */
 uint32_t MotorDetect_Inductance(void);
 uint32_t MotorDetect_Flux(void);
+MotorProfile MotorDetect_Profile(void); /* Captured at start, independent of later UI changes. */
 #endif

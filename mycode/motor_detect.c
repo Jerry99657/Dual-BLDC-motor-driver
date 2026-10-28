@@ -3,6 +3,7 @@
 #include "MT6701.h"
 #include "board_diag.h"
 #include <math.h>
+#include "motor_math.h"
 #include <stddef.h>
 #include <stdlib.h>
 
@@ -21,6 +22,8 @@ static float limit, angle, d_integral, applied;
 static int32_t position, previous, origin, middle, forward;
 static float sum_i, sum_u, first_i, first_u, resistance;
 static volatile uint32_t result_l,result_flux;
+static MotorProfile result_profile;
+MotorProfile MotorDetect_Profile(void) { return result_profile; }
 static uint32_t candidate,window;
 static float inductance,q_integral,speed,wave[20];
 static float sum_q,sum_vq,flux_first;
@@ -30,7 +33,7 @@ uint32_t MotorDetect_Result(void) { return result; }
 uint32_t MotorDetect_Inductance(void) { return result_l; }
 uint32_t MotorDetect_Flux(void) { return result_flux; }
 const char *MotorDetect_Status(void) { return message; }
-static float clip(float v,float lo,float hi) { return fminf(hi,fmaxf(lo,v)); }
+#define clip MotorMath_Clamp
 /* Only called for the validated normal ratio .005.. .93. Range reduction
  * gives |z|<=1/3; the atanh series through z^11 has <1.1e-7 absolute error.
  * This avoids pulling the general libm log/error machinery into 128 KiB. */
@@ -81,6 +84,7 @@ bool MotorDetect_Start(unsigned ma) {
     }
     if(ok) {
         ticks=0; result=result_l=result_flux=0; angle=d_integral=applied=0; position=0;
+        result_profile=MotorParams_BaseProfile(MotorParams_GetActiveProfile());
         limit=(float)ma*0.001f;
         previous=MT6701_GetRawAngle();
         last_frame=MotorSampling_GetFrame()->sequence;

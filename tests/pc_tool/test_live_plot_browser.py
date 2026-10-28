@@ -31,7 +31,7 @@ with sync_playwright() as p:
                     add({kind:1,epoch:0,ms:t*1000,values:[['live.target','rad/s',50],
                         ['live.feedback','rad/s',50+2*Math.sin(t*9)+.15*Math.sin(t*271)]]});
                 }};
-                feedLive(2200);draw();window.liveTimer=setInterval(()=>feedLive(1),10);
+                feedLive(2200);addAllPlotChannels();draw();window.liveTimer=setInterval(()=>feedLive(1),10);
             }""")
             assert page.evaluate("plotLayout.relative&&plotLayout.origin===latestTime&&plotView.frozen===null")
 

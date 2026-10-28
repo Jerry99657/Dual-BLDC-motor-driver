@@ -58,7 +58,7 @@ bool AppSettings_StoreAxis(MotorAxis axis,const AppAxisSettings *value)
     uint32_t flags=(value->current_loop ? APP_FLAG_CURRENT_LOOP : 0U) |
         (st->flags & APP_FLAG_LED_ENABLE) | AppSettings_EncodePositionSpeed((uint32_t)value->position_speed) |
         ((uint32_t)value->speed_limit<<APP_SPEED_LIMIT_SHIFT) |
-        (MotorParams_GetAxisProfile(axis)==MOTOR_PROFILE_4015 ? APP_FLAG_MOTOR_4015 : 0U);
+        (MotorParams_BaseProfile(MotorParams_GetAxisProfile(axis))==MOTOR_PROFILE_4015 ? APP_FLAG_MOTOR_4015 : 0U);
     if(!MotorControl_SetOptions(axis,flags)) return false;
     if(axis==MOTOR_AXIS_1) st->flags=flags; else st->axis2_flags=flags;
     int32_t targets[]={limit(value->targets[0],-value->speed_limit*10,value->speed_limit*10),value->targets[1],value->targets[2]};
@@ -95,20 +95,21 @@ bool AppSettings_SaveService(uint32_t now,bool settled)
 bool AppSettings_SaveDetection(void)
 {
     if(MotorDetect_Active() || !MotorDetect_Result()) return false;
-    AppSettings *st=AppStorage_Get();st->motor_detect=MotorDetect_Result();
+    AppSettings *st=AppStorage_Get();st->motor_detect=MotorDetect_Result()|((uint32_t)(MotorDetect_Profile()+1U)<<24);
     st->motor_detect_l_uh=MotorDetect_Inductance();st->motor_detect_flux_uwb=MotorDetect_Flux();
     AppSettings_Changed(HAL_GetTick());return true;
 }
 bool AppSettings_SelectMotor(MotorAxis axis,MotorProfile profile)
 {
-    if((unsigned)axis>=MOTOR_AXIS_COUNT || (unsigned)profile>MOTOR_PROFILE_COUNT) return false;
+    if((unsigned)axis>=MOTOR_AXIS_COUNT) return false;
+    if(profile!=MOTOR_PROFILE_ESC && !MotorParams_GetProfile(profile)) return false;
     if(profile==MotorParams_GetAxisProfile(axis) && !(axis==MOTOR_AXIS_1 && SixStep_IsGeneric())) return true;
     MotorAxisSnapshot state;MotorControl_GetAxis(axis,&state);
     if(state.aligning) return false;
     bool sensorless=MotorControl_GetDrive(axis)!=MOTOR_DRIVE_ENCODER;
     if((!sensorless || MotorSampling_IsAxisOutputRequested(axis)) && MotorControl_GetInput(axis)<=MOTOR_INPUT_LOCAL)
         MotorControl_Stop(axis);
-    bool ok=profile==MOTOR_PROFILE_COUNT ? axis==MOTOR_AXIS_1 && MotorControl_SelectGeneric() : MotorControl_SelectProfile(axis,profile);
+    bool ok=profile==MOTOR_PROFILE_ESC ? axis==MOTOR_AXIS_1 && MotorControl_SelectGeneric() : MotorControl_SelectProfile(axis,profile);
     if(!ok) return false;
     /* SelectProfile/SelectGeneric already clear confirmed targets and publish
      * the axis defaults while both outputs are certified stopped. */
@@ -117,29 +118,33 @@ bool AppSettings_SelectMotor(MotorAxis axis,MotorProfile profile)
 static bool defaults(void)
 {
     MotorControl_StopAll();
-    if(!MotorControl_SelectProfile(MOTOR_AXIS_1,MOTOR_PROFILE_2804) ||
-        !MotorControl_SelectProfile(MOTOR_AXIS_2,MOTOR_PROFILE_2804) ||
-        !MotorControl_SelectWork(MOTOR_WORK_SINGLE_M1) || !MotorControl_SelectFeedback(false)) return false;
-    AppStorage_ResetDefaults();(void)MotorSampling_SetIbusLimit(APP_IBUS_DEFAULT_MA);
-    (void)MotorControl_SetGear(100,0);MotorControl_SetFocus(MOTOR_AXIS_1);
-    AppSettings *st=AppStorage_Get();
-    (void)MotorControl_SetOptions(MOTOR_AXIS_1,st->flags);
-    (void)MotorControl_SetOptions(MOTOR_AXIS_2,st->axis2_flags);
+    if(!MotorControl_SelectWork(MOTOR_WORK_SINGLE_M1) || !MotorSampling_SetIbusLimit(APP_IBUS_DEFAULT_MA)) return false;
+    AppStorage_ResetDefaults();
+    MotorControl_Init();
     return true;
 }
 bool AppSettings_ValidRequest(unsigned axis,unsigned key)
 {
-    if(axis>2 || key>APP_ACTION_DIAG_CLEAR) return false;
-    const unsigned axis_keys=(1U<<1)|(1U<<2)|(1U<<6)|(1U<<8)|(1U<<9)|(1U<<10);
+    if(axis>2 || key>APP_ACTION_CUSTOM_SAVE) return false;
+    const unsigned axis_keys=(1U<<1)|(1U<<2)|(1U<<6)|(1U<<8)|(1U<<9)|(1U<<10)|
+        (1U<<APP_ACTION_DETECT_APPLY)|(1U<<APP_ACTION_MOTOR_PRESET);
     return (((axis_keys>>key)&1U)!=0)==(axis!=0);
 }
-int8_t AppSettings_Apply(unsigned axis,unsigned key,int32_t value)
+__attribute__((noinline,noclone,optimize("Os"))) int8_t AppSettings_Apply(unsigned axis,unsigned key,int32_t value)
 {
     if(!AppSettings_ValidRequest(axis,key)) return -2;
     /* Action payloads are zero, except the explicit detection test current. */
-    if(key>=APP_ACTION_DEFAULTS && key!=APP_ACTION_DETECT_START && value!=0) return -1;
+    if(key>=APP_ACTION_DEFAULTS && key!=APP_ACTION_DETECT_START && key!=APP_ACTION_CUSTOM_SAVE && value!=0) return -1;
     AppSettings *st=AppStorage_Get();bool ok=false;
-    if(axis) {
+    if(key>=APP_ACTION_DETECT_APPLY) {
+        MotorCalibration r={st->motor_detect,st->motor_detect_l_uh,st->motor_detect_flux_uwb};
+        if(key==APP_ACTION_CUSTOM_SAVE) ok=value>=1 && value<=3 && MotorControl_SaveCustom((unsigned)value-1U,&r);
+        else {
+            if(key==APP_ACTION_MOTOR_PRESET) r=(MotorCalibration){0};
+            else if(!r.poles_rs) return -1;
+            ok=MotorControl_ApplyCalibration((MotorAxis)(axis-1U),&r);
+        }
+    } else if(axis) {
         AppAxisSettings data;MotorAxis a=(MotorAxis)(axis-1U);AppSettings_ReadAxis(a,&data);
         if(key==APP_SET_POSITION_SPEED) data.position_speed=value;
         else if(key==APP_SET_SPEED_LIMIT) {

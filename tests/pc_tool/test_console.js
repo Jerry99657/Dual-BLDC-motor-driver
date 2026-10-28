@@ -30,8 +30,11 @@ function reply(id,command){
  if(replyResult===1){
   let cfg=boardReply.readUInt32LE(52);const work=['SingleM1','SingleM2','Independent','SyncSpeed','SyncPosition','MasterM1','MasterM2'].indexOf(command.slice(5));
   if(command.startsWith('Work:')&&work>=0){cfg=(cfg&~7)|work;boardReply[19]=work===1||work===5?1:0}
-  const model=command.match(/^Motor([12]):(2804|4015|ESC)$/);
-  if(model){if(model[1]==='1'){if(model[2]==='ESC')cfg|=32768;else{cfg&=~32768;boardReply.writeUInt32LE((boardReply.readUInt32LE(32)&~(1<<24))|(model[2]==='4015'?1<<24:0),32)}}else cfg=(cfg&~16)|(model[2]==='4015'?16:0)}
+  const model=command.match(/^Motor([12]):(2804|4015|ESC|Custom[123])$/);
+  if(model){const shift=model[1]==='1'?24:26;
+   if(model[2].startsWith('Custom'))cfg=(cfg&~(3<<shift))|(Number(model[2].at(-1))<<shift);
+   else if(model[2]!=='ESC')cfg&=~(3<<shift);
+   if(model[1]==='1'){if(model[2]==='ESC')cfg|=32768;else{cfg&=~32768;if(!model[2].startsWith('Custom'))boardReply.writeUInt32LE((boardReply.readUInt32LE(32)&~(1<<24))|(model[2]==='4015'?1<<24:0),32)}}else if(!model[2].startsWith('Custom'))cfg=(cfg&~16)|(model[2]==='4015'?16:0)}
   if(command.startsWith('Feedback:'))cfg=(cfg&~(8|16384))|({Encoder:0,HSO:8,SixStep:16384}[command.slice(9)]||0);
   if(/^Focus:M[12]$/.test(command))boardReply[19]=Number(command.at(-1))-1;
   boardReply.writeUInt32LE(cfg,52);
@@ -96,7 +99,7 @@ async function controlLinkage(){
 }
 function plotRegressions(){
  const before=writes.length;
- evaluate(`clear();for(let i=0;i<2500;i++)add({kind:1,epoch:0,ms:i*10,values:[['speed','rad/s',Math.sin(i/30)],['position','rad',i/100],['bus','V',12+.02*Math.sin(i)]]});draw()`);
+ evaluate(`selected.clear();clear();for(let i=0;i<2500;i++)add({kind:1,epoch:0,ms:i*10,values:[['speed','rad/s',Math.sin(i/30)],['position','rad',i/100],['bus','V',12+.02*Math.sin(i)]]});addAllPlotChannels();draw()`);
  assert.equal(evaluate('plotLayout.panels.length'),1);assert.equal(evaluate('plotLayout.panels[0].items.length'),3);
  assert(evaluate('plotLayout.panels[0].lo<0 && plotLayout.panels[0].hi>=24.99'),'Different units share one numerical Y range');
  assert.equal(evaluate('[...series.values()][0].points.length'),1001);assert(Math.abs(evaluate('plotBounds().hi-plotBounds().lo')-10)<1e-9);
@@ -152,7 +155,7 @@ function plotRegressions(){
 }
 function multiPlotRegressions(){
  const before=writes.length;
- evaluate(`clear();for(let i=0;i<1000;i++)add({kind:1,epoch:0,ms:i*20,values:[['multi.speed','rad/s',Math.sin(i/20)],['multi.position','rad',i/20],['multi.current','A',.2],['multi.bus','V',12]]});draw()`);
+ evaluate(`selected.clear();clear();for(let i=0;i<1000;i++)add({kind:1,epoch:0,ms:i*20,values:[['multi.speed','rad/s',Math.sin(i/20)],['multi.position','rad',i/20],['multi.current','A',.2],['multi.bus','V',12]]});addAllPlotChannels();draw()`);
  assert.equal(evaluate('setPlotCount(3)'),true);assert.equal(elements.get('plotCanvases').children.length,3);
  assert(evaluate('plots[0].selected.size===4 && plots[1].selected.size===0 && plots[2].selected.size===0'));
  assert.equal(evaluate('setPlotCount(0)'),false);assert.equal(evaluate('setPlotCount(7)'),false);
@@ -184,14 +187,14 @@ function multiPlotRegressions(){
  evaluate(`add({kind:2,epoch:1,ms:100,values:[['other.speed','rad/s',1]]});draw()`);
  assert.equal(evaluate(`[...plots[0].selected].join(',')`),assigned,'Data reset preserves explicit bindings while clearing old samples');
  assert(evaluate('plots.every(p=>p.view.frozen===null && p.view.end===null && p.view.y.size===0)'));
- evaluate('setPlotCount(1);activatePlot(0);plots[0].autoSelect=true;clear()');
+ evaluate('setPlotCount(1);activatePlot(0);selected.clear();clear()');
  assert.equal(writes.length,before,'Canvas configuration, binding and drag/drop never send commands');
  console.log('PASS: 1..6 independent XY pairs, empty add, mixed-unit copied/deduplicated drops, shared-Y refit, per-canvas zoom/history, hidden restore, removal and bulk-add isolation, pause-all, retained bindings on source reset and zero commands');
 }
 function cacheRegressions(){
  const before=writes.length;
- evaluate(`for(const p of plots){p.view.cacheSeconds=p.view.span=10;p.selected.clear();p.autoSelect=p.index===0}setPlotCount(1);clear();$('window').value='100';$('window').onchange();
-  for(let i=0;i<=15000;i++)add({kind:1,epoch:0,ms:i*10,values:[['retention.speed','rad/s',i%97?i:null]]});draw()`);
+ evaluate(`for(const p of plots){p.view.cacheSeconds=p.view.span=10;p.selected.clear()}setPlotCount(1);clear();$('window').value='100';$('window').onchange();
+  for(let i=0;i<=15000;i++)add({kind:1,epoch:0,ms:i*10,values:[['retention.speed','rad/s',i%97?i:null]]});addAllPlotChannels();draw()`);
  assert.equal(evaluate("series.get('retention.speed|rad/s').points.length"),10001,'100 s at 100 Hz retains original samples beyond 2200');
  assert(evaluate("series.get('retention.speed|rad/s').points.at(0)[0]===50&&series.get('retention.speed|rad/s').points.at(-1)[0]===150"));
  assert(evaluate("plotNearest(series.get('retention.speed|rad/s').points,50.44)[1]===null"),'Null gaps survive Float64 storage');
@@ -223,13 +226,16 @@ function cacheRegressions(){
  assert(evaluate('plots[0].groups()[0].items[0].s.points.length===4&&plots[0].bounds().lo===1&&plots[0].bounds().hi===2'),'Retention follows timestamps, including irregular sampling');
  evaluate(`add({kind:2,epoch:1,ms:10,values:[['retention.speed','rad/s',1]]});draw()`);
  assert(evaluate('plots[0].view.cacheSeconds===1&&plots[0].bounds().hi===.01&&cacheDropTime===-Infinity'),'Source reset preserves duration and clears old data and memory-limit state');
- evaluate(`for(const p of plots){p.view.cacheSeconds=p.view.span=10;p.selected.clear();p.autoSelect=p.index===0}setPlotCount(1);clear()`);
+ evaluate(`for(const p of plots){p.view.cacheSeconds=p.view.span=10;p.selected.clear()}setPlotCount(1);clear()`);
  assert.equal(writes.length,before);
  console.log('PASS: duration cache: 100/120 s original samples, timestamp expiry, immediate shrink/gradual growth, shared and hidden canvases, independent pause copies, null gaps, explicit memory limit, source reset and zero commands');
 }
 async function main(){
  evaluate(code);await flush();assert.equal(writes.length,0,'Loading must not open a port or send a command');
- evaluate('toggleDemo();demoFrame()');assert.equal(writes.length,0);assert(evaluate('demo && !connected && series.size===6'));await assert.rejects(evaluate('connect()'),/演示/);evaluate('toggleDemo()');
+ assert(evaluate('plots.length===1&&plots[0].selected.size===0&&plots[0].layout.panels[0].items.length===0'),'Initial canvas is empty');
+ evaluate('toggleDemo();demoFrame()');assert.equal(writes.length,0);assert(evaluate('demo && !connected && series.size===6'));
+ assert(evaluate('plots[0].selected.size===0&&plots[0].layout.panels[0].items.length===0'),'Incoming demo data never binds itself');
+ await assert.rejects(evaluate('connect()'),/演示/);evaluate('toggleDemo()');
  context.wireBytes=new Uint8Array(fs.readFileSync('build/telemetry-r86/wire-fixture.bin'));
  const kinds=evaluate(`(()=>{const p=new WireParser(),frames=[];for(let i=0;i<wireBytes.length;i+=7)frames.push(...p.feed(wireBytes.subarray(i,i+7)));for(const f of frames){if(f.kind===16)decodeStatus(f);else channels(f)}return Array.from(new Set(frames.map(f=>f.kind)))})()`);
  assert.equal(kinds.length,12);
@@ -239,7 +245,7 @@ async function main(){
  for(let i=0;i<reference.length;i++){const bad=Uint8Array.from(reference);bad[i]^=64;context.bad=bad;context.good=reference;assert.equal(evaluate('(()=>{const p=new WireParser();return p.feed(bad).length+p.feed(good).length})()'),1)}
  evaluate('parser=new WireParser();parser.feed(new Uint8Array(100000))');assert(evaluate('parser.buffer.length')<12);
  await evaluate('connect()');assert.equal(serialOptions.baudRate,115200);assert.deepEqual(writes,['Format:Native','@1:Get']);
- assert.equal(evaluate('boardConfig.firmware'),103);assert.equal(elements.get('motorModel').value,'2804');
+ assert.equal(evaluate('boardConfig.firmware'),105);assert.equal(elements.get('motorModel').value,'2804');
  assert.equal(evaluate('outputFormat'),'Native');
  // Settings editor units, real row-frame layout, import validation and Stop cancellation.
  evaluate(`$('speedLimit').value=240;$('posSpeed').value=150;$('speedStep').value=1.7`);
@@ -253,8 +259,9 @@ async function main(){
  assert.equal(evaluate('decodeRow(new WireParser().feed(rowBytes)[0]).value'),'24.0 V');
  assert.equal(evaluate('decodeRow(new WireParser().feed(rowBytes)[0]).axis'),2);
  await evaluate('readDiagnostics()');assert.equal(elements.get('diagRows').children.length,2);
+ assert(evaluate("taskProgress.diagnostics.status==='done'&&taskProgress.diagnostics.completed===2&&taskProgress.diagnostics.total===2"),'Diagnostic progress uses the actual returned row count');
  await evaluate('clearDiagnostics()');assert(/:App:0,17,0$/.test(writes.at(-1)));
- evaluate('boardConfig.firmware=94');await assert.rejects(evaluate('clearDiagnostics()'),/R95/);evaluate('boardConfig.firmware=103');
+ evaluate('boardConfig.firmware=94');await assert.rejects(evaluate('clearDiagnostics()'),/R95/);evaluate('boardConfig.firmware=105');
  context.imported=JSON.parse(evaluate('JSON.stringify(editableConfig(boardConfig))'));
  evaluate(`imported.axes[1].speedLimit=300;imported.axes[1].posSpeed=180;imported.ledBrightness=63`);
  const commands=evaluate('importCommands(validateImport({format:"FOC-console-settings",version:1,editable:imported}))');
@@ -278,7 +285,7 @@ async function main(){
  await evaluate("send('Stop')");assert.equal(writes.at(-1),'Stop','Stop stays available without RPC in JustFloat');
  inject(context.jfBytes);await flush();assert(evaluate("outputFormat==='JustFloat'&&formatVerified&&!boardConfig"));
  await evaluate("send('Format:Native')");assert.equal(writes.at(-2),'Format:Native');assert(/:\s*Get$/.test(writes.at(-1)));
- assert(evaluate("outputFormat==='Native'&&boardConfig.firmware===103"));
+ assert(evaluate("outputFormat==='Native'&&boardConfig.firmware===105"));
  autoReply=false;const formatWait=evaluate("send('Get')");formatWait.catch(()=>{});await flush();
  const detectBefore=writes.length;inject(context.jfBytes);await flush();await assert.rejects(formatWait,/JustFloat/);
  assert(evaluate("outputFormat==='JustFloat'&&!boardConfig&&!pending.size"));assert.equal(writes.length,detectBefore,'Board-side JustFloat does not trigger an automatic mode override or repeat commands');
@@ -297,14 +304,41 @@ async function main(){
  await evaluate(`send('Stop')`);await assert.rejects(waiting,/停止/);assert(writes.at(-1).endsWith(':Stop'));
  evaluate(`add({kind:1,ms:100,epoch:0,values:[['m1.feedback_speed','rad/s',2],['vbus','V',20],['m1.position','rad',null]]});draw()`);assert.equal(evaluate('series.size'),3);
  evaluate(`add({kind:4,ms:110,epoch:0,values:[['hso.relative_position','rad',0]]});draw()`);assert.equal(evaluate('series.size'),1);
+ context.invalidCsv=new Blob(['bad']);context.invalidCsv.name='bad.csv';await assert.rejects(evaluate('loadCsv(invalidCsv)'),/CSV 格式/);
+ assert(evaluate("taskProgress.csv.status==='error'&&taskProgress.csv.completed===3&&taskProgress.csv.total===3"),'A parse failure must not be reported as completed');
  const rows=['host_time,board_ms,sequence,epoch,packet_kind,field,unit,value'];for(let i=0;i<3000;i++)rows.push(`t,${i*10},${i},0,1,m1.feedback_speed,rad/s,${i}`);
  rows.push('t,30000,3000,0,16,status,json,"{}"','t,30000,3001,0,32,configuration,json,"{}"');
  context.csvFile=new Blob(['\ufeff'+rows.join('\r\n')+'\r\n']);context.csvFile.name='test.csv';evaluate("plots[0].control('window').value='100';plots[0].control('window').onchange()");await evaluate('loadCsv(csvFile)');
  assert(evaluate('replaying'));assert.equal(evaluate('[...series.values()][0].points.length'),3000);assert.equal(evaluate('latestTime'),29.99);
+ assert(evaluate("taskProgress.csv.status==='done'&&taskProgress.csv.completed===csvFile.size&&taskProgress.csv.total===csvFile.size"),'CSV progress counts original UTF-8 bytes including the BOM');
  await assert.rejects(evaluate(`send('M1:Speed:10')`),/历史回放/);await evaluate(`send('Stop')`);
  evaluate('replaying=false;recording=true;recordBytes=16*1024*1024-1;recordChunks=[];recordFrame(new WireParser().feed(wireBytes)[0])');assert(!evaluate('recording'));assert(downloads.some(x=>x.endsWith('.csv')));
  evaluate('recordWriter={write:()=>{throw Error("must not enqueue")}};recording=true;recordQueuedBytes=1024*1024-1;recordFrame(new WireParser().feed(wireBytes)[0])');assert(!evaluate('recording'));assert(evaluate('recordQueuedBytes')<1024*1024);
  evaluate('recordWriter=null;recordQueuedBytes=0');
+ boardReply[17]=105;evaluate('boardConfig.firmware=105');evaluate("$('calibrationAxis').value='1'");
+ let startWrites=writes.length;await elements.get('applyDetection').onclick();assert(writes.at(-1).endsWith(':App:1,18,0'));
+ await elements.get('restoreMotorPreset').onclick();assert(writes.at(-1).endsWith(':App:1,19,0'));
+ assert(writes.slice(startWrites).every(x=>!/:Speed:|:Angle:|:Torque:|:Throttle:|HSO:Use/.test(x)));
+ assert.equal(evaluate("formatMotorParams('M:1920/440/9290')"),'MEASURED · R 1.920 Ω · Ls 440 µH · Flux 9.290 mWb');
+ assert(evaluate("formatMotorParams('P:1800/1300/0').startsWith('PRESET')"));
+ console.log('PASS: R104 explicit per-axis calibration apply/preset commands, current parameter units, no motion command or automatic replay');
+ boardReply.writeUInt32LE(boardReply.readUInt32LE(52)|(1<<28),52);await evaluate("send('Get')");
+ assert.equal(evaluate('boardConfig.customMask'),1);
+ choose('workMode','SingleM1');await evaluate('applyWorkMode()');choose('driveMode','Encoder');await evaluate('applyDriveMode()');
+ assert(options('motorModel').includes('Custom1')&&!options('motorModel').includes('Custom2'));
+ choose('motorModel','Custom1');await evaluate('applyMotorModel()');
+ assert(writes.at(-1).endsWith(':Motor1:Custom1')&&evaluate('boardConfig.profiles[0]===3'));
+ assert.equal(evaluate('confirmedModel(boardConfig,"M1")'),'Custom1');
+ choose('workMode','SingleM2');await evaluate('applyWorkMode()');choose('motorModel','Custom1');await evaluate('applyMotorModel()');
+ assert(writes.at(-1).endsWith(':Motor2:Custom1')&&evaluate('boardConfig.profiles[1]===3'));
+ const customWrites=writes.length;evaluate("$('customSlot').value='2'");await elements.get('saveCustom').onclick();
+ assert(writes.at(-1).endsWith(':App:0,20,2')&&writes.length===customWrites+1);
+ const originalRow=Buffer.from(rowBase);rowBase.fill(0,20,76);rowBase.write('R/L/Flux',20);rowBase.write('M:1920/440/9290',44);
+ await evaluate('readDiagnostics()');assert(elements.get('diagRows').children[0].children[1].textContent.includes('1.920 Ω'));
+ originalRow.copy(rowBase);
+ assert.throws(()=>evaluate('validateImport({format:"FOC-console-settings",version:1,editable:{...editableConfig(boardConfig),profiles:[4,0]}})'));
+ console.log('PASS: R105 Custom availability, per-axis model readback and linked selectors, explicit slot save without motion, missing-slot import rejection');
+
  hangWrite=true;const hung=evaluate(`send('Get')`);hung.catch(()=>{});await flush();for(const [id,t]of [...timers])if(t.ms===2500){timers.delete(id);t.fn()}await assert.rejects(hung,/超时/);
  await evaluate('disconnect()');assert.equal(portClosed,1);assert(!evaluate('connected'));assert.equal(evaluate('boardConfig'),null);
  hangWrite=false;await evaluate('connect()');assert.equal(evaluate('parser.resets'),0);assert(evaluate('lastEpoch')>1);assert(writes.at(-1).endsWith(':Get'));await evaluate('disconnect()');assert.equal(portClosed,2);

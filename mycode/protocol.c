@@ -1,3 +1,4 @@
+#include "compact_text.h"
 #if defined(__GNUC__) && !defined(_WIN32)
 /* User protocol handlers stay shared; official compilation is unchanged. */
 #pragma GCC optimize ("Os,no-ipa-cp-clone")
@@ -183,16 +184,25 @@ static bool apply_configuration(uint8_t kind,const char *value)
 {
     switch(kind) {
     case CONFIG_WORK: {
-        static const char *const names[]={"SingleM1","SingleM2","Independent","SyncSpeed","SyncPosition","MasterM1","MasterM2"};
+        static const char names[]=
+        "SingleM1\0"
+        "SingleM2\0"
+        "Independent\0"
+        "SyncSpeed\0"
+        "SyncPosition\0"
+        "MasterM1\0"
+        "MasterM2";
         for (unsigned i=0;i<MOTOR_WORK_COUNT;++i)
-            if (!strcmp(value,names[i])) return MotorControl_SelectWork((MotorWorkMode)i);
+            if (!strcmp(value,CompactText_At(names,i))) return MotorControl_SelectWork((MotorWorkMode)i);
         break;
     }
     case CONFIG_MOTOR1: case CONFIG_MOTOR2: {
         MotorAxis a=kind==CONFIG_MOTOR1 ? MOTOR_AXIS_1 : MOTOR_AXIS_2;
         if (!strcmp(value,"2804")) return App_SelectMotor(a,MOTOR_PROFILE_2804);
         if (!strcmp(value,"4015")) return App_SelectMotor(a,MOTOR_PROFILE_4015);
-        if (a==MOTOR_AXIS_1 && !strcmp(value,"ESC")) return App_SelectMotor(a,MOTOR_PROFILE_COUNT);
+        if (a==MOTOR_AXIS_1 && !strcmp(value,"ESC")) return App_SelectMotor(a,MOTOR_PROFILE_ESC);
+        if(!strncmp(value,"Custom",6) && value[6]>='1' && value[6]<='3' && !value[7])
+            return App_SelectMotor(a,(MotorProfile)(MOTOR_PROFILE_CUSTOM1+value[6]-'1'));
         break;
     }
     case CONFIG_FEEDBACK:
@@ -250,7 +260,7 @@ static void receive_line(char *line,MotorInput input)
     }
     __set_PRIMASK(mask);
 }
-void Protocol_Service(void)
+__attribute__((noinline,noclone)) void Protocol_Service(void)
 {
     App_SaveService(HAL_GetTick());
     if(reply_pending) return;
@@ -424,7 +434,7 @@ void Telemetry_Send(const uint8_t *data, uint16_t len)
 
 static void telemetry_produce(void);
 static void telemetry_reply(void);
-void Telemetry_Service(void)
+__attribute__((noinline,noclone)) void Telemetry_Service(void)
 {
     if(reply_pending) { telemetry_reply(); return; }
     telemetry_produce();
@@ -530,10 +540,12 @@ static void telemetry_reply(void)
             control_result=r->result;
         } else {
             TelemetryReply *r=&telemetry_packet.payload.reply;
-            _Static_assert(sizeof(TelemetryReply)==92 && offsetof(AppSettings,crc)-offsetof(AppSettings,speed_x10)==84,"RPC settings layout");
+            _Static_assert(sizeof(TelemetryReply)==92 && offsetof(AppSettings,calibration)-offsetof(AppSettings,speed_x10)==84,"RPC settings layout");
             r->id=reply_id; r->result=reply_result; r->source=reply_source;
-            r->schema=2; r->firmware=103; r->save=(uint8_t)App_SaveState(); r->focus=(uint8_t)MotorControl_GetFocus();
+            r->schema=2; r->firmware=105; r->save=(uint8_t)App_SaveState(); r->focus=(uint8_t)MotorControl_GetFocus();
             memcpy(r->settings,&AppStorage_Get()->speed_x10,sizeof(r->settings));
+            r->settings[(offsetof(AppSettings,control_config)-offsetof(AppSettings,speed_x10))/4U]=
+                (AppStorage_Get()->control_config & ~(7UL<<28)) | (MotorParams_CustomMask()<<28);
         }
         (void)telemetry_frame(reply_kind,reply_kind==33 ? sizeof(TelemetryRow) : sizeof(TelemetryReply),HAL_GetTick());
         usb_tx_pending_len=0; reply_built=true;

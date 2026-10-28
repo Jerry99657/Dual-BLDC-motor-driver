@@ -60,7 +60,7 @@ static void retention(void) {
  BoardDiag_Fault(1,DIAG_SIXSTEP,"PHASE");assert(retained.fault.motion[0].mode==3 && retained.fault.motion[0].speed==11 && retained.fault.motion[0].target_speed==30);
  char generic_value[32];BoardDiag_Row(0,10,generic_value);assert(strstr(generic_value,"mrad/s"));
  assert(BoardDiag_Clear());generic=true;BoardDiag_Fault(1,DIAG_SIXSTEP,"NO ZC");
- BoardDiag_Row(0,10,generic_value);assert(strstr(generic_value,"mHz") && retained.fault.model[0]==MOTOR_PROFILE_COUNT);
+ BoardDiag_Row(0,10,generic_value);assert(strstr(generic_value,"mHz") && retained.fault.model[0]==MOTOR_PROFILE_ESC);
  BoardDiag_Row(0,11,generic_value);assert(!strcmp(generic_value,"--"));
  assert(BoardDiag_Clear());drive=MOTOR_DRIVE_HSO;generic=false;
  BoardDiag_Motion(0,1,30,2,.2f,29,1.9f);BoardDiag_Fault(1,DIAG_HSO,"LOCK");assert(retained.fault.motion[0].position==1.9f);

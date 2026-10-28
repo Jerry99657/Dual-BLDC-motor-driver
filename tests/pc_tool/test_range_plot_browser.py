@@ -23,7 +23,7 @@ with sync_playwright() as p:
                 window.rangeFeed=n=>{for(let i=0;i<n;i++){const t=rangeSample++*.01;
                     add({kind:1,epoch:0,ms:t*1000,values:[['range.target','rad/s',50],['range.actual','rad/s',50+Math.sin(t*10)]]});
                 }};
-                rangeFeed(2200);plotView.span=5;plotView.y.set('__xy',{lo:47,hi:53});draw();
+                rangeFeed(2200);addAllPlotChannels();plotView.span=5;plotView.y.set('__xy',{lo:47,hi:53});draw();
                 window.rangeTimer=setInterval(()=>rangeFeed(1),10);
             }""")
 

@@ -26,7 +26,7 @@ with sync_playwright() as p:
                     ['m1.target_speed','rad/s',100],['m1.feedback_speed','rad/s',100+Math.sin(t)],
                     ['m1.position','rad',t],['m1.iq','A',.2],['m2.feedback_speed','rad/s',90],['vbus','V',20]]});
             }draw()};
-            feedCache(30000);
+            feedCache(30000);addAllPlotChannels();
         }""")
         assert page.evaluate('[...series.values()].every(s=>s.points.length===20001)')
         assert page.evaluate('plotBounds().lo===50&&plotBounds().hi===150')

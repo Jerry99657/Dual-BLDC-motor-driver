@@ -253,7 +253,7 @@ static void check_rpc(void) {
     telemetry_host_tick=100;assert(Telemetry_Select("Off"));
     command("@1:Get");Telemetry_Service();
     assert(inflight_len==106 && inflight[3]==32 && inflight[12]==1 && inflight[14]==1 && inflight[15]==PROTO_SRC_USB);
-    assert(inflight[16]==2 && inflight[17]==103);
+    assert(inflight[16]==2 && inflight[17]==105);
     assert(inflight[18]==APP_SAVE_PENDING); /* Dirty config must not claim an older save completed. */
     int32_t saved;memcpy(&saved,inflight+20,4);assert(saved==123);
     assert(fwrite(inflight,1,inflight_len,trace)==inflight_len);
@@ -303,6 +303,18 @@ static void check_rpc(void) {
     assert(fwrite(inflight,1,inflight_len,row_trace)==inflight_len);assert(fclose(row_trace)==0);
     command("@22:GetRow:1,0,255");Telemetry_Service();assert(inflight[3]==33 && (int8_t)inflight[14]==-2);
     assert(fclose(trace)==0);assert(host_primask==0);
+    command("Motor1:Custom1");assert(Protocol_GetControlResult()==-1);
+    MotorCalibration custom={(2U<<24)|(1920U<<8)|11U,440,9290};
+    assert(MotorParams_SetCustom(0,&custom));
+    command("Motor1:Custom1");assert(Protocol_GetControlResult()==1 && MotorParams_GetActiveProfile()==MOTOR_PROFILE_CUSTOM1);
+    command("@23:Get");Telemetry_Service();uint32_t custom_config;
+    memcpy(&custom_config,inflight+52,4);
+    assert((custom_config&(7UL<<28))==(1UL<<28) && ((custom_config>>24)&3U)==1U);
+    assert(!(AppStorage_Get()->control_config&(7UL<<28))); /* Availability is reply metadata. */
+    command("Motor2:Custom3");assert(Protocol_GetControlResult()==-1);
+    command("Motor1:Custom1junk");assert(Protocol_GetControlResult()==-1);
+    command("App:0,20,3");assert(Protocol_GetControlResult()==1 && app_host_axis==0 && app_host_key==20 && app_host_value==3);
+    puts("PASS: real Custom selector parsing, empty/malformed refusal, schema-2 availability/selection metadata and unchanged stored config");
     puts("PASS: real RPC schema/settings bytes, IDs, exact results, USB/UART reply routing, BUSY retry, immediate Stop, queue cancellation, disconnected reply timeout, stale-motion and KEY1 cancellation");
 }
 int main(void) {

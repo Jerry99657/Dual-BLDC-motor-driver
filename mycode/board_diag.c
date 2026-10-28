@@ -1,4 +1,5 @@
 #include "board_diag.h"
+#include "compact_text.h"
 #include "main.h"
 #include "tim.h"
 #include "motor_sampling.h"
@@ -8,6 +9,7 @@
 #include "st_hso.h"
 #include "motor_sixstep.h"
 #include <string.h>
+#include <stddef.h>
 
 #define DIAG_MAGIC 0x44393531UL /* R95 record layout; reject stale/torn RAM. */
 static struct {
@@ -102,7 +104,7 @@ void BoardDiag_Fault(unsigned axis,unsigned source,const char *reason)
                 f->raw[a][p]=a ? (p<2 ? s->m2_current_raw[p] : 0U) : s->m1_current_raw[p];
             }
         }
-        if (f->drive[0]==MOTOR_DRIVE_SIXSTEP && SixStep_IsGeneric()) f->model[0]=MOTOR_PROFILE_COUNT;
+        if (f->drive[0]==MOTOR_DRIVE_SIXSTEP && SixStep_IsGeneric()) f->model[0]=MOTOR_PROFILE_ESC;
         unsigned n=0; if (reason) for (;n<sizeof(f->reason)-1U && reason[n];++n) f->reason[n]=reason[n];
         f->reason[n]=0; commit();
     }
@@ -136,40 +138,74 @@ static int32_t milli(float value,bool *valid)
 }
 const char *BoardDiag_Row(unsigned axis,unsigned row,char value[32])
 {
-    static const char *const names[]={
-        "ADC IRQ Max","ADC Jitter","PWM Age","Outer Max","Outer Jitter","IRQ Overrun",
-        "First","F Time","F W/D/P/C","F Bus/Ref","F Cmd/Act","F Position","F Current",
-        "F ADC","F Enc","F Counts","F Age/IRQ","CPU Fault","CPU PC","CPU LR",
-        "CPU SP","CPU CFSR","CPU HFSR","CPU B/M","CPU XPSR","CPU Return",
-        "Stop Src","Stop At","Stop K/P"};
-    _Static_assert(sizeof(names)/sizeof(names[0])==BOARD_DIAG_ROWS,"Diagnostic rows");
+    static const char names[]=
+        "ADC IRQ Max\0"
+        "ADC Jitter\0"
+        "PWM Age\0"
+        "Outer Max\0"
+        "Outer Jitter\0"
+        "IRQ Overrun\0"
+        "First\0"
+        "F Time\0"
+        "F W/D/P/C\0"
+        "F Bus/Ref\0"
+        "F Cmd/Act\0"
+        "F Position\0"
+        "F Current\0"
+        "F ADC\0"
+        "F Enc\0"
+        "F Counts\0"
+        "F Age/IRQ\0"
+        "CPU Fault\0"
+        "CPU PC\0"
+        "CPU LR\0"
+        "CPU SP\0"
+        "CPU CFSR\0"
+        "CPU HFSR\0"
+        "CPU B/M\0"
+        "CPU XPSR\0"
+        "CPU Return\0"
+        "Stop Src\0"
+        "Stop At\0"
+        "Stop K/P";
+    _Static_assert(BOARD_DIAG_ROWS==29,"Diagnostic rows");
     const BoardDiagFault *f=&retained.fault; const BoardDiagCrash *c=&retained.crash;
     bool valid=true;
     if (axis>1 || row>=BOARD_DIAG_ROWS) return NULL;
     const BoardDiagMotion *m=&f->motion[axis];
     if (row>=26U) {
         MotorGlobalStopRecord stop; MotorSampling_GetGlobalStop(&stop);
-        static const char *const sources[]={"--","CPU BOOT","KEY1 EDGE","KEY1 LOW","KEY1 PEND","COMMAND"};
+        static const char sources[]=
+        "--\0"
+        "CPU BOOT\0"
+        "KEY1 EDGE\0"
+        "KEY1 LOW\0"
+        "KEY1 PEND\0"
+        "COMMAND";
         if (!stop.source) strcpy(value,"--");
-        else if (row==26U) strcpy(value,sources[stop.source]);
+        else if (row==26U) strcpy(value,CompactText_At(sources,stop.source));
         else if (row==27U) UiText_Format(value,32,"%lu ms S%lu",(unsigned long)stop.at,(unsigned long)stop.stage);
         else UiText_Format(value,32,"%u/%u Now %u/%u",stop.key&1U,(stop.key>>1U)&1U,stop.now&1U,(stop.now>>1U)&1U);
     } else if ((row>=6U && row<=16U && !f->source) || (row>=17U && !c->kind)) strcpy(value,"--");
     else if (row<6U) {
-        const uint32_t times[]={timing.adc_max,timing.adc_jitter,timing.center_age,
-                                timing.outer_max,timing.outer_jitter,timing.overruns};
-        if (row==5U) UiText_Format(value,32,"%lu",(unsigned long)times[row]);
-        else UiText_Fixed(value,32,(int32_t)(times[row]/17U),1U,"us");
+        static const uint8_t offsets[]={offsetof(BoardDiagTiming,adc_max),offsetof(BoardDiagTiming,adc_jitter),
+            offsetof(BoardDiagTiming,center_age),offsetof(BoardDiagTiming,outer_max),offsetof(BoardDiagTiming,outer_jitter),offsetof(BoardDiagTiming,overruns)};
+        uint32_t time;memcpy(&time,(const char *)&timing+offsets[row],sizeof(time));
+        if (row==5U) UiText_Format(value,32,"%lu",(unsigned long)time);
+        else UiText_Fixed(value,32,(int32_t)(time/17U),1U,"us");
     } else switch (row) {
     case 6: UiText_Format(value,32,"%u M%u %s",f->source,f->axis,f->reason); break;
     case 7: UiText_Format(value,32,"%lu ms",(unsigned long)f->at); break;
     case 8: {
-        static const char *const drives[]={"ENCODER","HSO","6STEP"};
-        UiText_Format(value,32,"%u/%s/%u/%u",f->work,drives[f->drive[axis]%3U],f->model[axis],m->mode); break;
+        static const char drives[]=
+        "ENCODER\0"
+        "HSO\0"
+        "6STEP";
+        UiText_Format(value,32,"%u/%s/%u/%u",f->work,CompactText_At(drives,f->drive[axis]%3U),f->model[axis],m->mode); break;
     }
     case 9: UiText_Format(value,32,"%ld/%ld mV",(long)milli(f->bus,&valid),(long)milli(f->reference,&valid)); break;
     case 10:
-        if (m->mode==3U) UiText_Format(value,32,"%ld%%/%ld %s",(long)(milli(m->target_speed,&valid)/1000),(long)milli(m->speed,&valid),f->model[axis]==MOTOR_PROFILE_COUNT ? "mHz" : "mrad/s");
+        if (m->mode==3U) UiText_Format(value,32,"%ld%%/%ld %s",(long)(milli(m->target_speed,&valid)/1000),(long)milli(m->speed,&valid),f->model[axis]==MOTOR_PROFILE_ESC ? "mHz" : "mrad/s");
         else UiText_Format(value,32,"%ld/%ld mrad/s",(long)milli(m->target_speed,&valid),(long)milli(m->speed,&valid));
         break;
     case 11:
@@ -183,14 +219,15 @@ const char *BoardDiag_Row(unsigned axis,unsigned row,char value[32])
     case 16: UiText_Format(value,32,"%lu ms/%lu us",(unsigned long)(f->at-m->at),(unsigned long)(f->cycles/170U)); break;
     case 17: UiText_Format(value,32,"%lu stage %lu",(unsigned long)c->kind,(unsigned long)c->stage); break;
     default: {
-        const uint32_t regs[]={c->pc,c->lr,c->sp,c->cfsr,c->hfsr,c->bfar,c->xpsr,c->exc_return};
-        UiText_Format(value,32,"%08lX",(unsigned long)regs[row-18U]);
+        static const uint8_t regs[]={offsetof(BoardDiagCrash,pc),offsetof(BoardDiagCrash,lr),offsetof(BoardDiagCrash,sp),offsetof(BoardDiagCrash,cfsr),offsetof(BoardDiagCrash,hfsr),offsetof(BoardDiagCrash,bfar),offsetof(BoardDiagCrash,xpsr),offsetof(BoardDiagCrash,exc_return)};
+        uint32_t reg;memcpy(&reg,(const char *)c+regs[row-18U],sizeof(reg));
+        UiText_Format(value,32,"%08lX",(unsigned long)reg);
         if (row==23U) UiText_Format(value,32,"%08lX/%08lX",(unsigned long)c->bfar,(unsigned long)c->mmfar);
         break;
     }
     }
     if (!valid) strcpy(value,"INVALID");
-    return names[row];
+    return CompactText_At(names,row);
 }
 
 #if defined(__arm__) || defined(__thumb__)

@@ -1,5 +1,20 @@
 #include "motor_math.h"
 
+/* Preserve fmin/fmax NaN semantics in all three existing callers. */
+__attribute__((noinline,noclone,optimize("Os")))
+float MotorMath_Clamp(float value,float low,float high)
+{ return fminf(high,fmaxf(low,value)); }
+
+__attribute__((noinline,noclone)) float MotorMath_WindowVelocity(float position,
+    float history[4],uint8_t *index,uint8_t *count,float period)
+{
+    float old=history[*index];
+    history[*index]=position;
+    *index=(*index+1U)%4U;
+    if (*count<4U) ++*count;
+    return (position-old)/(period*(float)*count);
+}
+
 /* Fixed divisor 2*pi: retain exact binary32 remainder, including very large
  * multi-turn positions. Integer mantissa division avoids retaining the
  * general two-argument libm fmod/errno implementation for these three users. */

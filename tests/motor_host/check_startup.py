@@ -94,10 +94,10 @@ for mode in ("Debug", "Release"):
         assert not re.search(r"^\w+ [tT] "+removed+r"$",symbols,re.M),(mode,removed)
     # CubeMX native LL USART setup survives; the generic HAL UART dependency
     # and its static handle have been removed from the complete linked image.
-    assert any(c.startswith("MX_USART1_UART_Init") for c in main_calls),(mode,main_calls)
     assert not re.search(r'^\w+ [tTbB] (?:HAL_UART\w*|huart1)$',symbols,re.M),mode
-    uart_init=tool("objdump", "-d", "--disassemble=MX_USART1_UART_Init", elf)
-    assert uart_init and ('LL_USART_Init(USART1,' in (repo/'Core/Src/usart.c').read_text(encoding='utf-8'))
+    from uart_init_arm import verify_uart_init
+    verify_uart_init(elf,tool("objdump","-d",elf))
+    assert 'LL_USART_Init(USART1,' in (repo/'Core/Src/usart.c').read_text(encoding='utf-8')
     assert not re.search(r'^\w+ [tT] (?:HAL_UART_(?:IRQHandler|Transmit_IT|Receive_IT)|UART_(?:RxISR|TxISR|DMAAbortOnError))[^\n]*$',symbols,re.M),mode
     # HAL still sets up SPI/TIM/ADC/DMA. SPI and LED runtime belong to user
     # modules; ADC retains HAL DMA callbacks and the unchanged fallback.
@@ -162,7 +162,7 @@ for mode in ("Debug", "Release"):
     raw_resources=resources();packed_resources=pack(raw_resources)
     assert packed_resources in image and unpack(packed_resources,len(raw_resources))==raw_resources,mode
     text_image=image+raw_resources
-    assert b"UI-R103-KEY" in text_image and b"UI-R90-UART" not in text_image, mode
+    assert b"UI-R105-MOT" in text_image and b"UI-R90-UART" not in text_image, mode
     assert b"Format:" in text_image and b"JustFloat" in text_image and b"TX Format:" in text_image,mode
     assert "App_FloatToDoubleBits" in symbols and "__aeabi_f2d" in symbols,mode
     for unused in ("__aeabi_dadd","__aeabi_dsub","__adddf3","__subdf3"):

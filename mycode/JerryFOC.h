@@ -29,6 +29,7 @@ typedef struct {
     float output_prev;    /* 上一次的输出 */
     float integral_prev;  /* 上一次的积分项 */
 } PIDController;
+typedef struct { PIDController vel,pos,q,d; } MotorControllers;
 
 /* ================= 控制模式 ================= */
 typedef enum {
@@ -39,13 +40,13 @@ typedef enum {
 
 /* ================= 全局控制器对象 ================= */
 extern LowPassFilter M0_Vel_Flt;
-extern PIDController vel_loop_M0;
-
-extern PIDController pos_loop_M0;
+extern MotorControllers m1_controllers;
+#define vel_loop_M0 (m1_controllers.vel)
+#define pos_loop_M0 (m1_controllers.pos)
 
 extern LowPassFilter M0_Curr_Flt;
-extern PIDController id_loop_M0;
-extern PIDController iq_loop_M0;
+#define id_loop_M0 (m1_controllers.d)
+#define iq_loop_M0 (m1_controllers.q)
 
 /* ================= 供协议/遥测使用的状态 ================= */
 extern volatile float JerryFOC_Target_Velocity;
@@ -62,6 +63,7 @@ void JerryFOC_playStartupSound(void);
 /* Main-loop only. Existing output is stopped; a moving/unhealthy encoder or
  * ongoing alignment rejects a live switch. Sampling faults remain latched. */
 uint8_t JerryFOC_selectMotor(MotorProfile profile);
+void JerryFOC_ReloadMotor(void); /* Caller certified stopped and masks IRQs. */
 uint8_t JerryFOC_needsAlignment(void);
 void JerryFOC_requestAlignment(void);
 uint8_t JerryFOC_isAligning(void);
@@ -89,6 +91,8 @@ float JerryFOC_PID_Calc(PIDController* pid, float error);
 /* Shared stopped-controller initialization; states remain independent per axis. */
 void JerryFOC_ResetPID(PIDController *pid);
 void JerryFOC_InitPID(PIDController *pid,float p,float i,float limit,float ramp);
+void JerryFOC_InitControllers(MotorControllers *loops,const MotorParams *motor);
+void JerryFOC_ResetControllers(MotorControllers *loops);
 
 /* Clarke 与 Park 变换 */
 void JerryFOC_Clarke(float Ia, float Ib, float* Ialpha, float* Ibeta);

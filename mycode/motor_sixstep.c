@@ -21,7 +21,7 @@ static uint8_t positive_samples,outer_divider;
 static const uint8_t high_phase[]={0,0,1,1,2,2};
 static const uint8_t low_phase[]={1,2,2,0,0,1};
 
-static float clamp(float x,float lo,float hi) { return fminf(hi,fmaxf(lo,x)); }
+#define clamp MotorMath_Clamp
 static uint16_t percent(float value)
 {
     /* Timing ratios are nonnegative and bounded by uint32 DWT / >=833us.
