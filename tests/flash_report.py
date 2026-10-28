@@ -35,6 +35,8 @@ parser.add_argument("--allow-diagnostics-user-code",action="store_true",
                     help="Permit only R95 CPU-vector/main USER CODE hooks and diagnostics module addition")
 parser.add_argument("--allow-settings-user-build",action="store_true",
                     help="Permit only the exact R99 user settings service CMake source/flags addition")
+parser.add_argument("--allow-key-startup-user-code",action="store_true",
+                    help="Permit only the R103 main USER CODE cold-start KEY1 RC settling delay")
 args = parser.parse_args()
 OUT = ROOT / args.directory
 LABEL = args.label
@@ -319,7 +321,21 @@ else:
     if baseline["protected"] != report["protected"]:
         changed = [name for name in set(baseline["protected"]) | set(report["protected"])
                    if baseline["protected"].get(name) != report["protected"].get(name)]
-        if args.allow_settings_user_build:
+        if args.allow_key_startup_user_code:
+            assert changed==["Core/Src/main.c"],changed
+            name="Core/Src/main.c"
+            assert sha(OUT/name)==baseline["protected"][name],"Invalid baseline main.c"
+            before=(OUT/name).read_text(encoding="utf-8")
+            anchor='  /* Also latch a key held before power-up (there may be no falling edge). */\n'
+            addition=('  /* KEY1 uses the generated internal pull-up and a 100 nF capacitor.\n'
+                      '   * Allow cold-start RC charging before polling its level (25..55 kohm).\n'
+                      '   * PWM/ADC have not started; EXTI stays live and no stop latch is cleared. */\n'
+                      '  HAL_Delay(30U);\n')
+            assert before.count(anchor)==1
+            expected=before.replace(anchor,addition+anchor)
+            assert (ROOT/name).read_text(encoding="utf-8")==expected,"Unexpected main.c change"
+            report["permitted_user_changes"]=changed
+        elif args.allow_settings_user_build:
             assert changed==["CMakeLists.txt"],changed
             addition=('\n# Settings business is independent of the LCD/application presentation.\n'
                       'target_sources(${CMAKE_PROJECT_NAME} PRIVATE mycode/app_settings.c)\n'

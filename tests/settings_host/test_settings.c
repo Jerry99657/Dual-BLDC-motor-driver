@@ -76,7 +76,7 @@ bool MotorControl_SetGear(int32_t ratio,int32_t offset) {
 bool MotorSampling_IsAxisOutputRequested(MotorAxis axis) { return requested[axis]; }
 bool MotorSampling_SetIbusLimit(uint16_t value) { ++ibus_calls;if(!ibus_ok)return false;ibus=value;return true; }
 bool MotorSampling_ClearIbusTrip(void) { return ibus_ok; }
-void MotorSampling_GlobalStopIRQ(void) { pause=true;requested[0]=requested[1]=false; }
+void MotorSampling_GlobalStopFromIRQ(MotorGlobalStopSource source) { assert(source==MOTOR_STOP_COMMAND);pause=true;requested[0]=requested[1]=false; }
 uint8_t JerryFOC_hasHSOFault(void) { return 0; }
 uint8_t JerryFOC_useHSO(uint8_t value) { (void)value;return 1; }
 bool MotorDetect_Active(void) { return detect_active; }

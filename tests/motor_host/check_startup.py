@@ -60,10 +60,14 @@ for mode in ("Debug", "Release"):
     for symbol in ("g_boot_stage", "g_error_return_address"):
         assert re.search(r"^\w+ [bB] " + symbol + r"$", symbols, re.M), (mode, symbol)
 
-    main_calls = calls(tool("objdump", "-d", "--disassemble=main", elf))
+    main_assembly = tool("objdump", "-d", "--disassemble=main", elf)
+    main_calls = calls(main_assembly)
     hardware_calls = [c for c in main_calls if c.startswith(("HAL_", "MX_", "SystemClock_Config"))]
     assert hardware_calls[0] == "HAL_Init", (mode, hardware_calls[:5])
     assert any(c.startswith(("SystemClock_Config", "HAL_RCC_")) for c in hardware_calls[1:])
+    assert main_calls.index("MX_GPIO_Init") < main_calls.index("HAL_Delay") < main_calls.index("MotorSampling_IsGlobalStopped"),mode
+    assert re.search(r'\bmovs\s+r0, #30\s*\n[^\n]*\bbl\s+[^\n]*<HAL_Delay>\s*\n'
+                     r'[^\n]*\bbl\s+[^\n]*<MotorSampling_IsGlobalStopped>',main_assembly),mode
     hal_calls = calls(tool("objdump", "-d", "--disassemble=HAL_Init", elf))
     assert hal_calls.index("HAL_InitTick") < hal_calls.index("HAL_MspInit"), (mode, hal_calls)
 
@@ -133,7 +137,7 @@ for mode in ("Debug", "Release"):
     break_calls=exti_transfers("MotorIRQ_Break")
     assert any(c.startswith("ibus_latch") for c in break_calls),(mode,break_calls)
     exti_calls=exti_transfers("MotorIRQ_Key1")
-    assert any(c.startswith("MotorSampling_GlobalStopIRQ") for c in exti_calls), (mode,exti_calls)
+    assert any(c.startswith("MotorSampling_GlobalStopFromIRQ") for c in exti_calls), (mode,exti_calls)
     for vector,dispatcher in (
         ('SPI1_IRQHandler','SpiPort_IRQHandler'),('SPI2_IRQHandler','SpiPort_IRQHandler'),
         ('SPI3_IRQHandler','SpiPort_IRQHandler'),
@@ -158,7 +162,7 @@ for mode in ("Debug", "Release"):
     raw_resources=resources();packed_resources=pack(raw_resources)
     assert packed_resources in image and unpack(packed_resources,len(raw_resources))==raw_resources,mode
     text_image=image+raw_resources
-    assert b"UI-R101-FMT" in text_image and b"UI-R90-UART" not in text_image, mode
+    assert b"UI-R103-KEY" in text_image and b"UI-R90-UART" not in text_image, mode
     assert b"Format:" in text_image and b"JustFloat" in text_image and b"TX Format:" in text_image,mode
     assert "App_FloatToDoubleBits" in symbols and "__aeabi_f2d" in symbols,mode
     for unused in ("__aeabi_dadd","__aeabi_dsub","__adddf3","__subdf3"):

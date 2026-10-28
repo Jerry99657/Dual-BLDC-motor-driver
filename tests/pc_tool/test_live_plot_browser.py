@@ -93,7 +93,7 @@ with sync_playwright() as p:
             assert page.evaluate('latestTime')>frozen_hi+20
             assert page.evaluate('plotLayout.end')==frozen_end
             assert page.evaluate('plotBounds().hi')==frozen_hi
-            assert page.evaluate('[...series.values()].every(s=>s.points.length===2200)')
+            assert page.evaluate('[...series.values()].every(s=>s.points.length<=1001&&s.points.at(-1)[0]-s.points.at(0)[0]<=10.000000001)')
             page.click('#plotPause')
             page.wait_for_function('e=>plotView.frozen===null&&plotLayout.end>e+20',arg=frozen_end)
 

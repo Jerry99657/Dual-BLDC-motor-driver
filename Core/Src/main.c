@@ -201,6 +201,10 @@ int main(void)
   /* USER CODE BEGIN 2 */
   g_boot_stage = 4U;
   if (BoardDiag_LastCrash()->kind) MotorSampling_GlobalStopIRQ();
+  /* KEY1 uses the generated internal pull-up and a 100 nF capacitor.
+   * Allow cold-start RC charging before polling its level (25..55 kohm).
+   * PWM/ADC have not started; EXTI stays live and no stop latch is cleared. */
+  HAL_Delay(30U);
   /* Also latch a key held before power-up (there may be no falling edge). */
   (void)MotorSampling_IsGlobalStopped();
 

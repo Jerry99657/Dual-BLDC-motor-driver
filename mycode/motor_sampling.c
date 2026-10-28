@@ -80,6 +80,7 @@ static struct {
     bool ibus_low_tracking;
     volatile bool global_stopped,global_stop_pending,key_releasing;
     uint32_t key_released_at;
+    MotorGlobalStopRecord stop;
     bool sixstep,six_timer,six_off;
 } acquisition;
 
@@ -178,9 +179,16 @@ bool MotorSampling_SixStepPattern(uint8_t sector,float duty)
     __set_PRIMASK(mask); return true;
 }
 
-void MotorSampling_GlobalStopIRQ(void)
+static uint8_t stop_key_state(void)
+{
+    return (LL_GPIO_IsInputPinSet(KEY1_GPIO_Port,KEY1_Pin) ? 1U : 0U) |
+        (LL_EXTI_IsActiveFlag_0_31(KEY1_Pin) ? 2U : 0U);
+}
+
+void MotorSampling_GlobalStopFromIRQ(MotorGlobalStopSource source)
 {
     uint32_t mask=__get_PRIMASK(); __disable_irq();
+    bool first=!acquisition.global_stopped;
     acquisition.global_stopped=acquisition.global_stop_pending=true;
     acquisition.key_releasing=false;
     (void)MotorSampling_SixStepTimer(0U);
@@ -194,21 +202,40 @@ void MotorSampling_GlobalStopIRQ(void)
         }
         s_requested[a]=false; acquisition.arm_frames[a]=0U;
     }
+    /* Gates first. No SPI, formatting or retained-fault getters in the IRQ.
+     * Repeated polling/bounce must not replace the original stop cause. */
+    if (first) {
+        extern volatile uint32_t g_boot_stage;
+        acquisition.stop=(MotorGlobalStopRecord){.at=HAL_GetTick(),.stage=g_boot_stage,
+            .source=(uint8_t)source,.key=stop_key_state()};
+    }
+    __set_PRIMASK(mask);
+}
+
+void MotorSampling_GlobalStopIRQ(void)
+{
+    MotorSampling_GlobalStopFromIRQ(MOTOR_STOP_CPU_BOOT);
+}
+
+void MotorSampling_GetGlobalStop(MotorGlobalStopRecord *out)
+{
+    uint32_t mask=__get_PRIMASK(); __disable_irq();
+    *out=acquisition.stop; out->now=stop_key_state();
     __set_PRIMASK(mask);
 }
 
 void HAL_GPIO_EXTI_Callback(uint16_t pin)
 {
-    if (pin==KEY1_Pin) MotorSampling_GlobalStopIRQ();
+    if (pin==KEY1_Pin) MotorSampling_GlobalStopFromIRQ(MOTOR_STOP_KEY_EDGE);
 }
 
 bool MotorSampling_IsGlobalStopped(void)
 {
     /* Read the pending edge too: a short press can finish while interrupts
      * are masked. Never let a later MOE/CCER write overtake that event. */
-    if ((!LL_GPIO_IsInputPinSet(KEY1_GPIO_Port,KEY1_Pin) ||
-        LL_EXTI_IsActiveFlag_0_31(KEY1_Pin)) && (!acquisition.global_stopped || acquisition.key_releasing))
-        MotorSampling_GlobalStopIRQ();
+    unsigned key=stop_key_state();
+    if ((key!=1U) && (!acquisition.global_stopped || acquisition.key_releasing))
+        MotorSampling_GlobalStopFromIRQ((key&1U) ? MOTOR_STOP_KEY_PENDING : MOTOR_STOP_KEY_LOW);
     return acquisition.global_stopped;
 }
 

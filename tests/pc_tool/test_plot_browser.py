@@ -143,6 +143,7 @@ with sync_playwright() as p:
             assert page.evaluate("plotLayout.panels.length") == 1
             if dpr == 1:
                 page.locator("#plotPanel").screenshot(path=str(OUT / "plot-overlay.png"))
+            page.click("#plotZoomIn")
             page.evaluate("replaying=true;replayEnd=latestTime;replayStart=latestTime-20;draw()")
             page.locator("#scrub").evaluate("el=>{el.value=0;el.dispatchEvent(new Event('input'))}")
             assert page.evaluate("replaying && plotLayout.end<latestTime && $('scrub').value==='0'")

@@ -21,6 +21,7 @@ bool SixStep_IsGeneric(void) { return generic; }
 void TIM7_IRQHandler(void);
 TIM_HandleTypeDef htim1 = {&tim1}, htim8 = {&tim8}, htim6 = {&tim6};
 uint32_t host_primask;
+volatile uint32_t g_boot_stage=7U;
 GPIO_TypeDef gpio_key={.pins=KEY1_Pin};
 #ifdef MOTOR_IRQ_INTEGRATION
 HostExti host_exti;
@@ -458,6 +459,56 @@ static void key_acknowledge(void) {
     assert(MotorSampling_ResumeGlobalStop());
     assert(!MotorSampling_IsOutputRequested() && !MotorSampling_IsAxisOutputRequested(MOTOR_AXIS_2));
 }
+static int check_stop_source(void) {
+    reset();
+    MotorGlobalStopRecord stop;
+    MotorSampling_GetGlobalStop(&stop);
+    assert(!stop.source && stop.now==1U);
+    assert(!MotorSampling_IsGlobalStopped());
+    /* A high GPIO with a recorded edge still stops. Do not silently discard
+     * a short press or a startup EXTI pulse just because the key is up now. */
+    g_boot_stage=3U; tick=4U;
+    key_irq();
+    MotorSampling_GetGlobalStop(&stop);
+    assert(stop.source==MOTOR_STOP_KEY_EDGE && stop.at==4U && stop.stage==3U && stop.key==1U);
+    MotorSampling_GlobalStopIRQ();
+    MotorSampling_GlobalStopFromIRQ(MOTOR_STOP_COMMAND);
+    MotorSampling_GetGlobalStop(&stop);
+    assert(stop.source==MOTOR_STOP_KEY_EDGE && stop.at==4U);
+    assert(MotorSampling_Start()); sample_ms(301,1354);
+    assert(MotorSampling_IsGlobalStopped());
+    MotorSampling_GetGlobalStop(&stop);
+    assert(stop.source==MOTOR_STOP_KEY_EDGE && stop.at==4U);
+    key_acknowledge();
+    /* Poll-only startup hold, separate from pending-only and actual IRQ. */
+    g_boot_stage=4U; gpio_key.pins&=~KEY1_Pin;
+    uint32_t at=tick;
+    assert(MotorSampling_IsGlobalStopped());
+    MotorSampling_GetGlobalStop(&stop);
+    assert(stop.source==MOTOR_STOP_KEY_LOW && stop.key==0U && stop.now==0U && stop.at==at);
+    gpio_key.pins|=KEY1_Pin; MotorSampling_GetGlobalStop(&stop);
+    assert(stop.key==0U && stop.now==1U);
+    key_acknowledge();
+    host_exti_pending|=KEY1_Pin; at=tick;
+    assert(MotorSampling_IsGlobalStopped());
+    MotorSampling_GetGlobalStop(&stop);
+    assert(stop.source==MOTOR_STOP_KEY_PENDING && stop.key==3U && stop.now==3U && stop.at==at);
+    key_irq();key_acknowledge();
+    g_boot_stage=4U;MotorSampling_GlobalStopIRQ();
+    MotorSampling_GetGlobalStop(&stop);
+    assert(stop.source==MOTOR_STOP_CPU_BOOT && stop.stage==4U);
+    key_acknowledge();
+    g_boot_stage=7U;tick=0xfffffff0U;host_primask=1U;
+    MotorSampling_GlobalStopFromIRQ(MOTOR_STOP_COMMAND);
+    MotorSampling_GetGlobalStop(&stop);
+    assert(stop.source==MOTOR_STOP_COMMAND && stop.at==0xfffffff0U && stop.stage==7U && host_primask==1U);
+    host_primask=0U;key_acknowledge();
+    MotorSampling_GetGlobalStop(&stop);
+    assert(stop.source==MOTOR_STOP_COMMAND && !MotorSampling_IsGlobalStopped());
+    assert(!MotorSampling_IsOutputRequested() && !MotorSampling_IsAxisOutputRequested(MOTOR_AXIS_2));
+    puts("PASS: stop evidence: startup released-edge/held-low/pending-only, CPU boot and software pause, first-cause immutability, sampling-restart retention, live versus captured key, PRIMASK/tick wrap and explicit recovery without rearming");
+    return 0;
+}
 static int check_global_stop(bool wrap) {
     /* The real interrupt can run before either timer handle is initialized. */
     htim1.Instance=htim8.Instance=NULL;
@@ -638,6 +689,7 @@ static int check_diag_optional_axis(void) {
     return 0;
 }
 int main(int argc,char **argv) {
+    if(argc>1 && !strcmp(argv[1],"stop-source")) return check_stop_source();
     if(argc>1 && !strcmp(argv[1],"diag-optional")) return check_diag_optional_axis();
     if(argc>1 && !strcmp(argv[1],"six-outputs")) return check_six_outputs();
     if(argc>1 && !strncmp(argv[1],"global",6)) return check_global_stop(!strcmp(argv[1],"global-wrap"));

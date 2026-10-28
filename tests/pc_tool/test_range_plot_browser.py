@@ -23,7 +23,7 @@ with sync_playwright() as p:
                 window.rangeFeed=n=>{for(let i=0;i<n;i++){const t=rangeSample++*.01;
                     add({kind:1,epoch:0,ms:t*1000,values:[['range.target','rad/s',50],['range.actual','rad/s',50+Math.sin(t*10)]]});
                 }};
-                rangeFeed(2200);plotView.y.set('__xy',{lo:47,hi:53});draw();
+                rangeFeed(2200);plotView.span=5;plotView.y.set('__xy',{lo:47,hi:53});draw();
                 window.rangeTimer=setInterval(()=>rangeFeed(1),10);
             }""")
 
@@ -67,29 +67,47 @@ with sync_playwright() as p:
             assert page.evaluate('plotView.span>=.001&&plotView.span<.002&&Number.isFinite(plotView.offset)')
             assert page.locator('#plotBufferEnd').get_attribute('role')=='slider'
 
-            # The preset supports arbitrary fractions/long spans; it stays distinct
-            # from temporary gesture zoom and is restored by Reset/Home.
+            # Reproduce the report: configured 100 s retention is distinct from a
+            # wheel-zoomed/panned view. Applying it again must restore [-100,0].
+            page.evaluate('plotView.y.set("__xy",{lo:47,hi:53});draw()')
+            page.fill('#window','100');page.locator('#window').press('Enter')
+            assert page.evaluate('plotView.span===100&&plotView.offset===0&&Math.abs(plotLayout.end-plotLayout.start-100)<1e-9')
+            assert '当前窗口 100 s' in page.locator('#plotWindowState').inner_text()
+            page.evaluate('plotView.span=88.69204367171575;plotView.offset=29.346;draw()')
+            assert page.locator('#window').input_value()=='100'
+            summary=page.locator('#plotWindowState').inner_text()
+            assert '当前窗口 88.692 s' in summary and '缓存跨度' in summary and '右侧留白' in summary
+            page.click('#plotApplyWindow')
+            assert page.evaluate('plotView.span===100&&plotView.cacheSeconds===100&&plotView.offset===0&&plotView.frozen===null')
+            assert page.evaluate('Math.abs(plotLayout.start-plotLayout.origin+100)<1e-9&&plotLayout.end===plotLayout.origin')
+            assert page.evaluate('plotView.y.get("__xy").lo===47&&plotView.y.get("__xy").hi===53')
+            assert page.evaluate('plotBounds().hi-plotBounds().lo<30'), 'Increasing retention must not manufacture already discarded samples'
+
+            # Retention supports fractions/long durations, independently of zoom.
+            # Reset/Home restore a view covering the configured duration.
             for value in ('0.2','2.5','30.125','86400'):
                 page.fill('#window',value);page.locator('#window').press('Enter')
-                assert page.evaluate('plotView.preset')==float(value)
+                assert page.evaluate('plotView.cacheSeconds')==float(value)
                 assert page.evaluate('plotView.span')==float(value)
                 assert page.evaluate('Number.isFinite(plotLayout.end)&&plotView.frozen===null')
             for value in ('','0','-1','86401'):
                 page.fill('#window',value);page.locator('#window').press('Enter')
                 assert page.locator('#window').get_attribute('aria-invalid')=='true'
                 assert page.locator('#plotPresetError').is_visible()
-                assert page.evaluate('plotView.preset===86400&&plotView.span===86400')
+                assert page.evaluate('plotView.cacheSeconds===86400&&plotView.span===86400')
             page.click('#plotReset')
             assert page.locator('#window').input_value()=='86400'
             assert page.locator('#plotPresetError').is_hidden()
             page.fill('#window','0.2');page.locator('#window').press('Enter')
             page.click('#plotFitX')
-            assert page.evaluate('plotView.span>20&&plotView.preset===.2')
+            assert page.evaluate('plotView.span<=.200000001&&plotView.cacheSeconds===.2')
             page.click('#plotReset');assert page.evaluate('plotView.span===.2')
 
             # Pause remains explicit, and numeric/range changes preserve its snapshot.
             page.click('#plotPause');frozen=page.evaluate('plotBounds().hi')
+            page.evaluate('window.cacheSnapshot=plotView.frozen;window.cacheOrigin=plotView.origin;plotView.offset=3;plotView.end=plotView.origin+3;draw()')
             page.fill('#window','1.25');page.locator('#window').press('Enter')
+            assert page.evaluate('plotView.frozen===cacheSnapshot&&plotView.origin===cacheOrigin&&plotView.offset===0&&plotLayout.end===cacheOrigin')
             page.locator('#plotBufferStart').press('ArrowLeft')
             page.wait_for_timeout(160)
             assert page.evaluate('plotView.frozen!==null') and page.evaluate('plotBounds().hi')==frozen
@@ -97,7 +115,11 @@ with sync_playwright() as p:
             page.select_option('#plotCount','2');page.select_option('#plotTarget','2')
             page.locator('#signals [data-channel="range.actual|rad/s"] input').check()
             page.fill('#window-2','3.75');page.locator('#window-2').press('Enter')
-            assert page.evaluate('plots[1].view.preset===3.75&&plots[0].view.preset===1.25')
+            assert page.evaluate('plots[1].view.cacheSeconds===3.75&&plots[0].view.cacheSeconds===1.25')
+            assert '当前窗口 3.75 s' in page.locator('#plotWindowState-2').inner_text()
+            page.evaluate('window.cacheFirstSpan=plots[0].view.span;plots[1].view.span=2;plots[1].view.offset=.5;plots[1].draw()')
+            page.click('#plotApplyWindow-2')
+            assert page.evaluate('plots[1].view.span===3.75&&plots[1].view.offset===0&&plots[0].view.span===cacheFirstSpan')
             for width in (1540,768,390):
                 page.set_viewport_size({'width':width,'height':1100});page.evaluate('draw()')
                 assert page.evaluate('document.body.scrollWidth<=innerWidth'),width
@@ -112,11 +134,11 @@ with sync_playwright() as p:
             page.evaluate("add({kind:2,epoch:1,ms:10,values:[['range.target','rad/s',50],['range.actual','rad/s',49]]});draw()")
             assert page.evaluate('plots.every(p=>p.view.drag===null&&p.view.frozen===null)')
             assert not page.locator('#plotBuffer').get_attribute('data-drag')
-            assert page.evaluate('plots[0].view.preset===1.25&&plots[1].view.preset===3.75')
+            assert page.evaluate('plots[0].view.cacheSeconds===1.25&&plots[1].view.cacheSeconds===3.75')
             page.mouse.up()
             assert page.evaluate('rangeCommands')==[]
             assert not errors,errors
             context.close()
-            print(f'PASS: Edge DPR {dpr}: anchored red/purple endpoint stretching, green translation while 100 Hz stream continues, independent close handles, keyboard, fractional/long presets, invalid-draft safety, pause retention, per-plot settings and narrow layouts')
+            print(f'PASS: Edge DPR {dpr}: anchored red/purple endpoint stretching, green translation while 100 Hz stream continues, independent close handles, keyboard, fractional/long retention durations, invalid-draft safety, pause retention, per-plot settings and narrow layouts')
     finally:
         browser.close()

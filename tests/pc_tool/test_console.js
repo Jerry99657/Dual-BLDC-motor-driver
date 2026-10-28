@@ -99,7 +99,7 @@ function plotRegressions(){
  evaluate(`clear();for(let i=0;i<2500;i++)add({kind:1,epoch:0,ms:i*10,values:[['speed','rad/s',Math.sin(i/30)],['position','rad',i/100],['bus','V',12+.02*Math.sin(i)]]});draw()`);
  assert.equal(evaluate('plotLayout.panels.length'),1);assert.equal(evaluate('plotLayout.panels[0].items.length'),3);
  assert(evaluate('plotLayout.panels[0].lo<0 && plotLayout.panels[0].hi>=24.99'),'Different units share one numerical Y range');
- assert.equal(evaluate('[...series.values()][0].points.length'),2200);
+ assert.equal(evaluate('[...series.values()][0].points.length'),1001);assert(Math.abs(evaluate('plotBounds().hi-plotBounds().lo')-10)<1e-9);
  evaluate(`$('plotAxis').value='x';(()=>{const l=plotLayout,p=l.panels[0];$('plot').onwheel({clientX:(l.left+l.right)/2,clientY:(p.top+p.bottom)/2,deltaY:-120,deltaMode:0,preventDefault(){}})})()`);
  assert(evaluate('plotView.span<10 && plotView.end===null && plotView.frozen===null && plotView.offset<0 && plotView.y.size===0'));
  const end=evaluate('plotLayout.end'),offset=evaluate('plotView.offset');
@@ -112,7 +112,7 @@ function plotRegressions(){
  evaluate('followPlot(true)');
  evaluate(`$('plotAxis').value='x';(()=>{const l=plotLayout,p=l.panels[0],x=(l.left+l.right)/2,y=(p.top+p.bottom)/2;$('plot').onpointerdown({button:0,pointerId:1,clientX:x,clientY:y,preventDefault(){}});$('plot').onpointermove({clientX:x+100,clientY:y});$('plot').onpointerup({pointerId:1})})()`);
  assert(evaluate('plotView.offset<0 && plotView.end===null && plotView.frozen===null && plotView.drag===null'));
- evaluate(`scrubPlot(0)`);assert.equal(elements.get('scrub').value,'0');
+ evaluate(`$('plotZoomIn').onclick();scrubPlot(0)`);assert.equal(elements.get('scrub').value,'0');
  evaluate(`$('pause').onclick()`);assert(evaluate('paused && plotView.frozen!==null'));
  const frozenEnd=evaluate('plotBounds().hi'),frozenView=evaluate('plotLayout.end');
  evaluate(`for(let i=5000;i<8000;i++)add({kind:1,epoch:0,ms:i*10,values:[['speed','rad/s',0],['position','rad',i/100],['bus','V',12]]});draw()`);
@@ -127,16 +127,17 @@ function plotRegressions(){
  assert(evaluate('plotView.offset>0 && plotLayout.end>latestTime && plotLayout.start<latestTime && plotView.frozen===null'),'Live view can leave empty space after the newest point');
  evaluate(`$('plotTime').value='board';$('plotTime').onchange()`);assert(!evaluate('plotLayout.relative'));
  evaluate(`$('plotTime').value='relative';$('plotTime').onchange();followPlot(true)`);assert(evaluate('plotLayout.relative && plotLayout.origin===latestTime'));
+ evaluate(`$('plotZoomIn').onclick()`);const rangeInitial=evaluate('plotView.span');
  const rangeEnd=evaluate('plotLayout.end-latestTime');
  evaluate(`$('plotBufferStart').onkeydown({key:'ArrowLeft',preventDefault(){}})`);
- assert(evaluate('plotView.span>10 && plotView.frozen===null'));assert(Math.abs(evaluate('plotLayout.end-latestTime')-rangeEnd)<1e-8,'Left endpoint keeps the right endpoint fixed');
+ assert(evaluate('plotView.span')>rangeInitial&&evaluate('plotView.frozen===null'));assert(Math.abs(evaluate('plotLayout.end-latestTime')-rangeEnd)<1e-8,'Left endpoint keeps the right endpoint fixed');
  const rangeStart=evaluate('plotLayout.start-latestTime');
  evaluate(`$('plotBufferEnd').onkeydown({key:'ArrowLeft',preventDefault(){}})`);
  assert(Math.abs(evaluate('plotLayout.start-latestTime')-rangeStart)<1e-8,'Right endpoint keeps the left endpoint fixed');
  const rangeSpan=evaluate('plotView.span');evaluate(`$('plotBufferMove').onkeydown({key:'ArrowLeft',preventDefault(){}})`);
  assert.equal(evaluate('plotView.span'),rangeSpan,'Green midpoint translates without scaling');
- evaluate(`$('window').value='0.125';$('window').onchange()`);assert(evaluate('plotView.span===.125 && plotView.preset===.125 && plotView.frozen===null'));
- for(const invalid of ['',0,-1,'NaN','Infinity',86401]){elements.get('window').value=String(invalid);assert.equal(evaluate(`$('window').onchange()`),false);assert(evaluate('plotView.preset===.125 && plotView.span===.125'))}
+ evaluate(`$('window').value='0.125';$('window').onchange()`);assert(evaluate('plotView.span===.125 && plotView.cacheSeconds===.125 && plotView.frozen===null'));
+ for(const invalid of ['',0,-1,'NaN','Infinity',86401]){elements.get('window').value=String(invalid);assert.equal(evaluate(`$('window').onchange()`),false);assert(evaluate('plotView.cacheSeconds===.125 && plotView.span===.125'))}
  evaluate('followPlot(true)');assert.equal(elements.get('window').value,'0.125');assert(elements.get('plotPresetError').hidden);
  evaluate(`$('window').value='30.5';$('window').onchange()`);assert(evaluate('plotView.span===30.5 && Number.isFinite(plotLayout.end)'));
  evaluate(`$('window').value='10';$('window').onchange();followPlot(true)`);
@@ -168,7 +169,7 @@ function multiPlotRegressions(){
  evaluate(`plots[2].view.y.set('__xy',{lo:0,hi:.01});plots[2].draw();assignPlotChannel(2,'multi.current|A',true)`);
  assert(evaluate('plots[2].view.y.size===0 && plots[2].layout.panels[0].hi>=49.95'),'Adding a new curve refits shared Y without splitting axes');
  evaluate(`assignPlotChannel(2,'multi.current|A',false)`);
- evaluate(`scrubPlot(0)`);assert(evaluate('plots[2].view.offset<0 && plots[2].view.frozen===null && plots[0].view.offset===0'));
+ evaluate(`plots[2].control('plotZoomIn').onclick();scrubPlot(0)`);assert(evaluate('plots[2].view.offset<0 && plots[2].view.frozen===null && plots[0].view.offset===0'));
  evaluate('setPlotCount(1)');assert.equal(evaluate('activePlotIndex'),0);assert(evaluate('plots[1].root.hidden && plots[2].root.hidden'));
  evaluate('setPlotCount(3)');assert(evaluate(`plots[1].selected.has('multi.speed|rad/s') && plots[2].selected.size===2 && !plots[2].root.hidden`));
  evaluate(`assignPlotChannel(1,'multi.speed|rad/s',false)`);assert(evaluate(`plots[0].selected.has('multi.speed|rad/s') && !plots[1].selected.size`));
@@ -187,6 +188,45 @@ function multiPlotRegressions(){
  assert.equal(writes.length,before,'Canvas configuration, binding and drag/drop never send commands');
  console.log('PASS: 1..6 independent XY pairs, empty add, mixed-unit copied/deduplicated drops, shared-Y refit, per-canvas zoom/history, hidden restore, removal and bulk-add isolation, pause-all, retained bindings on source reset and zero commands');
 }
+function cacheRegressions(){
+ const before=writes.length;
+ evaluate(`for(const p of plots){p.view.cacheSeconds=p.view.span=10;p.selected.clear();p.autoSelect=p.index===0}setPlotCount(1);clear();$('window').value='100';$('window').onchange();
+  for(let i=0;i<=15000;i++)add({kind:1,epoch:0,ms:i*10,values:[['retention.speed','rad/s',i%97?i:null]]});draw()`);
+ assert.equal(evaluate("series.get('retention.speed|rad/s').points.length"),10001,'100 s at 100 Hz retains original samples beyond 2200');
+ assert(evaluate("series.get('retention.speed|rad/s').points.at(0)[0]===50&&series.get('retention.speed|rad/s').points.at(-1)[0]===150"));
+ assert(evaluate("plotNearest(series.get('retention.speed|rad/s').points,50.44)[1]===null"),'Null gaps survive Float64 storage');
+ evaluate(`setPlotCount(2);assignPlotChannel(1,'retention.speed|rad/s',true)`);
+ assert(evaluate('plots[0].bounds().hi-plots[0].bounds().lo===100&&plots[1].bounds().hi-plots[1].bounds().lo===10'),'Shared channels expose each canvas duration');
+ evaluate(`plots[0].control('window').value='20';plots[0].control('window').onchange()`);
+ assert.equal(evaluate("series.get('retention.speed|rad/s').points.length"),2001,'Shrinking the longest duration immediately evicts older live samples');
+ evaluate(`plots[0].control('window').value='100';plots[0].control('window').onchange()`);
+ assert.equal(evaluate("series.get('retention.speed|rad/s').points.length"),2001,'Increasing duration cannot recreate discarded history');
+ evaluate(`for(let i=15001;i<=25000;i++)add({kind:1,epoch:0,ms:i*10,values:[['retention.speed','rad/s',i]]});draw()`);
+ assert.equal(evaluate("series.get('retention.speed|rad/s').points.length"),10001);
+ evaluate(`plots[1].control('window').value='120';plots[1].control('window').onchange();setPlotCount(1);
+  for(let i=25001;i<=40000;i++)add({kind:1,epoch:0,ms:i*10,values:[['retention.speed','rad/s',i]]});draw()`);
+ assert.equal(evaluate("series.get('retention.speed|rad/s').points.length"),12001,'Hidden canvases retain their configured history for restoration');
+ assert.equal(evaluate('plots[0].bounds().hi-plots[0].bounds().lo'),100);
+ evaluate('setPlotCount(2)');assert.equal(evaluate('plots[1].bounds().hi-plots[1].bounds().lo'),120);
+ evaluate(`activatePlot(0);freezePlot();globalThis.cacheSnapshot=plots[0].view.frozen;globalThis.cacheSnapshotEnd=plots[0].bounds().hi;
+  for(let i=40001;i<=55000;i++)add({kind:1,epoch:0,ms:i*10,values:[['retention.speed','rad/s',i]]});draw()`);
+ assert(evaluate('plots[0].view.frozen===cacheSnapshot&&plots[0].bounds().hi===cacheSnapshotEnd&&plots[0].bounds().hi-plots[0].bounds().lo===100'),'Paused samples remain independent of overwritten live storage');
+ evaluate(`$('window').value='5';$('window').onchange()`);
+ assert(evaluate('plots[0].view.frozen===cacheSnapshot&&plots[0].bounds().hi===cacheSnapshotEnd&&plots[0].bounds().hi-plots[0].bounds().lo===5'),'Explicit duration shrink trims the paused snapshot without resuming');
+ evaluate(`for(const p of plots){p.view.cacheSeconds=p.view.span=10}plots[0].resume();setPlotCount(1);clear();
+  for(let i=0;i<2000;i++)add({kind:1,epoch:0,ms:i*10,values:[['retention.speed','rad/s',i]]});retainLiveCache(false,32);draw()`);
+ assert.equal(evaluate("series.get('retention.speed|rad/s').points.length"),32);
+ assert(evaluate("$('plotWindowState').textContent.includes('已达内存上限')"),'Memory pressure must be visible rather than silently shortening the requested history');
+ evaluate(`$('window').value='.1';$('window').onchange()`);
+ assert(evaluate("$('plotWindowState').dataset.limited==='false'"));
+ evaluate(`clear();$('window').value='1';$('window').onchange();for(const ms of [0,10,500,990,1000,1500,1999,2000])add({kind:1,epoch:0,ms,values:[['retention.speed','rad/s',ms]]});draw()`);
+ assert(evaluate('plots[0].groups()[0].items[0].s.points.length===4&&plots[0].bounds().lo===1&&plots[0].bounds().hi===2'),'Retention follows timestamps, including irregular sampling');
+ evaluate(`add({kind:2,epoch:1,ms:10,values:[['retention.speed','rad/s',1]]});draw()`);
+ assert(evaluate('plots[0].view.cacheSeconds===1&&plots[0].bounds().hi===.01&&cacheDropTime===-Infinity'),'Source reset preserves duration and clears old data and memory-limit state');
+ evaluate(`for(const p of plots){p.view.cacheSeconds=p.view.span=10;p.selected.clear();p.autoSelect=p.index===0}setPlotCount(1);clear()`);
+ assert.equal(writes.length,before);
+ console.log('PASS: duration cache: 100/120 s original samples, timestamp expiry, immediate shrink/gradual growth, shared and hidden canvases, independent pause copies, null gaps, explicit memory limit, source reset and zero commands');
+}
 async function main(){
  evaluate(code);await flush();assert.equal(writes.length,0,'Loading must not open a port or send a command');
  evaluate('toggleDemo();demoFrame()');assert.equal(writes.length,0);assert(evaluate('demo && !connected && series.size===6'));await assert.rejects(evaluate('connect()'),/演示/);evaluate('toggleDemo()');
@@ -199,7 +239,7 @@ async function main(){
  for(let i=0;i<reference.length;i++){const bad=Uint8Array.from(reference);bad[i]^=64;context.bad=bad;context.good=reference;assert.equal(evaluate('(()=>{const p=new WireParser();return p.feed(bad).length+p.feed(good).length})()'),1)}
  evaluate('parser=new WireParser();parser.feed(new Uint8Array(100000))');assert(evaluate('parser.buffer.length')<12);
  await evaluate('connect()');assert.equal(serialOptions.baudRate,115200);assert.deepEqual(writes,['Format:Native','@1:Get']);
- assert.equal(evaluate('boardConfig.firmware'),101);assert.equal(elements.get('motorModel').value,'2804');
+ assert.equal(evaluate('boardConfig.firmware'),103);assert.equal(elements.get('motorModel').value,'2804');
  assert.equal(evaluate('outputFormat'),'Native');
  // Settings editor units, real row-frame layout, import validation and Stop cancellation.
  evaluate(`$('speedLimit').value=240;$('posSpeed').value=150;$('speedStep').value=1.7`);
@@ -214,7 +254,7 @@ async function main(){
  assert.equal(evaluate('decodeRow(new WireParser().feed(rowBytes)[0]).axis'),2);
  await evaluate('readDiagnostics()');assert.equal(elements.get('diagRows').children.length,2);
  await evaluate('clearDiagnostics()');assert(/:App:0,17,0$/.test(writes.at(-1)));
- evaluate('boardConfig.firmware=94');await assert.rejects(evaluate('clearDiagnostics()'),/R95/);evaluate('boardConfig.firmware=101');
+ evaluate('boardConfig.firmware=94');await assert.rejects(evaluate('clearDiagnostics()'),/R95/);evaluate('boardConfig.firmware=103');
  context.imported=JSON.parse(evaluate('JSON.stringify(editableConfig(boardConfig))'));
  evaluate(`imported.axes[1].speedLimit=300;imported.axes[1].posSpeed=180;imported.ledBrightness=63`);
  const commands=evaluate('importCommands(validateImport({format:"FOC-console-settings",version:1,editable:imported}))');
@@ -238,7 +278,7 @@ async function main(){
  await evaluate("send('Stop')");assert.equal(writes.at(-1),'Stop','Stop stays available without RPC in JustFloat');
  inject(context.jfBytes);await flush();assert(evaluate("outputFormat==='JustFloat'&&formatVerified&&!boardConfig"));
  await evaluate("send('Format:Native')");assert.equal(writes.at(-2),'Format:Native');assert(/:\s*Get$/.test(writes.at(-1)));
- assert(evaluate("outputFormat==='Native'&&boardConfig.firmware===101"));
+ assert(evaluate("outputFormat==='Native'&&boardConfig.firmware===103"));
  autoReply=false;const formatWait=evaluate("send('Get')");formatWait.catch(()=>{});await flush();
  const detectBefore=writes.length;inject(context.jfBytes);await flush();await assert.rejects(formatWait,/JustFloat/);
  assert(evaluate("outputFormat==='JustFloat'&&!boardConfig&&!pending.size"));assert.equal(writes.length,detectBefore,'Board-side JustFloat does not trigger an automatic mode override or repeat commands');
@@ -247,6 +287,7 @@ async function main(){
  console.log('PASS: Native-first raw handshake, R101 settings compatibility, explicit global JustFloat request, fragmented real C float frames, native query cancellation, no automatic override and raw Stop/recovery');
  plotRegressions();
  multiPlotRegressions();
+ cacheRegressions();
  await evaluate(`send('Work:Independent')`);assert.equal(evaluate('boardConfig.work'),2);
  replyResult=-1;await assert.rejects(evaluate(`send('Work:bad')`),/板端拒绝/);replyResult=1;
  autoReply=false;const uncertain=evaluate(`send('Speed:20')`);uncertain.catch(()=>{});await flush();const before=writes.length;
@@ -258,8 +299,8 @@ async function main(){
  evaluate(`add({kind:4,ms:110,epoch:0,values:[['hso.relative_position','rad',0]]});draw()`);assert.equal(evaluate('series.size'),1);
  const rows=['host_time,board_ms,sequence,epoch,packet_kind,field,unit,value'];for(let i=0;i<3000;i++)rows.push(`t,${i*10},${i},0,1,m1.feedback_speed,rad/s,${i}`);
  rows.push('t,30000,3000,0,16,status,json,"{}"','t,30000,3001,0,32,configuration,json,"{}"');
- context.csvFile=new Blob(['\ufeff'+rows.join('\r\n')+'\r\n']);context.csvFile.name='test.csv';await evaluate('loadCsv(csvFile)');
- assert(evaluate('replaying'));assert(evaluate('[...series.values()][0].points.length<=2200'));assert.equal(evaluate('latestTime'),29.99);
+ context.csvFile=new Blob(['\ufeff'+rows.join('\r\n')+'\r\n']);context.csvFile.name='test.csv';evaluate("plots[0].control('window').value='100';plots[0].control('window').onchange()");await evaluate('loadCsv(csvFile)');
+ assert(evaluate('replaying'));assert.equal(evaluate('[...series.values()][0].points.length'),3000);assert.equal(evaluate('latestTime'),29.99);
  await assert.rejects(evaluate(`send('M1:Speed:10')`),/历史回放/);await evaluate(`send('Stop')`);
  evaluate('replaying=false;recording=true;recordBytes=16*1024*1024-1;recordChunks=[];recordFrame(new WireParser().feed(wireBytes)[0])');assert(!evaluate('recording'));assert(downloads.some(x=>x.endsWith('.csv')));
  evaluate('recordWriter={write:()=>{throw Error("must not enqueue")}};recording=true;recordQueuedBytes=1024*1024-1;recordFrame(new WireParser().feed(wireBytes)[0])');assert(!evaluate('recording'));assert(evaluate('recordQueuedBytes')<1024*1024);

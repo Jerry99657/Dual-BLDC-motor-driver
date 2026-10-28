@@ -24,7 +24,7 @@ with sync_playwright() as p:
         errors = []
         page.on("pageerror", lambda error: errors.append(str(error)))
         page.goto((ROOT / "pc_tool/index.html").as_uri())
-        assert page.title().endswith("R101")
+        assert page.title().endswith("R102")
         assert page.locator("#apply").is_disabled()
         assert not page.locator("details").get_attribute("open")
         fixture = (ROOT / "build/console-r87/rpc-fixture.bin").read_bytes()[:106]
@@ -42,6 +42,8 @@ with sync_playwright() as p:
             };
             testReadback(0);
         }""", list(fixture))
+        assert page.evaluate("testConfig.firmware") == 103
+        assert page.locator(".monitor-side").evaluate("e=>Array.from(e.children,x=>x.id)") == ["statusPanel", "runPanel"]
 
         def values(selector):
             return page.locator(selector + " option").evaluate_all("items=>items.map(x=>x.value)")
@@ -95,12 +97,27 @@ with sync_playwright() as p:
             page.click("#follow")
             assert page.evaluate("testWrites.at(-1)") == "Follow"
 
+        # Commands stay reachable beside both the first and last waveform.
+        page.evaluate("testReadback(2,0,false,1);setPlotCount(4)")
+        page.select_option("#action", "Speed")
+        for canvas, target in (("#plot", "12"), ("#plot-4", "18.5")):
+            page.locator(canvas).scroll_into_view_if_needed()
+            for control in ("#target", "#apply", "#stop"):
+                box = page.locator(control).bounding_box()
+                assert box["y"] >= 0 and box["y"] + box["height"] <= 1100, (canvas, control, box)
+            page.fill("#target", target)
+            page.click("#apply")
+            assert page.evaluate("testWrites.at(-1)") == "M2:Speed:" + target
+            graph = page.locator(canvas).bounding_box()
+            assert graph["y"] < 1100 and graph["y"] + graph["height"] > 70
+        page.screenshot(path=str(OUT / "run-beside-waveform.png"))
+
         for width in (1440, 768, 390):
             page.set_viewport_size({"width": width, "height": 1000})
             assert page.evaluate("document.body.scrollWidth<=innerWidth"), width
             assert page.locator("#stop").is_visible()
         page.screenshot(path=str(OUT / "linked-follow-mobile.png"), full_page=True)
         assert not errors, errors
-        print("PASS: real Edge DOM: all seven work modes, dependent options, M2 readback/focus, action/Follow routing, no preview commands, visible Stop and 1440/768/390px layouts")
+        print("PASS: real Edge DOM: R103 fixture, Status above Run, target commands beside first/last waveform, all seven work modes, dependent options, M2 readback/focus, action/Follow routing, no preview commands, visible Stop and 1440/768/390px layouts")
     finally:
         browser.close()

@@ -14,7 +14,7 @@ void MotorIRQ_Key1(void)
     if (LL_EXTI_IsActiveFlag_0_31(KEY1_Pin)) {
         /* W1C only this line; retain events belonging to other shared lines. */
         LL_EXTI_ClearFlag_0_31(KEY1_Pin);
-        MotorSampling_GlobalStopIRQ();
+        MotorSampling_GlobalStopFromIRQ(MOTOR_STOP_KEY_EDGE);
     }
 }
 

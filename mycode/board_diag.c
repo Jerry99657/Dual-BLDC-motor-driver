@@ -140,13 +140,21 @@ const char *BoardDiag_Row(unsigned axis,unsigned row,char value[32])
         "ADC IRQ Max","ADC Jitter","PWM Age","Outer Max","Outer Jitter","IRQ Overrun",
         "First","F Time","F W/D/P/C","F Bus/Ref","F Cmd/Act","F Position","F Current",
         "F ADC","F Enc","F Counts","F Age/IRQ","CPU Fault","CPU PC","CPU LR",
-        "CPU SP","CPU CFSR","CPU HFSR","CPU B/M","CPU XPSR","CPU Return"};
+        "CPU SP","CPU CFSR","CPU HFSR","CPU B/M","CPU XPSR","CPU Return",
+        "Stop Src","Stop At","Stop K/P"};
     _Static_assert(sizeof(names)/sizeof(names[0])==BOARD_DIAG_ROWS,"Diagnostic rows");
     const BoardDiagFault *f=&retained.fault; const BoardDiagCrash *c=&retained.crash;
     bool valid=true;
     if (axis>1 || row>=BOARD_DIAG_ROWS) return NULL;
     const BoardDiagMotion *m=&f->motion[axis];
-    if ((row>=6U && row<=16U && !f->source) || (row>=17U && !c->kind)) strcpy(value,"--");
+    if (row>=26U) {
+        MotorGlobalStopRecord stop; MotorSampling_GetGlobalStop(&stop);
+        static const char *const sources[]={"--","CPU BOOT","KEY1 EDGE","KEY1 LOW","KEY1 PEND","COMMAND"};
+        if (!stop.source) strcpy(value,"--");
+        else if (row==26U) strcpy(value,sources[stop.source]);
+        else if (row==27U) UiText_Format(value,32,"%lu ms S%lu",(unsigned long)stop.at,(unsigned long)stop.stage);
+        else UiText_Format(value,32,"%u/%u Now %u/%u",stop.key&1U,(stop.key>>1U)&1U,stop.now&1U,(stop.now>>1U)&1U);
+    } else if ((row>=6U && row<=16U && !f->source) || (row>=17U && !c->kind)) strcpy(value,"--");
     else if (row<6U) {
         const uint32_t times[]={timing.adc_max,timing.adc_jitter,timing.center_age,
                                 timing.outer_max,timing.outer_jitter,timing.overruns};

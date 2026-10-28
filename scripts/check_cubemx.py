@@ -332,6 +332,10 @@ def audit(root):
             errors.append(str(error))
     if '#include "board_diag.h"' not in irq or 'BoardDiag_Init();' not in main or 'BoardDiag_LastCrash()->kind' not in main:
         errors.append('Preserve R95 diagnostic initialization and boot output inhibit USER CODE hooks')
+    if not re.search(r'g_boot_stage\s*=\s*4U;\s*'
+                     r'if\s*\(BoardDiag_LastCrash\(\)->kind\)\s*MotorSampling_GlobalStopIRQ\(\);\s*'
+                     r'HAL_Delay\(30U\);\s*\(void\)MotorSampling_IsGlobalStopped\(\);',main):
+        errors.append('KEY1: preserve the R103 30ms RC settling before the first level poll, after CPU boot inhibition (main USER CODE 2)')
     if errors:
         raise ConfigError('\n'.join(errors))
     return mappings

@@ -109,7 +109,20 @@ bool MotorSampling_ClearIbusTrip(void);
 /* KEY1 global coast latch. IRQ only disconnects power and records the event;
  * main-loop control consumes it before a fresh explicit start may rearm.
  * Release alone never resumes; require a stable 30 ms release. */
+typedef enum {
+    MOTOR_STOP_CPU_BOOT=1, MOTOR_STOP_KEY_EDGE, MOTOR_STOP_KEY_LOW,
+    MOTOR_STOP_KEY_PENDING, MOTOR_STOP_COMMAND
+} MotorGlobalStopSource;
+typedef struct {
+    uint32_t at,stage;
+    uint8_t source,key,now; /* KEY1: bit0=released/high, bit1=EXTI pending. */
+} MotorGlobalStopRecord;
+/* Legacy boot hook: only a retained CPU crash calls this entry. */
 void MotorSampling_GlobalStopIRQ(void);
+void MotorSampling_GlobalStopFromIRQ(MotorGlobalStopSource source);
+/* First cause of the latest stop episode, this boot only. Reads never poll
+ * protection or clear evidence; now reports the current KEY1/EXTI levels. */
+void MotorSampling_GetGlobalStop(MotorGlobalStopRecord *out);
 /* The vector dispatcher acknowledges BIF/SBIF/B2IF before latching the fault. */
 void MotorSampling_BreakIRQ(void);
 void MotorSampling_AdcErrorIRQ(void); /* Shared ADC fault disconnects both bridges. */

@@ -166,7 +166,7 @@ int8_t AppSettings_Apply(unsigned axis,unsigned key,int32_t value)
         return ok ? 1 : -1;
     case APP_ACTION_DETECT_START: return value>=100 && value<=500 && MotorDetect_Start((unsigned)value) ? 1 : -1;
     case APP_ACTION_PAUSE:
-        MotorSampling_GlobalStopIRQ();MotorControl_StopAll();return 1;
+        MotorSampling_GlobalStopFromIRQ(MOTOR_STOP_COMMAND);MotorControl_StopAll();return 1;
     case APP_ACTION_DETECT_SAVE: return AppSettings_SaveDetection() ? 1 : -1;
     case APP_ACTION_SAVE: force_save=true;ok=true;break;
     case APP_ACTION_DIAG_CLEAR: return BoardDiag_Clear() ? 1 : -1;

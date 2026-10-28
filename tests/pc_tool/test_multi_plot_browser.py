@@ -76,6 +76,7 @@ with sync_playwright() as p:
             assert page.evaluate("plots[1].bounds().hi") > live_end
             assert page.evaluate("plots[0].view.end===null && plots[2].view.end===null")
             page.select_option("#plotTarget", "3")
+            page.click("#plotZoomIn-3")
             page.locator("#scrub").evaluate("el=>{el.value=0;el.dispatchEvent(new Event('input'))}")
             assert page.evaluate("plots[2].view.offset<0 && plots[2].view.frozen===null && plots[0].view.offset===0")
             assert abs(page.evaluate("plots[1].view.offset") - old_offset) < 1e-8

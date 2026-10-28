@@ -25,8 +25,9 @@ void HostRegisterWrite(uint32_t *reg,uint32_t value)
     else if (reg==&irq_tim1.SR || reg==&irq_tim2.SR) *reg &= value;
     else assert(0);
 }
-void MotorSampling_GlobalStopIRQ(void)
+void MotorSampling_GlobalStopFromIRQ(MotorGlobalStopSource source)
 {
+    assert(source==MOTOR_STOP_KEY_EDGE);
     assert(!(irq_exti.PR1 & KEY1_Pin));
     ++key_calls; m1_power=m2_power=false;
 }

@@ -11,6 +11,7 @@
 #include "JerryFOC.h"
 #include "MT6701.h"
 #include "motor_sampling.h"
+#include "board_diag.h"
 #include "st_hso.h"
 #include "app_storage.h"
 #include "motor_control.h"
@@ -88,7 +89,7 @@ bool ControlStub_RequestAlign(MotorAxis axis) {
     global_stopped=false;return true;
 }
 bool MotorSampling_IsGlobalStopped(void) { return global_stopped; }
-void MotorSampling_GlobalStopIRQ(void) { global_stopped=true;output_requested=false; }
+void MotorSampling_GlobalStopFromIRQ(MotorGlobalStopSource source) { assert(source==MOTOR_STOP_COMMAND);global_stopped=true;output_requested=false; }
 static uint16_t ibus_limit_ma=APP_IBUS_DEFAULT_MA;
 static bool ibus_trip,ibus_clear_allowed=true,ibus_set_failed;
 uint16_t MotorSampling_GetIbusLimit(void) { return ibus_limit_ma; }
@@ -1074,10 +1075,10 @@ static void check_app_bridge(void)
     assert(MotorControl_GetFocus()==MOTOR_AXIS_1 && KK_UI_GetCurrentPage()==before);
     assert(App_ReadRow(0,0,0,label,value)==-2 && App_ReadRow(1,8,0,label,value)==-2);
     assert(App_ReadRow(1,0,255,label,value)==-2);
-    assert(App_ReadRow(1,6,11,label,value)==37);
+    assert(App_ReadRow(1,6,11,label,value)==11+BOARD_DIAG_ROWS);
     assert(!strcmp(label,"Diag"));
-    assert(App_ReadRow(2,6,36,label,value)==37);
-    assert(App_ReadRow(2,6,37,label,value)==-2);
+    assert(App_ReadRow(2,6,10+BOARD_DIAG_ROWS,label,value)==11+BOARD_DIAG_ROWS);
+    assert(App_ReadRow(2,6,11+BOARD_DIAG_ROWS,label,value)==-2);
     assert(KK_UI_GoTo(UI_PAGE_SETTINGS,tick)==KK_UI_OK);settle();
     select_setting("Speed Limit");press(KK_UI_KEY_OK);settle();
     options=MotorControl_GetOptions(MOTOR_AXIS_1);

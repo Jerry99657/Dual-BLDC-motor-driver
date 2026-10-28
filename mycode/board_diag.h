@@ -37,7 +37,7 @@ const BoardDiagFault *BoardDiag_LastFault(void);
 const BoardDiagCrash *BoardDiag_LastCrash(void);
 const BoardDiagTiming *BoardDiag_Times(void);
 /* Extra rows appended to the existing Diagnostics info page / GetRow group6. */
-#define BOARD_DIAG_ROWS 26U
+#define BOARD_DIAG_ROWS 29U
 const char *BoardDiag_Row(unsigned axis,unsigned row,char value[32]);
 
 #if defined(__arm__) || defined(__thumb__)

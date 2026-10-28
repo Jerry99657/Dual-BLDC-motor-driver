@@ -43,6 +43,8 @@ audit(root)
 fixture({'Core/Src/stm32g4xx_it.c': [('BOARD_DIAG_VECTOR(3);','')]},False)
 fixture({'Core/Src/main.c': [('BoardDiag_Init();','')]},False)
 fixture({'Core/Src/main.c': [('BoardDiag_LastCrash()->kind','0')]},False)
+fixture({'Core/Src/main.c': [('HAL_Delay(30U);','')]},False)
+fixture({'Core/Src/main.c': [('HAL_Delay(30U);','HAL_Delay(1U);')]},False)
 # Supported changes must never be pinned to a historical divider/priority.
 fixture({'Core/Src/spi.c': [('SPI_BAUDRATEPRESCALER_256;', 'SPI_BAUDRATEPRESCALER_128;'),
                            ('GPIO_SPEED_FREQ_MEDIUM;', 'GPIO_SPEED_FREQ_LOW;'),

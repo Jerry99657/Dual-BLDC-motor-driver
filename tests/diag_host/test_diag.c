@@ -10,6 +10,8 @@ HostDwt host_dwt;
 static uint32_t now,recorded_cycles;
 static bool requested[2],recurse;
 static MotorSampleFrame sample;
+static MotorGlobalStopRecord stop;
+void MotorSampling_GetGlobalStop(MotorGlobalStopRecord *out) { *out=stop; }
 static MotorDriveMode drive;
 static SixStepSnapshot six;static bool generic;
 bool SixStep_IsGeneric(void) { return generic; }
@@ -64,10 +66,28 @@ static void retention(void) {
  BoardDiag_Motion(0,1,30,2,.2f,29,1.9f);BoardDiag_Fault(1,DIAG_HSO,"LOCK");assert(retained.fault.motion[0].position==1.9f);
  char value[32];
  for(unsigned axis=0;axis<2;++axis) for(unsigned row=0;row<BOARD_DIAG_ROWS;++row) { memset(value,0x55,32);assert(BoardDiag_Row(axis,row,value));assert(memchr(value,0,32)); }
- assert(!BoardDiag_Row(2,0,value) && !BoardDiag_Row(0,26,value));
+ assert(!BoardDiag_Row(2,0,value) && !BoardDiag_Row(0,BOARD_DIAG_ROWS,value));
  retained.fault.current[0][0]=NAN;BoardDiag_Row(0,12,value);assert(!strcmp(value,"INVALID"));
  assert(BoardDiag_Clear());BoardDiag_Row(0,6,value);assert(!strcmp(value,"--"));
  puts("PASS: first fault immutability/re-entrant getters, retained SRAM checksum/torn writes, unsigned tick wrap, both-axis stop gate, PRIMASK, reason bounds, six-step/HSO units and row bounds");
+}
+static void stop_rows(void) {
+ char value[32];
+ for(unsigned row=26;row<BOARD_DIAG_ROWS;++row) {
+  assert(BoardDiag_Row(0,row,value) && !strcmp(value,"--"));
+ }
+ const char *names[]={"CPU BOOT","KEY1 EDGE","KEY1 LOW","KEY1 PEND","COMMAND"};
+ for(unsigned source=1;source<=MOTOR_STOP_COMMAND;++source) {
+  stop=(MotorGlobalStopRecord){.source=(uint8_t)source,.at=4,.stage=3,.key=0,.now=1};
+  assert(!strcmp(BoardDiag_Row(0,26,value),"Stop Src") && !strcmp(value,names[source-1]));
+  assert(!strcmp(BoardDiag_Row(1,27,value),"Stop At") && !strcmp(value,"4 ms S3"));
+  assert(!strcmp(BoardDiag_Row(0,28,value),"Stop K/P") && !strcmp(value,"0/0 Now 1/0"));
+  assert(BoardDiag_Row(0,17,value) && !strcmp(value,"--"));
+  assert(BoardDiag_Clear());
+  assert(BoardDiag_Row(1,26,value) && !strcmp(value,names[source-1]));
+ }
+ stop=(MotorGlobalStopRecord){0};
+ puts("PASS: current-boot stop rows independent of empty/cleared CPU crash and retained first-fault slots; both axes, sources, stage/time and captured/live key states");
 }
 static void loader_debug_retention(void) {
  /* Observed after ST-Link F5 download: a RAM algorithm returns to its debug
@@ -121,4 +141,4 @@ static void timing_test(void) {
  host_dwt.CYCCNT=19;BoardDiag_Timing(0,10,20);assert(!timing.adc_jitter && timing.adc_max==9);
  puts("PASS: 10 kHz ADC/1 kHz outer-loop duration, start jitter, PWM age, deadline counter, DWT wrap, existing protection forwarding and clear/rebaseline");
 }
-int main(void) { retention();loader_debug_retention();timing_test();return 0; }
+int main(void) { retention();loader_debug_retention();stop_rows();timing_test();return 0; }
