@@ -168,7 +168,9 @@ static void check_configuration_queue(void) {
     command("Focus:M1");command("Align:M2");assert(Protocol_GetControlResult()==1);
     const char *gears[]={"Gear:-2.5,0.1","Gear:1e-2,-6.283e1","Gear:0x1p1,0x.8p1"};
     for(unsigned i=0;i<sizeof(gears)/sizeof(*gears);++i) { command(gears[i]);assert(Protocol_GetControlResult()==1); }
-    const char *invalid[]={"Work:bad","Motor1:40150","Motor2:","Feedback:HSOx","Feedback:","Gear:0,0","Gear:1","Gear:1,0junk","Align:M3","Focus:M0"};
+    const char *invalid[]={"Work:bad","Motor1:40150","Motor2:","Feedback:HSOx","Feedback:","Gear:0,0","Gear:1","Gear:1,0junk","Align:M3","Focus:M0","Focus:M","Focus:M1x","Align:M2x","Align:M2:",
+        "Work:SingleM","Work:SingleM1x","Motor1:Custom0","Motor1:Custom4","Motor1:Custom11",
+        "Motor1:Custom1x","Motor1:custom1","Motor2:ESC","Feedback:Encoderx","Feedback:SixSte"};
     for(unsigned i=0;i<sizeof(invalid)/sizeof(*invalid);++i) {
         uint32_t before=AppStorage_Get()->control_config;command(invalid[i]);
         assert(Protocol_GetControlResult()==-1 && AppStorage_Get()->control_config==before);
@@ -253,7 +255,7 @@ static void check_rpc(void) {
     telemetry_host_tick=100;assert(Telemetry_Select("Off"));
     command("@1:Get");Telemetry_Service();
     assert(inflight_len==106 && inflight[3]==32 && inflight[12]==1 && inflight[14]==1 && inflight[15]==PROTO_SRC_USB);
-    assert(inflight[16]==2 && inflight[17]==105);
+    assert(inflight[16]==2 && inflight[17]==113);
     assert(inflight[18]==APP_SAVE_PENDING); /* Dirty config must not claim an older save completed. */
     int32_t saved;memcpy(&saved,inflight+20,4);assert(saved==123);
     assert(fwrite(inflight,1,inflight_len,trace)==inflight_len);
@@ -345,6 +347,18 @@ int main(void) {
     command("HSO:Off"); assert(!observer_enabled);
     command("HSO:On"); assert(observer_enabled);
     command("HSO:Unsupported"); assert(Protocol_GetHsoResult()==-1);
+    const char *bad_tokens[]={"HSO:O","HSO:Onx","HSO:Offx","HSO:Encoderx","HSO:Usex","HSO:Lear"};
+    for(unsigned i=0;i<sizeof(bad_tokens)/sizeof(*bad_tokens);++i) {
+        command(bad_tokens[i]);assert(Protocol_GetHsoResult()==-1 && observer_enabled && !active);
+    }
+    const char *bad_formats[]={"Format:","Format:native","Format:NativeX","Format:JustFloa","Format:JustFloatX"};
+    for(unsigned i=0;i<sizeof(bad_formats)/sizeof(*bad_formats);++i) {
+        command(bad_formats[i]);assert(Protocol_GetControlResult()==-2 && Telemetry_IsNative());
+    }
+    const char *bad_prefixes[]={"M","M1","M2","M1:","M2:","M3:Stop","m1:Stop","M1:StopX"};
+    for(unsigned i=0;i<sizeof(bad_prefixes)/sizeof(*bad_prefixes);++i) {
+        command(bad_prefixes[i]);assert(Protocol_GetControlResult()==-2 && !active);
+    }
     /* A valid prefix must never execute if the rest of a line overflowed. */
     char long_line[100]; memset(long_line,'0',sizeof(long_line));
     memcpy(long_line,"HSO:Motor:2.3,0.00086,0.",sizeof("HSO:Motor:2.3,0.00086,0.")-1U);

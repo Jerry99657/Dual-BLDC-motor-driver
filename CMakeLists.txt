@@ -37,6 +37,10 @@ add_executable(${CMAKE_PROJECT_NAME})
 # Add STM32CubeMX generated sources
 add_subdirectory(cmake/stm32cubemx)
 
+# All generated USB PMA endpoints use PCD_SNG_BUF. Apply ST's public option
+# consistently to the PCD/USB sources and application; CubeMX owns setup.
+target_compile_definitions(stm32cubemx INTERFACE USE_USB_DOUBLE_BUFFER=0U)
+
 # Application HAL/LL interrupt module; official driver options are unchanged.
 target_sources(${CMAKE_PROJECT_NAME} PRIVATE mycode/motor_irq.c)
 set_source_files_properties(mycode/motor_irq.c PROPERTIES COMPILE_OPTIONS "-Os;-flto")
@@ -120,6 +124,7 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     mycode/JerryFOC.c
     mycode/MT6701.c
     mycode/angle_src_encoder.c
+    mycode/encoder_estimator.c
     mycode/motor_params.c
     mycode/motor_detect.c
     mycode/motor_sampling.c
@@ -202,7 +207,7 @@ set_source_files_properties(mycode/motor_sixstep.c PROPERTIES COMPILE_OPTIONS "-
 set_source_files_properties(mycode/motor_math.c PROPERTIES COMPILE_OPTIONS "-O2;-flto")
 set_source_files_properties(mycode/compact_div64.c PROPERTIES COMPILE_OPTIONS "-Os")
 set_source_files_properties(mycode/motor_control.c mycode/motor_sampling.c
-    mycode/MT6701.c mycode/JerryFOC.c mycode/angle_src_encoder.c PROPERTIES COMPILE_OPTIONS "-Os;-flto")
+    mycode/MT6701.c mycode/JerryFOC.c mycode/angle_src_encoder.c mycode/encoder_estimator.c PROPERTIES COMPILE_OPTIONS "-Os;-flto")
 
 # Keep the growing main-loop orchestration within the 128 KiB device too.
 # Debug symbols remain available; optimized local variables may not be visible.

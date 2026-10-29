@@ -30,6 +30,54 @@ static void sensor_control(void) {
     for(unsigned i=0;i<79000 && !StHso_IsUsable();++i) sensor_step(1);
     assert(StHso_IsUsable() && output_requested && JerryFOC_isHSOActive());
 }
+/* R110 current PI calculation, retained here as an independent pre-FF oracle.
+ * Its component output clip is inactive for the normal-current trace below;
+ * the final voltage-vector saturation is exercised at each bus voltage. */
+static float pre_ff_pi(PIDController *p,float error) {
+    float integral=p->integral_prev+p->I*.00005f*(error+p->error_prev);
+    p->integral_prev=fminf(p->limit,fmaxf(-p->limit,integral));p->error_prev=error;
+    float requested=p->P*error+p->integral_prev;
+    assert(fabsf(requested)<p->limit);
+    return fminf(p->limit,fmaxf(-p->limit,requested));
+}
+static void pure_pi_control(void) {
+    sensor_step(1600); /* Beyond every previous automatic FF enable delay. */
+    assert(StHso_IsUsable() && !healthy && !aligned);
+    assert(m1_controllers.current_feedforward==0);
+    MotorControllers c;JerryFOC_InitControllers(&c,MotorParams_GetAxis(MOTOR_AXIS_1));
+    c.q.I=c.d.I=0;c.q.integral_prev=.8f;c.d.integral_prev=-.1f;
+    c.current_feedforward=1; /* Even stale encoder-mode gain must be discarded. */
+    for(unsigned i=0;i<100;++i) {
+        float speed=i%3==0 ? NAN : i%3==1 ? 500 : -500;
+        float angle=StHso_ControlAngle();
+        JerryFOC_CurrentControl(MOTOR_AXIS_1,&c,angle,speed,-.1f,.3f,-.1f,.3f);
+        float a=(float)tim1.CCR1/tim1.ARR,b=(float)tim1.CCR2/tim1.ARR,v=(float)tim1.CCR3/tim1.ARR;
+        float alpha=(a-(a+b+v)/3)*bus,beta=(b-v)*bus/sqrtf(3);
+        float d=alpha*cosf(angle)+beta*sinf(angle),q=beta*cosf(angle)-alpha*sinf(angle);
+        assert(fabsf(d+.1f)<.005f && fabsf(q-.8f)<.005f);
+        assert(fabsf(c.q.integral_prev-.8f)<.0001f && fabsf(c.d.integral_prev+.1f)<.0001f);
+        assert(c.current_feedforward==0);
+    }
+    JerryFOC_InitControllers(&c,MotorParams_GetAxis(MOTOR_AXIS_1));
+    MotorControllers legacy=c;float saved_bus=bus;
+    for(unsigned i=0;i<3000;++i) {
+        bus=i<1000 ? 12 : i<2000 ? 6 : 20;
+        float angle=(float)i*.013f,id=.1f*sinf((float)i*.007f),iq=.3f*cosf((float)i*.009f);
+        float target_d=.2f*sinf((float)i*.011f),target_q=.5f*cosf((float)i*.005f);
+        float requested_q=pre_ff_pi(&legacy.q,target_q-iq),requested_d=pre_ff_pi(&legacy.d,target_d-id);
+        JerryFOC_CurrentControl(MOTOR_AXIS_1,&c,angle,i%2 ? 80 : -80,target_d,target_q,id,iq);
+        uint32_t a=tim1.CCR1,b=tim1.CCR2,v=tim1.CCR3;float aq,ad;
+        JerryFOC_setAxisVoltage(MOTOR_AXIS_1,requested_q,requested_d,angle,&aq,&ad);
+        assert(tim1.CCR1==a && tim1.CCR2==b && tim1.CCR3==v);
+        legacy.q.integral_prev=fminf(legacy.q.limit,fmaxf(-legacy.q.limit,legacy.q.integral_prev+.2f*(aq-requested_q)));
+        legacy.d.integral_prev=fminf(legacy.d.limit,fmaxf(-legacy.d.limit,legacy.d.integral_prev+.2f*(ad-requested_d)));
+        assert(c.q.integral_prev==legacy.q.integral_prev && c.d.integral_prev==legacy.d.integral_prev);
+        assert(c.current_feedforward==0);
+    }
+    bus=saved_bus;
+    puts("PASS: real encoder-free HSO CONTROL stays pure PI beyond 150 ms, ignores model-speed FF and stale gain, retains PI voltage/integral and protection");
+    puts("PASS: 3000 normal-current HSO steps equal pre-FF R110 PI/PWM/integral trace at 6/12/20 V with vector saturation; encoder remains absent");
+}
 int main(void) {
     boot((MotorWorkMode)(MOTOR_WORK_SINGLE_M1|8U)); /* Persisted HSO at boot: no encoder alignment. */
     healthy=aligned=0;
@@ -47,6 +95,7 @@ int main(void) {
     assert(sensor_command(MOTOR_AXIS_1,JERRYFOC_MODE_VELOCITY,10,0,false));
     assert(output_requested && state(MOTOR_AXIS_1).current_loop);
     sensor_control(); assert(!healthy && !aligned);
+    pure_pi_control();
     JerryFOC_Target_Iq=0.4f;
     for(unsigned i=0;i<10;++i) JerryFOC_run(); /* No outer-loop tick: no recursive blending. */
     assert(fabsf(JerryFOC_Target_Iq-0.4f)<1e-6f);

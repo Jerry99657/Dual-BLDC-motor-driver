@@ -126,6 +126,7 @@ static void phase_capture_tests(void) {
             assert(hypotf(d,q)<=MOTOR_4015.rated_current+1e-5f);
         }
         assert(previous_d==0 && previous_q==0);
+        StHso_Stop();
     }
     /* A small frequency slip can pass the old 15% frequency test but cannot
      * stay in a fixed 10-degree phase window for 200 ms. Never certify it by
@@ -217,6 +218,25 @@ static void capture_tests(void) {
         assert(s.entry_reason==(k==0 ? ST_HSO_REASON_FREQUENCY : ST_HSO_REASON_FLUX));
     }
     puts("PASS: CAPTURE frequency/energy ripple filtering, 100 ms settle + bounded 200 ms quality window, 2.5% total/2 ms run limits, raw final-frame entry, persistent reset cause/angle/frequency/energy diagnostics, sustained faults rejected (ST binaries mocked)");
+}
+static void control_fault_details(void) {
+    for(unsigned high=0;high<2;++high) {
+        init();assert(StHso_Start(10));reach_control();
+        float reference=state().reference_flux_wb;
+        binary_flux=reference*(high ? 2.0f : .25f);
+        for(unsigned i=0;i<20;++i) step();
+        StHsoSnapshot s=state();
+        assert(!StHso_IsRunning() && s.reason==ST_HSO_REASON_FLUX);
+        /* Reproduce the diagnostic ambiguity: H Actual is valid while the
+         * independently supplied corrected EMF violates its amplitude gate. */
+        assert(fabsf(s.flux_wb-reference)<1e-6f);
+        assert(s.capture_reason==(high ? ST_HSO_REASON_EMF_HIGH : ST_HSO_REASON_EMF_LOW));
+        assert(fabsf(s.capture_emf_ratio-(high ? 2.0f : .25f))<.001f);
+        float ratio=s.capture_emf_ratio;
+        StHso_Stop();for(unsigned i=0;i<10;++i)step();
+        assert(state().capture_emf_ratio==ratio && state().capture_reason==s.capture_reason);
+    }
+    puts("PASS: CONTROL still trips after 20 bad EMF samples with valid observer flux; latched HIGH/LOW detail and EMF ratio survive Stop");
 }
 static void command_floor_tests(void) {
     const MotorParams *motors[]={&MOTOR_2804,&MOTOR_4015};
@@ -333,13 +353,14 @@ int main(void) {
     assert(state().entry_reason==ST_HSO_REASON_FLUX_RIPPLE);
     assert(!strcmp(StHso_ReasonText(ST_HSO_REASON_EMF_LOW),"EMF LOW"));
     assert(!strcmp(StHso_ReasonText(ST_HSO_REASON_LEARN_TIMEOUT),"FLUX TIMEOUT"));
-    for(unsigned reason=0;reason<=ST_HSO_REASON_PHASE_DRIFT;++reason)
+    for(unsigned reason=0;reason<=ST_HSO_REASON_EMF_HIGH;++reason)
         assert(strlen(StHso_ReasonText((StHsoReason)reason))<16U);
     for(unsigned state_id=0;state_id<=ST_HSO_FAULT;++state_id)
         assert(strlen(StHso_StateText((StHsoState)state_id))<16U);
     capture_tests();
     phase_capture_tests();
     voltage_alignment_tests();
+    control_fault_details();
     puts("PASS: whole-electrical-cycle EMF averages, no favourable-sample selection, zero-mean phase ripple in both directions and low speed, finite candidate diagnostics, strength/direction/phase/variance rejection, timeout retains failing gate (ST binaries mocked)");
     puts("PASS: encoder-free RsDC-style current alignment, I/F flux bootstrap, qualified HSO takeover, both directions, current ramp, no-EMF/alignment timeout, sample/sequence/range/timing/angle faults, idle admission and explicit restart (ST binaries mocked)");
     sensorless_position_tests();

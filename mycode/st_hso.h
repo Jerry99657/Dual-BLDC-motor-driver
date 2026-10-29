@@ -28,7 +28,8 @@ typedef enum {
     ST_HSO_REASON_FREQUENCY, ST_HSO_REASON_FLUX, ST_HSO_REASON_NUMERIC,
     ST_HSO_REASON_TIMING, ST_HSO_REASON_STARTUP, ST_HSO_REASON_STANDSTILL,
     ST_HSO_REASON_SETTLE, ST_HSO_REASON_EMF_LOW, ST_HSO_REASON_FLUX_RIPPLE,
-    ST_HSO_REASON_LEARN_TIMEOUT, ST_HSO_REASON_CAPTURE_TIMEOUT, ST_HSO_REASON_PHASE_DRIFT
+    ST_HSO_REASON_LEARN_TIMEOUT, ST_HSO_REASON_CAPTURE_TIMEOUT, ST_HSO_REASON_PHASE_DRIFT,
+    ST_HSO_REASON_EMF_HIGH /* Diagnostic detail; existing protection codes unchanged. */
 } StHsoReason;
 
 typedef struct {
@@ -49,7 +50,7 @@ typedef struct {
     uint32_t qualified_samples;
     uint32_t bad_samples; /* Consecutive soft hold failures; 20 => lost. */
     uint32_t capture_resets;
-    StHsoReason capture_reason; /* Last qualification reset; survives good frames/Stop. */
+    StHsoReason capture_reason; /* Last capture reset OR CONTROL fault detail; retained on Stop. */
     float capture_angle_rad, capture_frequency_error_hz, capture_emf_ratio;
     float capture_drift_rad; /* Last reset: phase change from frozen window anchor. */
     float emf_offset_v,emf_offset_limit_v; /* Max absolute alpha/beta DC correction / per-axis limit, volts. */

@@ -150,6 +150,7 @@ __attribute__((noinline,noclone)) void JerryFOC_useCurrentLoop(uint8_t enable)
     JerryFOC_ResetPID(&vel_loop_M0);
     JerryFOC_ResetPID(&iq_loop_M0);
     JerryFOC_ResetPID(&id_loop_M0);
+    m1_controllers.current_feedforward=0.0f;
     JerryFOC_Target_Iq = 0.0f;
     flag_use_current_loop = enable;
     __set_PRIMASK(primask);
@@ -248,11 +249,52 @@ __attribute__((noinline)) float JerryFOC_CurrentPI(PIDController *pid,float erro
     float integral=pid->integral_prev+pid->I*0.00005f*(error+pid->error_prev);
     pid->integral_prev=symmetric_limit(integral,pid->limit);
     pid->error_prev=error;
-    return symmetric_limit(pid->P*error+pid->integral_prev,pid->limit);
+    /* Keep the complete request for vector saturation/back-calculation after
+     * adding feedforward. Clipping P+I here hides saturation from anti-windup. */
+    return pid->P*error+pid->integral_prev;
 }
 __attribute__((noinline)) void JerryFOC_TrackCurrent(PIDController *pid,float applied,float requested)
 {
+    if (!isfinite(applied) || !isfinite(requested)) {
+        JerryFOC_ResetPID(pid); return;
+    }
     pid->integral_prev=symmetric_limit(pid->integral_prev+0.2f*(applied-requested),pid->limit);
+}
+
+__attribute__((noinline,noclone)) void JerryFOC_CurrentControl(MotorAxis axis,
+    MotorControllers *loops,float angle,float speed,float target_d,float target_q,float id,float iq)
+{
+    bool hso=axis==MOTOR_AXIS_1 && MotorControl_HsoAllowed();
+    float ffq=0.0f,ffd=0.0f;
+    if (hso) {
+        /* HSO uses PI-only voltage control during startup AND CONTROL.
+         * Never transfer encoder FF state into its integrators or enable
+         * model voltage later. The observer still receives measured U/I. */
+        loops->current_feedforward=0.0f;
+    } else {
+        const MotorParams *m=MotorParams_GetAxis(axis);
+        float w=speed*(float)m->pole_pairs;
+        if (!isfinite(w)) w=0.0f;
+        float previous_gain=loops->current_feedforward;
+        float gain=fminf(1.0f,previous_gain+0.002f);
+        ffq=w*(m->psi_f+m->Ls*id);ffd=-w*m->Ls*iq;
+        float gain_change=gain-previous_gain;
+        if (gain_change!=0.0f) {
+            /* Only enable-gain transfer is bumpless; real speed/current
+             * changes retain their encoder-mode feedforward response. */
+            loops->q.integral_prev=symmetric_limit(loops->q.integral_prev-gain_change*ffq,loops->q.limit);
+            loops->d.integral_prev=symmetric_limit(loops->d.integral_prev-gain_change*ffd,loops->d.limit);
+        }
+        loops->current_feedforward=gain;
+        ffq*=gain;ffd*=gain;
+    }
+    float uq=JerryFOC_CurrentPI(&loops->q,target_q-iq)+ffq;
+    float ud=JerryFOC_CurrentPI(&loops->d,target_d-id)+ffd;
+    float aq,ad;
+    bool blocked=axis==MOTOR_AXIS_1 && !JerryFOC_isDriveReady();
+    JerryFOC_setAxisVoltage(axis,blocked ? 0.0f : uq,blocked ? 0.0f : ud,angle,&aq,&ad);
+    JerryFOC_TrackCurrent(&loops->q,aq,uq);
+    JerryFOC_TrackCurrent(&loops->d,ad,ud);
 }
 
 __RAM_FUNC static float _normalizeAngle(float angle)
@@ -322,7 +364,7 @@ __RAM_FUNC void JerryFOC_setAxisVoltage(MotorAxis axis, float Uq, float Ud, floa
     if ((unsigned)axis >= MOTOR_AXIS_COUNT) return;
     const MotorParams *motor=MotorParams_GetAxis(axis);
     float bus_voltage = MotorSampling_GetBusVoltage();
-    if (!MotorSampling_IsAxisReady(axis) || bus_voltage < 1.0f ||
+    if (!MotorSampling_IsAxisReady(axis) || !isfinite(bus_voltage) || bus_voltage < 1.0f ||
         !isfinite(Uq) || !isfinite(Ud) || !isfinite(angle_el)) {
         setAxisPwm(axis,0.5f,0.5f,0.5f);
         if (applied_q) *applied_q=0.0f;
@@ -476,11 +518,13 @@ __attribute__((noinline,noclone)) void JerryFOC_InitControllers(MotorControllers
     JerryFOC_InitPID(&c->pos,m->pos_P,0,MOTOR_DEFAULT_POSITION_SPEED,0);
     JerryFOC_InitPID(&c->d,m->Ls*MOTOR_CURRENT_BANDWIDTH_RAD_S,m->Rs*MOTOR_CURRENT_BANDWIDTH_RAD_S,m->bus_voltage,100000.0f);
     c->q=c->d;
+    c->current_feedforward=0.0f;
 }
 __attribute__((noinline,noclone)) void JerryFOC_ResetControllers(MotorControllers *c)
 {
     JerryFOC_ResetPID(&c->vel); JerryFOC_ResetPID(&c->pos);
     JerryFOC_ResetPID(&c->q); JerryFOC_ResetPID(&c->d);
+    c->current_feedforward=0.0f;
 }
 __attribute__((noinline)) void JerryFOC_ResetPID(PIDController *pid)
 {
@@ -810,11 +854,8 @@ __RAM_FUNC void JerryFOC_run(void)
     if (!isfinite(target_iq)) target_iq = 0.0f;
     float target_id = 0.0f;
     if (MotorControl_HsoAllowed()) StHso_BlendCurrent(&target_id,&target_iq);
-    float Uq = 0.0f;
-    float Ud = 0.0f;
-
     if (!flag_use_current_loop) {
-        Uq = target_iq;
+        JerryFOC_setPhaseVoltage(target_iq,0.0f,electrical_angle);
     } else {
         /* Also enforce this at the fast-loop boundary: the velocity outer
          * loop and external application code can write Target_Iq directly. */
@@ -824,16 +865,8 @@ __RAM_FUNC void JerryFOC_run(void)
          * request. Feeding it back here would blend the same request again
          * on each of the ten fast-loop ticks and distort startup torque. */
         if (!MotorControl_HsoAllowed()) JerryFOC_Target_Iq = target_iq;
-        Uq=JerryFOC_CurrentPI(&iq_loop_M0,target_iq-iq_current);
-        Ud=JerryFOC_CurrentPI(&id_loop_M0,target_id-id_current);
-    }
-
-    JerryFOC_setPhaseVoltage(Uq, Ud, electrical_angle);
-
-    /* 矢量限幅后的实际电压回算到 PI，抑制饱和时的积分累积。 */
-    if (flag_use_current_loop) {
-        JerryFOC_TrackCurrent(&iq_loop_M0,foc.g_shared_prev_Uq,Uq);
-        JerryFOC_TrackCurrent(&id_loop_M0,foc.g_shared_prev_Ud,Ud);
+        JerryFOC_CurrentControl(MOTOR_AXIS_1,&m1_controllers,electrical_angle,
+            filtered_velocity_global,target_id,target_iq,id_current,iq_current);
     }
 }
 

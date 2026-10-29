@@ -1,4 +1,5 @@
 #include <assert.h>
+#include <math.h>
 #include <stdio.h>
 #include <string.h>
 #include "MT6701.h"
@@ -6,6 +7,7 @@
 void SpiPort_Service(SPI_HandleTypeDef *h) { (void)h; }
 #include "w25q64.h"
 #include "app_storage.h"
+#include "angle_src_encoder.h"
 
 GPIO_TypeDef gpio_a={0xFFFFU},gpio_b={0xFFFFU};
 SPI_TypeDef spi1,spi2,spi3;
@@ -623,12 +625,61 @@ static void check_busy_admission(void) {
     }
     puts("PASS: reported 4/0/00/03 deferred without duplicate erase/retry or false Saved, original snapshot + deadline, continuous SR1 busy confirmation, stale main timestamps and tick-wrap BUSY timeout");
 }
+/* Native SSI test frames use polynomial long division, independent of the
+ * driver's shift-register implementation. Status 4 also permits raw angle 0
+ * without injecting the deliberately rejected all-zero/disconnected frame. */
+static uint32_t native_frame(uint16_t raw) {
+    uint32_t message=((uint32_t)raw<<4)|4U, remainder=message<<6;
+    for(int bit=23;bit>=6;--bit)
+        if(remainder&(1UL<<bit)) remainder^=0x43UL<<(bit-6);
+    return (message<<6)|remainder;
+}
+static void check_calibration_direction(void) {
+    const float count_rad=6.28318530718f/16384.0f;
+    for(unsigned model=0;model<2;++model) for(int raw_sign=-1;raw_sign<=1;raw_sign+=2)
+    for(unsigned bank=0;bank<4;++bank) for(int motion=-1;motion<=1;motion+=2) {
+        int poles=model ? 11 : 7;
+        MotorCalibration r={((model+1U)<<24)|(1920U<<8)|(uint8_t)(raw_sign*poles),440,9290};
+        MotorProfile profile=(MotorProfile)model;
+        if(bank) {
+            assert(MotorParams_SetCustom(bank-1,&r));
+            profile=(MotorProfile)(MOTOR_PROFILE_CUSTOM1+bank-1);
+        } else assert(MotorParams_SetCalibration(MOTOR_AXIS_1,&r));
+        assert(MotorParams_SelectAxis(MOTOR_AXIS_1,profile));
+        const MotorParams *m=MotorParams_GetActive();
+        early1=true;payload=native_frame(16380);MT6701_StartContinuous();
+        assert(MT6701_IsHealthy() && MT6701_GetRawAngle()==16380);
+        AngleSource *source=AngleSrc_Encoder_Init(m->pole_pairs*m->encoder_direction);
+        AngleSrc_Encoder_Align(.37f);
+        unsigned sample=0;
+        for(unsigned step=0;step<1000;++step) {
+            for(unsigned frame=0;frame<10;++frame) {
+                ++sample;
+                int raw=16380+raw_sign*motion*(int)sample*10;
+                payload=native_frame((uint16_t)((unsigned)raw&16383U));
+                MT6701_Service();
+                assert(MT6701_IsHealthy() && MT6701_GetRawAngle()==(raw&16383));
+            }
+            AngleSrc_Encoder_Update(.001f);++tick;
+            float position=motion*(float)(sample*10)*count_rad;
+            float error=source->getElectricalAngle()-(.37f+poles*position);
+            assert(fabsf(atan2f(sinf(error),cosf(error)))<.001f);
+            /* Multi-turn binary32 accumulation may drift by a count. */
+            assert(fabsf(source->getMechanicalAngle()-position)<2*count_rad);
+            if(step>=4) assert(fabsf(source->getVelocity()-motion*100000.0f*count_rad)<.01f);
+        }
+        assert((int8_t)r.poles_rs==raw_sign*poles); /* Storage/detection convention unchanged. */
+        MT6701_StopContinuous();
+    }
+    puts("PASS: real SSI CRC/DMA decoder -> calibrated/Custom profile -> encoder source: both raw polarities, both motors, forward/reverse 38rad/s, multi-turn/zero crossing and aligned electrical feedback");
+}
 int main(int argc,char **argv) {
     flash_cr1=spi2.CR1=SPI_MODE_MASTER|SPI_NSS_SOFT|SPI_BAUDRATEPRESCALER_8;
     flash_cr2=spi2.CR2=SPI_DATASIZE_8BIT|SPI_RXFIFO_THRESHOLD_QF;
     memset(flash,255,sizeof(flash));
     if(argc>1) {
-        if(strcmp(argv[1],"m1-recovery")==0) check_m1_recovery();
+        if(strcmp(argv[1],"calibration-direction")==0) check_calibration_direction();
+        else if(strcmp(argv[1],"m1-recovery")==0) check_m1_recovery();
         else if(strcmp(argv[1],"m2-recovery")==0) check_m2_recovery();
         else if(strcmp(argv[1],"required-retry")==0) check_required_retry(false);
         else if(strcmp(argv[1],"required-retry-wrap")==0) check_required_retry(true);

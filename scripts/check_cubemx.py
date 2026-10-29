@@ -54,7 +54,36 @@ def audit(root):
     spi, irq = read('Core/Src/spi.c'), read('Core/Src/stm32g4xx_it.c')
     dma = read('Core/Src/dma.c')
     errors = []
+    # ST's public size option only removes an unused capability. PMA layout
+    # and buffering remain generated; reject future incompatible regeneration.
+    build_file = root / 'CMakeLists.txt'
+    if build_file.exists() and re.search(r'\bUSE_USB_DOUBLE_BUFFER=0U?\b', clean(build_file.read_text(encoding='utf-8'))):
+        usb_file = root / 'USB_Device/Target/usbd_conf.c'
+        if not usb_file.exists():
+            errors.append('USB single-buffer build: missing generated usbd_conf.c; review PMA configuration')
+        else:
+            pma = re.findall(r'\bHAL_PCDEx_PMAConfig\s*\([^;]+;', clean(usb_file.read_text(encoding='utf-8')))
+            if not pma or any(call.split(',')[-2].strip() != 'PCD_SNG_BUF' for call in pma):
+                errors.append('USB: USE_USB_DOUBLE_BUFFER=0 requires every generated PMA endpoint to use PCD_SNG_BUF; restore ST double-buffer support before selecting double buffers in CubeMX')
     projects = list(root.glob('*.ioc'))
+    usb_header = root / 'USB_Device/Target/usbd_conf.h'
+    if usb_header.exists():
+        header=clean(usb_header.read_text(encoding='utf-8'))
+        match=re.search(r'^\s*#define\s+USBD_LPM_ENABLED\s+([01])U?\b',header,re.M)
+        config=read('USB_Device/Target/usbd_conf.c')
+        if not match or [x.strip() for x in assignments(config,'hpcd_USB_FS.Init.lpm_enable')] != ['ENABLE' if match.group(1)=='1' else 'DISABLE']:
+            errors.append('USB: middleware USBD_LPM_ENABLED and generated PCD lpm_enable must agree; configure both in CubeMX')
+        elif match.group(1)=='1':
+            descriptors=read('USB_Device/App/usbd_desc.c')
+            table=re.search(r'\bCDC_Desc\s*=\s*\{([^}]+)\}',descriptors)
+            entries=table.group(1).split(',') if table else []
+            if len(entries)<8 or entries[7].strip() in ('','NULL','0'):
+                errors.append('USB LPM: generate a valid BOS descriptor callback before enabling LPM support')
+        if projects:
+            ioc=projects[0].read_text(encoding='utf-8')
+            saved=re.search(r'^USB_DEVICE.USBD_LPM_ENABLED=([01])$',ioc,re.M)
+            if saved and match and saved.group(1)!=match.group(1):
+                errors.append('USB LPM: saved IOC and generated header differ; regenerate the USB code')
     if projects and 'ProjectManager.KeepUserCode=true' not in projects[0].read_text(encoding='utf-8'):
         errors.append('CubeMX: enable Keep User Code when re-generating to preserve the runtime IRQ integration')
 

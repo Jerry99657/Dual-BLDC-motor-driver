@@ -37,6 +37,12 @@ parser.add_argument("--allow-settings-user-build",action="store_true",
                     help="Permit only the exact R99 user settings service CMake source/flags addition")
 parser.add_argument("--allow-key-startup-user-code",action="store_true",
                     help="Permit only the R103 main USER CODE cold-start KEY1 RC settling delay")
+parser.add_argument("--allow-usb-single-buffer",action="store_true",
+                    help="Permit only ST's public USE_USB_DOUBLE_BUFFER=0U definition in the root CMake file")
+parser.add_argument("--allow-usb-lpm",action="store_true",
+                    help="Permit only the R109 saved CubeMX LPM=0 setting and its native generated USB changes")
+parser.add_argument("--allow-encoder-user-build",action="store_true",
+                    help="Permit only the R110 user encoder estimator source and its existing Os/LTO flags")
 args = parser.parse_args()
 OUT = ROOT / args.directory
 LABEL = args.label
@@ -321,7 +327,38 @@ else:
     if baseline["protected"] != report["protected"]:
         changed = [name for name in set(baseline["protected"]) | set(report["protected"])
                    if baseline["protected"].get(name) != report["protected"].get(name)]
-        if args.allow_key_startup_user_code:
+        if args.allow_usb_lpm:
+            allowed={'FOC_two.ioc','USB_Device/Target/usbd_conf.h','USB_Device/Target/usbd_conf.c'}
+            assert set(changed)==allowed,changed
+            for name in allowed:
+                assert sha(OUT/name)==baseline['protected'][name],name
+                assert sha(ROOT/name)==sha(OUT/'cubemx/lpm-off/FOC_two'/name),'Not the verified CubeMX output: '+name
+            before=(OUT/'FOC_two.ioc').read_text(encoding='utf-8')
+            expected=before.replace('USB_DEVICE.IPParameters=VirtualMode,VirtualModeFS,CLASS_NAME_FS\n',
+                'USB_DEVICE.IPParameters=VirtualMode,VirtualModeFS,CLASS_NAME_FS,USBD_LPM_ENABLED\nUSB_DEVICE.USBD_LPM_ENABLED=0\n')
+            assert (ROOT/'FOC_two.ioc').read_text(encoding='utf-8')==expected,'Unexpected IOC change'
+            before=(OUT/'USB_Device/Target/usbd_conf.h').read_text(encoding='utf-8')
+            assert (ROOT/'USB_Device/Target/usbd_conf.h').read_text(encoding='utf-8')==before.replace('#define USBD_LPM_ENABLED     1U','#define USBD_LPM_ENABLED     0U')
+            before=(OUT/'USB_Device/Target/usbd_conf.c').read_text(encoding='utf-8')
+            before=before.replace('  HAL_PCD_RegisterLpmCallback(&hpcd_USB_FS, PCDEx_LPM_Callback);\n','')
+            start=before.index('/**\n  * @brief  Send LPM message to user layer')
+            end=before.index('/**\n  * @brief  Delays routine for the USB Device Library.',start)
+            expected=before[:start]+before[end:]
+            assert (ROOT/'USB_Device/Target/usbd_conf.c').read_text(encoding='utf-8')==expected,'Unexpected generated USB change'
+            report['permitted_user_changes']=sorted(changed)
+        elif args.allow_usb_single_buffer:
+            assert set(changed)=={'CMakeLists.txt'},changed
+            before=(OUT/'CMakeLists.txt').read_text(encoding='utf-8')
+            assert sha(OUT/'CMakeLists.txt')==baseline['protected']['CMakeLists.txt']
+            addition='''
+# All generated USB PMA endpoints use PCD_SNG_BUF. Apply ST's public option
+# consistently to the PCD/USB sources and application; CubeMX owns setup.
+target_compile_definitions(stm32cubemx INTERFACE USE_USB_DOUBLE_BUFFER=0U)
+'''
+            expected=before.replace('add_subdirectory(cmake/stm32cubemx)\n','add_subdirectory(cmake/stm32cubemx)\n'+addition)
+            assert (ROOT/'CMakeLists.txt').read_text(encoding='utf-8')==expected,'Unexpected USB build change'
+            report['permitted_user_changes']=changed
+        elif args.allow_key_startup_user_code:
             assert changed==["Core/Src/main.c"],changed
             name="Core/Src/main.c"
             assert sha(OUT/name)==baseline["protected"][name],"Invalid baseline main.c"
@@ -334,6 +371,17 @@ else:
             assert before.count(anchor)==1
             expected=before.replace(anchor,addition+anchor)
             assert (ROOT/name).read_text(encoding="utf-8")==expected,"Unexpected main.c change"
+            report["permitted_user_changes"]=changed
+        elif args.allow_encoder_user_build:
+            assert changed==["CMakeLists.txt"],changed
+            before=(OUT/"CMakeLists.txt").read_text(encoding="utf-8")
+            assert sha(OUT/"CMakeLists.txt")==baseline["protected"]["CMakeLists.txt"]
+            source='    mycode/angle_src_encoder.c\n'
+            flags='mycode/angle_src_encoder.c PROPERTIES COMPILE_OPTIONS "-Os;-flto")'
+            assert before.count(source)==1 and before.count(flags)==1
+            expected=before.replace(source,source+'    mycode/encoder_estimator.c\n')
+            expected=expected.replace(flags,'mycode/angle_src_encoder.c mycode/encoder_estimator.c PROPERTIES COMPILE_OPTIONS "-Os;-flto")')
+            assert (ROOT/"CMakeLists.txt").read_text(encoding="utf-8")==expected,"Unexpected build configuration change"
             report["permitted_user_changes"]=changed
         elif args.allow_settings_user_build:
             assert changed==["CMakeLists.txt"],changed
@@ -377,7 +425,14 @@ else:
             report["permitted_user_changes"]=sorted(changed)
         else:
             raise SystemExit("Protected files changed: " + ", ".join(sorted(changed)))
-    if not args.allow_native_ll_init and baseline["commands"] != report["commands"]:
+    if args.allow_usb_single_buffer:
+        for mode in ('Debug','Release'):
+            assert set(report['commands'][mode])==set(baseline['commands'][mode]),mode
+            for name,command in report['commands'][mode].items():
+                assert isinstance(command,str) and command.count('-DUSE_USB_DOUBLE_BUFFER=0U ')==1,(mode,name)
+                assert command.replace('-DUSE_USB_DOUBLE_BUFFER=0U ','')==baseline['commands'][mode][name],(mode,name)
+        report['permitted_compile_definition']='USE_USB_DOUBLE_BUFFER=0U'
+    elif not args.allow_native_ll_init and baseline["commands"] != report["commands"]:
         raise SystemExit("Official/core compilation commands changed.")
     for mode, current in report["images"].items():
         current["saved_bytes"] = baseline["images"][mode]["flash_bytes"] - current["flash_bytes"]
@@ -386,5 +441,7 @@ for mode, current in report["images"].items():
     print(mode, json.dumps({k: v for k, v in current.items() if k != "largest_functions"}))
 print("Protected files:", len(report["protected"]),
       "; official/core compile commands", "recorded." if LABEL == "baseline" else "verified.")
+if "permitted_compile_definition" in report:
+    print("Verified public ST configuration change:",report["permitted_compile_definition"])
 if "permitted_user_changes" in report:
     print("Verified application-only exceptions:",", ".join(report["permitted_user_changes"]))

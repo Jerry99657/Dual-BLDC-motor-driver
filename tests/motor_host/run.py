@@ -13,6 +13,8 @@ compiler = shutil.which("gcc") or "gcc"
 subprocess.run([sys.executable, "tests/motor_host/check_spi_clock.py"],
                cwd=repo, check=True)
 suites = {
+    "current": ["mycode/JerryFOC.c", "mycode/protocol.c", "mycode/number_parse.c", "mycode/motor_params.c", "tests/motor_host/test_current.c"],
+    "estimator": ["mycode/encoder_estimator.c","tests/motor_host/test_estimator.c"],
     "angle": ["mycode/angle_src_encoder.c","mycode/motor_math.c","tests/motor_host/test_angle.c"],
     "detect": ["mycode/JerryFOC.c", "mycode/motor_control.c", "mycode/protocol.c", "mycode/number_parse.c", "mycode/motor_params.c", "tests/motor_host/test_detect.c"],
     "control": ["mycode/JerryFOC.c", "mycode/motor_control.c", "mycode/protocol.c", "mycode/number_parse.c", "mycode/motor_params.c", "tests/motor_host/test_control.c"],
@@ -25,7 +27,7 @@ suites = {
     "sixstep_wave": ["mycode/motor_sixstep.c", "mycode/motor_params.c", "tests/motor_host/test_sixstep_wave.c"],
     "sixstep_plant": ["mycode/motor_sixstep.c", "mycode/motor_params.c", "tests/motor_host/test_sixstep_plant.c"],
     "sampling": ["mycode/motor_sampling.c", "mycode/motor_params.c", "tests/motor_host/test_sampling.c"],
-    "encoder": ["mycode/MT6701.c", "mycode/w25q64.c", "mycode/app_storage.c", "tests/motor_host/test_encoder.c"],
+    "encoder": ["mycode/MT6701.c", "mycode/w25q64.c", "mycode/app_storage.c", "mycode/motor_params.c", "mycode/angle_src_encoder.c", "mycode/motor_math.c", "tests/motor_host/test_encoder.c"],
     "foc": ["mycode/JerryFOC.c", "mycode/protocol.c", "mycode/number_parse.c", "mycode/motor_params.c", "tests/motor_host/test_foc.c"],
     "hso": ["mycode/st_hso.c", "mycode/motor_params.c", "tests/motor_host/test_hso.c"],
     "protocol": ["mycode/protocol.c", "mycode/number_parse.c", "mycode/motor_params.c", "tests/motor_host/test_protocol.c"],
@@ -41,12 +43,14 @@ if not selected or "sampling" in selected:
 for name, sources in suites.items():
     if selected and name not in selected: continue
     sources += ["tests/diag_stub.c"]
+    if name in ("angle","encoder","detect","control","sensorless"):
+        sources += ["mycode/encoder_estimator.c"]
     if "mycode/protocol.c" in sources: sources += ["tests/motor_host/app_stub.c"]
     if name in ("detect","control","sensorless"): sources += ["mycode/motor_sixstep.c","mycode/motor_detect.c"]
-    if name in ("foc","protocol","telemetry","justfloat"):
+    if name in ("current","foc","protocol","telemetry","justfloat"):
         sources += ["tests/motor_host/control_stub.c"]
     if name in ("protocol","telemetry","justfloat"): sources += ["tests/motor_host/telemetry_stubs.c"]
-    if name in ("foc","control","sensorless","detect","sixstep","sixstep_wave","sixstep_plant"):
+    if name in ("current","foc","control","sensorless","detect","sixstep","sixstep_wave","sixstep_plant"):
         sources += ["mycode/motor_math.c"]
     command = [compiler, "-std=c11", "-Wall", "-Wextra", "-Werror", "-O1",
                "-Itests/motor_host", "-Imycode", "-IThirdParty/ST_HSO", *sources, "-lm", "-o", str(out / (name + ".exe"))]
@@ -93,5 +97,5 @@ for name, sources in suites.items():
         for scenario in ("diag-optional", "ibus", "ibus-wrap", "ibus-shared", "ibus-dac-set", "ibus-dac-start", "ibus-comp-start", "ibus-runtime", "ibus-high-start", "ibus-startup-pulse", "global", "global-wrap", "stop-source", "six-outputs"):
             subprocess.run([str(out / "sampling.exe"),scenario],cwd=repo,check=True)
     if name == "encoder":
-        for scenario in ("missing", "timeout", "missing-wrap", "m1-recovery", "m2-recovery", "required-retry", "required-retry-wrap", "zero-m1", "zero-m2", "zero-poll", "hso-save", "busy-admission", "flash-init"):
+        for scenario in ("calibration-direction", "missing", "timeout", "missing-wrap", "m1-recovery", "m2-recovery", "required-retry", "required-retry-wrap", "zero-m1", "zero-m2", "zero-poll", "hso-save", "busy-admission", "flash-init"):
             subprocess.run([str(out / "encoder.exe"), scenario], cwd=repo, check=True)

@@ -4,6 +4,7 @@
 #include "motor_sampling.h"
 #include "MT6701.h"
 #include "angle_src_encoder.h"
+#include "encoder_estimator.h"
 #include "app_storage.h"
 #include "st_hso.h"
 #include "motor_sixstep.h"
@@ -11,17 +12,17 @@
 #include <string.h>
 #include "motor_math.h"
 
-/* M1 retains its proven encoder/HSO controller. M2 owns all estimator, PI,
- * calibration and run state below; only math/modulation and sampling are shared. */
+/* Both axes share encoder estimation code, with separate state. M1 retains
+ * its encoder/HSO mux; M2 owns its PI, calibration and run state below. */
 typedef struct {
     MotorControllers loops;
     LowPassFilter speed_filter;
-    float sensor_prev, position, velocity, electrical_zero, history[4],electrical_scale;
+    EncoderEstimator encoder;
+    float velocity, electrical_zero, electrical_scale;
     float reference, target_speed, target_position, target_q, position_speed;
     float iq, id, ia, ib;
-    uint32_t samples, align_at;
-    uint8_t history_index, history_count;
-    bool initialized, was_healthy, aligned, aligning, pending_align, loop;
+    uint32_t align_at;
+    bool aligned, aligning, pending_align, loop;
     JerryFOC_ControlMode mode;
     const char *stop_reason;
 } Motor2Controller;
@@ -490,7 +491,7 @@ __attribute__((noinline,noclone)) void MotorControl_GetAxis(MotorAxis axis,Motor
 
         out->mode=control.m2.mode;
         out->velocity=control.m2.velocity;
-        out->position=control.m2.position;
+        out->position=control.m2.encoder.position;
         out->electrical_angle=norm(control.m2.electrical_scale*enc.angle-control.m2.electrical_zero);
         out->iq=control.m2.iq;
         out->id=control.m2.id;
@@ -548,7 +549,7 @@ static bool can_start(MotorAxis axis)
     else if (!s.ready && !(axis==MOTOR_AXIS_1 && JerryFOC_hasHSOFault() &&
              MotorSampling_IsAxisReady(axis))) command_text=s.status;
     else if (!s.healthy) command_text=MotorControl_EncoderLostText(axis);
-    else if (axis==MOTOR_AXIS_2 && control.m2.history_count<4U) command_text="ENCODER SETTLE";
+    else if (axis==MOTOR_AXIS_2 && control.m2.encoder.count<ENCODER_VELOCITY_WINDOW) command_text="ENCODER SETTLE";
     else if (!isfinite(s.position) || !isfinite(s.velocity)) command_text="ENCODER VALUE";
     else if (MotorControl_IsPassive(axis)) {
         if (!s.active && !s.aligning) return true;
@@ -608,7 +609,7 @@ __attribute__((noinline,noclone,optimize("Oz"))) bool MotorControl_StartFollow(v
     if (!can_start(master) || !can_start(slave)) { __set_PRIMASK(mask); return false; }
     stop_axis(master);
     if (!MT6701_2_Reserve(true)) { command_text="SPI2 BUSY"; __set_PRIMASK(mask); return false; }
-    control.origins[0]=JerryFOC_getAngle(); control.origins[1]=control.m2.position;
+    control.origins[0]=JerryFOC_getAngle(); control.origins[1]=control.m2.encoder.position;
     control.group_reference=control.origins[slave];
     control.group_speed=slave==MOTOR_AXIS_1 ? JerryFOC_getVelocity() : control.m2.velocity;
     uint32_t flags=MotorControl_GetOptions(slave);
@@ -794,8 +795,8 @@ void MotorControl_Service(uint32_t now)
         bool ok=enc.healthy && MotorSampling_IsAxisReady(MOTOR_AXIS_2) && now-control.m2.align_at>=3000U;
         if (ok) {
             control.m2.electrical_zero=norm(control.m2.electrical_scale*enc.angle);
-            control.m2.position=control.m2.velocity=0.0f; control.m2.sensor_prev=enc.angle;
-            memset(control.m2.history,0,sizeof(control.m2.history)); control.m2.history_count=control.m2.history_index=0;
+            EncoderEstimator_Reset(&control.m2.encoder,enc.angle,enc.samples,true);
+            control.m2.velocity=0.0f;
             control.m2.speed_filter.y_prev=0.0f; control.m2.aligned=true; control.m2.stop_reason=NULL;
         }
         stop_axis(MOTOR_AXIS_2);
@@ -858,42 +859,27 @@ void MotorControl_Fast(void)
         return;
     }
     if (!control.m2.aligned) { MotorControl_Stop(MOTOR_AXIS_2); return; }
-    float uq=control.m2.target_q,ud=0,aq,ad;
     if (control.m2.loop) {
         float cap=MotorParams_GetAxis(MOTOR_AXIS_2)->rated_current;
-        uq=JerryFOC_CurrentPI(&control.m2.loops.q,clamp(control.m2.target_q,-cap,cap)-control.m2.iq);
-        ud=JerryFOC_CurrentPI(&control.m2.loops.d,-control.m2.id);
-    }
-    JerryFOC_setAxisVoltage(MOTOR_AXIS_2,uq,ud,angle,&aq,&ad);
-    if (control.m2.loop) {
-        JerryFOC_TrackCurrent(&control.m2.loops.q,aq,uq);
-        JerryFOC_TrackCurrent(&control.m2.loops.d,ad,ud);
-    }
+        JerryFOC_CurrentControl(MOTOR_AXIS_2,&control.m2.loops,angle,control.m2.velocity,
+            0.0f,clamp(control.m2.target_q,-cap,cap),control.m2.id,control.m2.iq);
+    } else JerryFOC_setAxisVoltage(MOTOR_AXIS_2,control.m2.target_q,0,angle,NULL,NULL);
 }
 static void update_encoder2(void)
 {
     MT6701_2_Snapshot enc; MT6701_2_GetSnapshot(&enc);
-    if (!enc.healthy) { control.m2.was_healthy=false; control.m2.velocity=0.0f; return; }
-    if (enc.samples==control.m2.samples) return;
-    control.m2.samples=enc.samples;
-    if (!control.m2.initialized || !control.m2.was_healthy) {
-        control.m2.initialized=control.m2.was_healthy=true;
-        control.m2.sensor_prev=enc.angle;
-        for (unsigned i=0;i<4;++i) control.m2.history[i]=control.m2.position;
-        control.m2.history_count=control.m2.history_index=0; control.m2.speed_filter.y_prev=0; return;
+    bool accepted=EncoderEstimator_Update(&control.m2.encoder,enc.angle,enc.samples,
+        enc.healthy,MotorParams_GetAxis(MOTOR_AXIS_2)->encoder_direction,0.001f);
+    if (!control.m2.encoder.synced || !control.m2.encoder.count) {
+        control.m2.velocity=control.m2.speed_filter.y_prev=0.0f;
+    } else if (accepted) {
+        control.m2.velocity=JerryFOC_LPF_Calc(&control.m2.speed_filter,control.m2.encoder.velocity);
     }
-    float delta=enc.angle-control.m2.sensor_prev;
-    if (delta>PI) delta-=2.0f*PI;
-    if (delta< -PI) delta+=2.0f*PI;
-    control.m2.sensor_prev=enc.angle; control.m2.position+=delta*MotorParams_GetAxis(MOTOR_AXIS_2)->encoder_direction;
-    control.m2.velocity=JerryFOC_LPF_Calc(&control.m2.speed_filter,
-        MotorMath_WindowVelocity(control.m2.position,control.m2.history,
-            &control.m2.history_index,&control.m2.history_count,0.001f));
 }
 static void coordinate(void)
 {
     if (!control.group_active) return;
-    float positions[2]={JerryFOC_getAngle(),control.m2.position};
+    float positions[2]={JerryFOC_getAngle(),control.m2.encoder.position};
     float velocities[2]={JerryFOC_getVelocity(),control.m2.velocity};
     unsigned master=control.work==MOTOR_WORK_MASTER_M2 ? 1U : 0U, slave=1U-master;
     float k=ratio();
@@ -1031,14 +1017,14 @@ void MotorControl_Outer(void)
 {
     if (!MotorControl_AxisEnabled(MOTOR_AXIS_2)) return;
     BoardDiag_Motion(1U,control.m2.mode,control.m2.target_speed,control.m2.target_position,
-        control.m2.target_q,control.m2.velocity,control.m2.position);
+        control.m2.target_q,control.m2.velocity,control.m2.encoder.position);
     if (!MotorSampling_IsAxisOutputRequested(MOTOR_AXIS_2) || control.m2.aligning) {
         control.m2.reference=control.m2.velocity; JerryFOC_ResetPID(&control.m2.loops.vel); JerryFOC_ResetPID(&control.m2.loops.pos); return;
     }
     if (control.m2.mode==JERRYFOC_MODE_POSITION) {
         control.m2.loops.pos.limit=control.m2.position_speed;
         control.m2.target_speed=clamp(MotorControl_PositionVelocity(MOTOR_AXIS_2,&control.m2.loops.pos,
-            control.m2.target_position-control.m2.position),-control.m2.position_speed,control.m2.position_speed);
+            control.m2.target_position-control.m2.encoder.position),-control.m2.position_speed,control.m2.position_speed);
     }
     if (control.m2.mode!=JERRYFOC_MODE_TORQUE) {
         control.m2.reference=MotorControl_SpeedReference(MOTOR_AXIS_2,control.m2.reference,control.m2.target_speed);

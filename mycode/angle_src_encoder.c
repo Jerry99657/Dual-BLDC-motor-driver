@@ -1,40 +1,15 @@
 #include "angle_src_encoder.h"
 #include "MT6701.h"
-#include <math.h>
+#include "encoder_estimator.h"
 #include "motor_math.h"
 
-#ifndef PI
-#define PI 3.14159265358979323846f
-#endif
-
 /* ========== 编码器缓存：仅 AngleSrc_Encoder_Update() 修改 ========== */
-static float previous_sensor_angle = 0.0f;
-static float mechanical_angle = 0.0f;
-static float mechanical_velocity = 0.0f;
+static EncoderEstimator encoder;
 static float zero_electric_angle = 0.0f;
-static uint32_t last_sample_counter = 0U;
 static uint8_t encoder_aligned = 0U;
 static uint8_t encoder_initialized = 0U;
-static uint8_t encoder_was_healthy = 0U;
 static int pp = 7;             /* 极对数 */
 static int DIR = 1;            /* 方向：如果转向/电角度反了，改成 -1 */
-
-/* 4 ms 位置差分窗口把 MT6701 单计数对应的速度量化阶梯降至 1/4，
- * 随后仍由 JerryFOC 中的一阶低通抑制剩余噪声。 */
-#define ENCODER_VELOCITY_WINDOW 4U
-static float velocity_position_history[ENCODER_VELOCITY_WINDOW] = {0.0f};
-static uint8_t velocity_history_index = 0U;
-static uint8_t velocity_history_count = 0U;
-
-static void reset_velocity_estimator(void)
-{
-    for (uint8_t i = 0U; i < ENCODER_VELOCITY_WINDOW; i++) {
-        velocity_position_history[i] = mechanical_angle;
-    }
-    velocity_history_index = 0U;
-    velocity_history_count = 0U;
-    mechanical_velocity = 0.0f;
-}
 
 static float _normalizeAngle(float angle)
 {
@@ -51,12 +26,12 @@ static float angle_meas_electrical(void)
 
 static float angle_meas_mechanical(void)
 {
-    return mechanical_angle;
+    return encoder.position;
 }
 
 static float angle_meas_velocity(void)
 {
-    return mechanical_velocity;
+    return encoder.velocity;
 }
 
 static AngleSource encoder_src = {
@@ -71,15 +46,10 @@ AngleSource* AngleSrc_Encoder_Init(int pole_pairs)
     DIR=pole_pairs<0 ? -1 : 1;
     pp=pole_pairs*DIR;
     if (!pp) pp=1;
-    previous_sensor_angle = Angle;
-    mechanical_angle = 0.0f;
-    mechanical_velocity = 0.0f;
+    EncoderEstimator_Reset(&encoder,Angle,MT6701_GetSampleCounter(),false);
     zero_electric_angle = 0.0f;
-    last_sample_counter = MT6701_GetSampleCounter();
     encoder_aligned = 0U;
     encoder_initialized = 1U;
-    encoder_was_healthy = 0U;
-    reset_velocity_estimator();
     return &encoder_src;
 }
 
@@ -92,54 +62,17 @@ void AngleSrc_Encoder_Align(float electrical_angle_rad)
         (float)(DIR * pp) * sensor_angle - electrical_angle_rad);
 
     /* 标定完成位置定义为机械零点，并从同一份样本重新开始速度估算。 */
-    previous_sensor_angle = sensor_angle;
-    mechanical_angle = 0.0f;
-    mechanical_velocity = 0.0f;
-    last_sample_counter = MT6701_GetSampleCounter();
+    EncoderEstimator_Reset(&encoder,sensor_angle,MT6701_GetSampleCounter(),true);
     encoder_initialized = 1U;
     encoder_aligned = 1U;
-    encoder_was_healthy = 1U;
-    reset_velocity_estimator();
 }
 
 void AngleSrc_Encoder_Update(float sample_period_s)
 {
-    if (!encoder_initialized || sample_period_s <= 0.0f ||
-        !MT6701_IsHealthy()) {
-        encoder_was_healthy = 0U;
-        reset_velocity_estimator();
-        return;
-    }
-
+    bool healthy=encoder_initialized && MT6701_IsHealthy();
     uint32_t sample_counter = MT6701_GetSampleCounter();
-    if (sample_counter == last_sample_counter) {
-        return;
-    }
-    last_sample_counter = sample_counter;
-
     float sensor_angle = Angle;
-    if (!encoder_was_healthy) {
-        /* 失联期间经过的角度和时间未知，恢复首帧只用于重新同步，
-         * 不能把整段位移除以 1 ms 形成虚假速度尖峰。 */
-        previous_sensor_angle = sensor_angle;
-        encoder_was_healthy = 1U;
-        reset_velocity_estimator();
-        return;
-    }
-
-    float delta = sensor_angle - previous_sensor_angle;
-    if (delta > PI) {
-        delta -= 2.0f * PI;
-    } else if (delta < -PI) {
-        delta += 2.0f * PI;
-    }
-    previous_sensor_angle = sensor_angle;
-
-    delta *= (float)DIR;
-    mechanical_angle += delta;
-
-    mechanical_velocity=MotorMath_WindowVelocity(mechanical_angle,
-        velocity_position_history,&velocity_history_index,&velocity_history_count,sample_period_s);
+    (void)EncoderEstimator_Update(&encoder,sensor_angle,sample_counter,healthy,DIR,sample_period_s);
 }
 
 uint8_t AngleSrc_Encoder_IsAligned(void)

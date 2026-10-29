@@ -3,9 +3,12 @@ import argparse
 import shutil
 import subprocess
 import sys
+import os
+import re
 
 parser=argparse.ArgumentParser(description="UI/storage/display regressions and optional diagnostic-query baseline comparison")
 parser.add_argument("--query-baseline",type=Path,help="Previous ui_app.c to compile against the same deterministic host fixture")
+parser.add_argument("--formatter-baseline",type=Path,help="Previous ui_app.c; compare all diagnostic rows byte for byte")
 args=parser.parse_args()
 repo = Path(__file__).resolve().parents[2]
 output = repo / "build/ui-validation"
@@ -50,6 +53,26 @@ if args.query_baseline:
         counts=lambda line:sum(int(item.split("=")[1]) for item in line.split(":")[1].split())
         assert counts(after)<counts(before),(before,after)
         print(f'{after.split(":")[0]} snapshot calls: {counts(before)} -> {counts(after)}')
+
+if args.formatter_baseline:
+    previous_source=args.formatter_baseline.resolve()
+    previous=previous_source.read_text(encoding='utf-8')
+    resources=(previous_source.parent/'ui_resources_packed.h').as_posix()
+    previous=previous.replace('#include "ui_resources_packed.h"',f'#include "{resources}"')
+    saved=output/'formatter-baseline-ui.c';saved.write_text(previous,encoding='utf-8')
+    baseline_command=command.copy()
+    baseline_command[baseline_command.index(str(repo/"mycode/ui_app.c"))]=str(saved)
+    baseline_command[-1]=str(output/'formatter_baseline.exe')
+    subprocess.run(baseline_command,cwd=repo,check=True)
+    traces=[]
+    for name,exe in [('before',baseline_command[-1]),('after',str(output/'test_ui.exe'))]:
+        path=output/f'formatter-{name}.txt'
+        env=dict(os.environ,UI_QUERY_TRACE=str(path))
+        subprocess.run([exe,'queries'],cwd=repo,env=env,check=True)
+        data=path.read_bytes()
+        traces.append(re.sub(rb'UI-R[0-9]+-[A-Z0-9]+',b'UI-FW',data))
+    assert traces[0]==traces[1],"Diagnostic formatter changed an existing row"
+    print(f'PASS: {len(traces[0].splitlines())} diagnostic rows match baseline exactly (firmware label normalized)')
 
 # Exercise the real storage state machine against an asynchronous NOR model.
 subprocess.run([shutil.which("gcc") or "gcc", "-std=c11", "-Wall", "-Wextra", "-Werror", "-O1", "-Itests/ui_host", "-Imycode", "mycode/app_storage.c", "tests/ui_host/test_storage.c", "-o", str(output / "test_storage.exe")], cwd=repo, check=True)

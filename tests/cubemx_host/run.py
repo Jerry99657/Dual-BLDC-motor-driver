@@ -16,6 +16,8 @@ if not (root/'build/spi-validation/include/spi_constants.h').exists():
     subprocess.run([sys.executable, 'tests/spi_host/run.py'], cwd=root, check=True)
 original = {p.relative_to(root): p.read_text(encoding='utf-8')
             for p in (root / 'Core').rglob('*') if p.suffix in ('.c', '.h')}
+for name in ('CMakeLists.txt', 'USB_Device/Target/usbd_conf.c', 'USB_Device/Target/usbd_conf.h', 'USB_Device/App/usbd_desc.c'):
+    original[Path(name)] = (root/name).read_text(encoding='utf-8')
 mutations = 0
 
 
@@ -40,6 +42,14 @@ def fixture(edits, accepted):
 
 
 audit(root)
+fixture({'USB_Device/Target/usbd_conf.c': [('Init.lpm_enable = DISABLE;', 'Init.lpm_enable =   DISABLE ;')]},True)
+fixture({'USB_Device/Target/usbd_conf.h': [('#define USBD_LPM_ENABLED     0U','#define USBD_LPM_ENABLED     1U')]},False)
+fixture({'USB_Device/Target/usbd_conf.c': [('Init.lpm_enable = DISABLE','Init.lpm_enable = ENABLE')]},False)
+fixture({'USB_Device/Target/usbd_conf.h': [('#define USBD_LPM_ENABLED     0U','#define USBD_LPM_ENABLED     1U')],
+         'USB_Device/Target/usbd_conf.c': [('Init.lpm_enable = DISABLE','Init.lpm_enable = ENABLE')]},False)
+fixture({'USB_Device/Target/usbd_conf.c': [('0x81 , PCD_SNG_BUF', '0x81 , PCD_DBL_BUF')]}, False)
+fixture({'USB_Device/Target/usbd_conf.c': [('0x81 , PCD_SNG_BUF', '0x81 , PROJECT_PMA_MODE')]}, False)
+fixture({'USB_Device/Target/usbd_conf.c': [('PCD_SNG_BUF, 0xC0', 'PCD_SNG_BUF, 0x180')]}, True)
 fixture({'Core/Src/stm32g4xx_it.c': [('BOARD_DIAG_VECTOR(3);','')]},False)
 fixture({'Core/Src/main.c': [('BoardDiag_Init();','')]},False)
 fixture({'Core/Src/main.c': [('BoardDiag_LastCrash()->kind','0')]},False)

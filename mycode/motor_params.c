@@ -148,7 +148,9 @@ __attribute__((noinline,noclone)) uint8_t MotorParams_SelectAxis(MotorAxis axis,
     if(profile>=MOTOR_PROFILE_CUSTOM1 || r->poles_rs>>24==(unsigned)profile+1U) {
         MotorParams *m=&calibrated[axis];int p=(int8_t)r->poles_rs;
         *m=*base; m->pole_pairs=(uint8_t)(p<0 ? -p : p);
-        if(axis==MOTOR_AXIS_1) m->encoder_direction=p<0 ? -1 : 1;
+        /* Detection signs native counts; MT6701's published Angle reverses
+         * those counts. Convert once here for both applied and Custom records. */
+        if(axis==MOTOR_AXIS_1) m->encoder_direction=p<0 ? 1 : -1;
         m->Rs=(float)((r->poles_rs>>8)&65535U)*0.001f; m->Ls=(float)r->ls_uh*0.000001f;
         m->psi_f=(float)r->flux_uwb*0.000001f;
         if(profile>=MOTOR_PROFILE_CUSTOM1) m->name=custom_names[profile-MOTOR_PROFILE_CUSTOM1];

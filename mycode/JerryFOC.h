@@ -29,7 +29,10 @@ typedef struct {
     float output_prev;    /* 上一次的输出 */
     float integral_prev;  /* 上一次的积分项 */
 } PIDController;
-typedef struct { PIDController vel,pos,q,d; } MotorControllers;
+typedef struct {
+    PIDController vel,pos,q,d;
+    float current_feedforward; /* 0..1, bumpless 50 ms enable gain; per axis. */
+} MotorControllers;
 
 /* ================= 控制模式 ================= */
 typedef enum {
@@ -137,5 +140,10 @@ AngleSource* JerryFOC_getAngleSource(void);
 /* Shared 10 kHz current PI and applied-voltage antiwindup. */
 float JerryFOC_CurrentPI(PIDController *pid,float error);
 void JerryFOC_TrackCurrent(PIDController *pid,float applied,float requested);
+/* 10 kHz dq current step with final vector limiting/total-request anti-windup.
+ * Encoder mode has model FF from signed mechanical rad/s; HSO is PI-only
+ * throughout startup/CONTROL, with no model-voltage enable or integral transfer. */
+void JerryFOC_CurrentControl(MotorAxis axis,MotorControllers *loops,
+    float angle,float speed,float target_d,float target_q,float id,float iq);
 
 #endif /* __JERRYFOC_H */

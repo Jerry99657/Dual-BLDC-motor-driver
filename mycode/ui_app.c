@@ -130,7 +130,7 @@
     X(text_keyrpt,"KeyRpt") \
     X(text_disperr,"DispErr") \
     X(text_fw,"FW") \
-    X(text_firmware,"UI-R105-MOT") \
+    X(text_firmware,"UI-R113-HPI") \
     X(text_clear_diag,"Clear diag") \
     X(text_mcu,"MCU") \
     X(text_stm32g431,"STM32G431") \
@@ -220,7 +220,6 @@
     X(text_ibus_tripped,"IBUS: TRIPPED") \
     X(text_ibus_ready,"IBUS: READY") \
     X(text_ibus_not_ready,"IBUS: NOT READY") \
-    X(fmt_u_03u_v,"%u.%03u V") \
     X(text_no_data,"NO DATA") \
     X(text_stale,"STALE") \
     X(text_wait,"WAIT") \
@@ -704,21 +703,23 @@ __attribute__((noinline)) static void fmt_pair(unsigned field,unsigned first,uns
     UiText_Format(text_destination(field),16U,ui_strings.fmt_u_u,first,second);
 }
 
-/* Fixed application descriptors: 12-bit text offset, 4-bit format, 8-bit
- * snapshot offset. Decode bytes explicitly, without unaligned loads. */
+/* Fixed application descriptors: 10-bit destination offset in 4-byte units,
+ * 6-bit format, 8-bit snapshot offset. Decode without unaligned loads. */
 enum { VALUE_COUNT, VALUE_RAD, VALUE_AMP, VALUE_TENTH, VALUE_DEG,
        VALUE_PERCENT, VALUE_MV, VALUE_MWB, VALUE_COUNT16, VALUE_VOLT,
        VALUE_SPEED, VALUE_DUTY, VALUE_SIX_SPEED, VALUE_AXIS_SPEED, VALUE_RPM,
-       VALUE_ERROR_DEG, VALUE_FORMAT_COUNT };
-typedef struct { uint8_t text_low,text_high_format,offset; } ValueRow;
+       VALUE_ERROR_DEG, VALUE_HEX32, VALUE_HEX16, VALUE_PAIR16, VALUE_FORMAT_COUNT };
+typedef struct { uint8_t field_low,field_high_format,offset; } ValueRow;
 _Static_assert(sizeof(ValueRow)==3,"Compact display descriptor");
-_Static_assert(sizeof(UiTexts)<=4096 && VALUE_FORMAT_COUNT<=16,"Display buffer offsets/formats");
+_Static_assert(sizeof(UiTexts)<=4096 && VALUE_FORMAT_COUNT<=64,"Display buffer offsets/formats");
 _Static_assert(sizeof(MotorAxisSnapshot)<=UINT8_MAX && sizeof(StHsoSnapshot)<=UINT8_MAX &&
     sizeof(MT6701Diagnostics)<=UINT8_MAX && sizeof(MotorSamplingDiagnostics)<=UINT8_MAX &&
     sizeof(SixStepSnapshot)<=UINT8_MAX,
     "Review source offsets before extending display snapshots");
-#define VALUE_ROW(type,member,field,format) {offsetof(UiTexts,field)&255U, \
-    (offsetof(UiTexts,field)>>8U)|((format)<<4U),offsetof(type,member)}
+/* Reject a newly added destination that cannot use this compact encoding. */
+#define VALUE_FIELD(field) (offsetof(UiTexts,field)+0U*sizeof(char[offsetof(UiTexts,field)%4U ? -1 : 1]))
+#define VALUE_ROW(type,member,field,format) {(VALUE_FIELD(field)/4U)&255U, \
+    (VALUE_FIELD(field)/1024U)|((format)<<2U),offsetof(type,member)}
 __attribute__((noinline)) static void refresh_values(const void *snapshot,const ValueRow *rows,unsigned count)
 {
     /* One byte per float format: unit:4, multiplier:3, hundredths:1. */
@@ -747,14 +748,18 @@ __attribute__((noinline)) static void refresh_values(const void *snapshot,const 
     for(unsigned i=0;i<count;++i) {
         const ValueRow *row=&rows[i];
         const char *source=(const char *)snapshot+row->offset;
-        unsigned format=row->text_high_format>>4U;
-        unsigned field=row->text_low+((row->text_high_format&15U)<<8U);
+        unsigned format=row->field_high_format>>2U;
+        unsigned field=(row->field_low+((row->field_high_format&3U)<<8U))*4U;
         if (text_query && field!=text_query->field) continue;
         char *destination=text_destination(field);
-        if(format==VALUE_COUNT || format==VALUE_COUNT16) {
+        if(format==VALUE_COUNT || format==VALUE_COUNT16 || format>=VALUE_HEX32) {
             uint32_t value=0;
-            memcpy(&value,source,format==VALUE_COUNT ? sizeof(value) : sizeof(uint16_t));
-            fmt_counter(field,value);
+            memcpy(&value,source,format==VALUE_COUNT16 || format==VALUE_HEX16 ? sizeof(uint16_t) : sizeof(value));
+            if(format==VALUE_HEX32) UiText_Format(destination,16U,ui_strings.fmt_0x_lx,(unsigned long)value);
+            else if(format==VALUE_HEX16) UiText_Format(destination,16U,ui_strings.fmt_0x_04x,(unsigned)value);
+            else if(format==VALUE_PAIR16) {
+                uint16_t pair[2];memcpy(pair,source,sizeof(pair));fmt_pair(field,pair[0],pair[1]);
+            } else fmt_counter(field,value);
         } else {
             float value; memcpy(&value,source,sizeof(value));
             if (!isfinite(value)) { strcpy(destination,"--"); continue; }
@@ -832,7 +837,7 @@ static void refresh_info(unsigned mask)
         MT6701_2_GetBusDiagnostics(&bus_diag);
         UiText_Format(TEXT(spi2_fault),sizeof(TEXT(spi2_fault)),ui_strings.fmt_04x_04x_04x,
                  (unsigned)bus_diag.cr1,(unsigned)bus_diag.cr2,(unsigned)bus_diag.sr);
-        UiText_Format(TEXT(spi2_resets),sizeof(TEXT(spi2_resets)),"%u",(unsigned)bus_diag.resets);
+        fmt_counter(offsetof(UiTexts,spi2_resets),bus_diag.resets);
         UiText_Format(TEXT(flash_error),sizeof(TEXT(flash_error)),ui_strings.fmt_lu_lu_02lx_02lx,
             (unsigned long)(flash_error>>24),(unsigned long)((flash_error>>16)&255U),
             (unsigned long)((flash_error>>8)&255U),(unsigned long)(flash_error&255U));
@@ -929,11 +934,13 @@ static void refresh_info(unsigned mask)
         fmt_counter(offsetof(UiTexts,enc2_err),encoder2.errors);
         MT6701Diagnostics enc;
         ui_encoder_diag(&enc);
-        fmt_counter(offsetof(UiTexts,err),enc.errors);
         fmt_counter(offsetof(UiTexts,raw),ui_encoder_raw());
         if (!text_query) for (unsigned i=0;i<sizeof(s_enc_labels)/sizeof(s_enc_labels[0]);++i)
             s_enc_labels[i][1]=(char)('1'+axis);
+        _Static_assert(offsetof(MT6701Diagnostics,max_age_cycles)==offsetof(MT6701Diagnostics,age_cycles)+2U,"Encoder age pair");
         static const ValueRow encoder_values[]={
+            VALUE_ROW(MT6701Diagnostics,errors,err,VALUE_COUNT),
+            VALUE_ROW(MT6701Diagnostics,age_cycles,enc_age,VALUE_PAIR16),
             VALUE_ROW(MT6701Diagnostics,crc_errors,enc_crc,VALUE_COUNT),
             VALUE_ROW(MT6701Diagnostics,field_errors,enc_field,VALUE_COUNT),
             VALUE_ROW(MT6701Diagnostics,track_errors,enc_track,VALUE_COUNT),
@@ -941,7 +948,6 @@ static void refresh_info(unsigned mask)
             VALUE_ROW(MT6701Diagnostics,frame_errors,enc_frame,VALUE_COUNT),
         };
         refresh_values(&enc,encoder_values,sizeof(encoder_values)/sizeof(encoder_values[0]));
-        fmt_pair(offsetof(UiTexts,enc_age),enc.age_cycles,enc.max_age_cycles);
         put_text(offsetof(UiTexts,enc_last),MT6701_ErrorText(enc.last_error));
         const char *zero=enc.zero_age>3U ? "GAP" :
             (enc.zero_before<=128U || enc.zero_before>=16384U-128U) ? ui_strings.text_near : "FAR";
@@ -1010,8 +1016,7 @@ static void refresh_info(unsigned mask)
         MotorSamplingDiagnostics adc; MotorSampling_GetAxisDiagnostics(axis,&adc);
         unsigned reference_mv = (unsigned)(adc.reference_voltage * 1000.0f + 0.5f);
         if (adc.reference_updates != 0U)
-            UiText_Format(TEXT(reference), sizeof(TEXT(reference)), ui_strings.fmt_u_03u_v,
-                     reference_mv / 1000U, reference_mv % 1000U);
+            UiText_Fixed(TEXT(reference),sizeof(TEXT(reference)),(int32_t)reference_mv,3U,"V");
         else
             put_text(offsetof(UiTexts,reference),ui_strings.text_no_data);
         put_text(offsetof(UiTexts,ref_state),
@@ -1026,7 +1031,12 @@ static void refresh_info(unsigned mask)
             if (!text_query) s_ibus_limit_ma=(int32_t)limit;
             fmt_unit(offsetof(UiTexts,ibus_limit),(int32_t)limit/100,10,"A");
             fmt_unit(offsetof(UiTexts,ibus_voltage),to_x100(adc.ibus_threshold_v),100,"V");
+            _Static_assert(offsetof(MotorSamplingDiagnostics,reference_cal)==offsetof(MotorSamplingDiagnostics,reference_raw)+2U,"VREF diagnostic pair");
             static const ValueRow adc_values[]={
+                VALUE_ROW(MotorSamplingDiagnostics,reference_raw,ref_raw,VALUE_PAIR16),
+                VALUE_ROW(MotorSamplingDiagnostics,silicon_revision,adc_revision,VALUE_HEX16),
+                VALUE_ROW(MotorSamplingDiagnostics,adc1_error,adc1_error,VALUE_HEX32),
+                VALUE_ROW(MotorSamplingDiagnostics,adc2_error,adc2_error,VALUE_HEX32),
                 VALUE_ROW(MotorSamplingDiagnostics,ibus_dac_code,ibus_code,VALUE_COUNT16),
                 VALUE_ROW(MotorSamplingDiagnostics,ibus_trips,ibus_trips,VALUE_COUNT),
                 VALUE_ROW(MotorSamplingDiagnostics,reference_updates,ref_count,VALUE_COUNT),
@@ -1038,8 +1048,6 @@ static void refresh_info(unsigned mask)
             refresh_values(&adc,adc_values,sizeof(adc_values)/sizeof(adc_values[0]));
             put_text(offsetof(UiTexts,ibus_pin),adc.ibus_high ? ui_strings.text_high : "LOW");
             put_text(offsetof(UiTexts,ibus_state),adc.ibus_latched ? ui_strings.text_ibus_tripped : adc.ibus_ready ? ui_strings.text_ibus_ready : ui_strings.text_ibus_not_ready);
-            fmt_pair(offsetof(UiTexts,ref_raw),adc.reference_raw,adc.reference_cal);
-            UiText_Format(TEXT(adc_revision), sizeof(TEXT(adc_revision)), ui_strings.fmt_0x_04x, (unsigned)adc.silicon_revision);
             for (unsigned i = 0U; i < 3U; ++i) {
                 if (axis==MOTOR_AXIS_2 && i==2U) { put_text(offsetof(UiTexts,current_adc[i]),ui_strings.text_derived); continue; }
                 fmt_pair(offsetof(UiTexts,current_adc[i]),adc.current_raw[i],adc.current_zero[i]);
@@ -1054,8 +1062,6 @@ static void refresh_info(unsigned mask)
             } else {
                 put_text(offsetof(UiTexts,current_trip),"--");
             }
-            UiText_Format(TEXT(adc1_error), sizeof(TEXT(adc1_error)), ui_strings.fmt_0x_lx, (unsigned long)adc.adc1_error);
-            UiText_Format(TEXT(adc2_error), sizeof(TEXT(adc2_error)), ui_strings.fmt_0x_lx, (unsigned long)adc.adc2_error);
         }
     }
 }

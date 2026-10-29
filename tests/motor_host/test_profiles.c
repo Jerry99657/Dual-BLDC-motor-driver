@@ -43,7 +43,7 @@ int main(void)
     assert(MotorParams_GetActive()==&MOTOR_2804);
     MotorParams_Select(MOTOR_PROFILE_4015);
     const MotorParams *m=MotorParams_GetActive();
-    assert(MotorParams_IsCalibrated(MOTOR_AXIS_1) && m->pole_pairs==11 && m->encoder_direction==-1);
+    assert(MotorParams_IsCalibrated(MOTOR_AXIS_1) && m->pole_pairs==11 && m->encoder_direction==1);
     assert(fabsf(m->Rs-1.92f)<1e-6f && fabsf(m->Ls-.00044f)<1e-9f && fabsf(m->psi_f-.00929f)<1e-8f);
     assert(m->max_current==MOTOR_4015.max_current && m->rated_current==MOTOR_4015.rated_current && m->overload_budget_s==MOTOR_4015.overload_budget_s);
     assert(MotorParams_GetAxis(MOTOR_AXIS_2)==&MOTOR_4015);
@@ -76,7 +76,7 @@ int main(void)
     for(unsigned a=0;a<2;++a) for(unsigned i=0;i<3;++i) {
         assert(MotorParams_SelectAxis((MotorAxis)a,(MotorProfile)(MOTOR_PROFILE_CUSTOM1+i)));
         const MotorParams *c=MotorParams_GetAxis((MotorAxis)a);
-        assert(c->name[7]==(char)('1'+i) && c->pole_pairs==11 && c->encoder_direction==(a ? 1 : -1));
+        assert(c->name[7]==(char)('1'+i) && c->pole_pairs==11 && c->encoder_direction==1);
         assert(fabsf(c->Ls-(440+i*100)*1e-6f)<1e-9f && c->max_current==MOTOR_4015.max_current);
         assert(MotorParams_BaseProfile((MotorProfile)(MOTOR_PROFILE_CUSTOM1+i))==MOTOR_PROFILE_4015);
     }
@@ -84,6 +84,15 @@ int main(void)
     MotorCalibration bad=measured;bad.flux_uwb=0;
     assert(!MotorParams_SetCustom(0,&bad) && MotorParams_CustomMask()==7);
     assert(!MotorParams_SelectAxis(MOTOR_AXIS_1,MOTOR_PROFILE_ESC));
+    /* Raw-positive installation needs the opposite direction after Angle=2pi-raw;
+     * the record never changes M2's independent installation direction. */
+    MotorCalibration positive=measured;
+    positive.poles_rs=(positive.poles_rs&~255U)|11U;
+    assert(MotorParams_SetCustom(0,&positive));
+    assert(MotorParams_SelectAxis(MOTOR_AXIS_1,MOTOR_PROFILE_CUSTOM1));
+    assert(MotorParams_GetActive()->encoder_direction==-1);
+    assert(MotorParams_SelectAxis(MOTOR_AXIS_2,MOTOR_PROFILE_CUSTOM1));
+    assert(MotorParams_GetAxis(MOTOR_AXIS_2)->encoder_direction==1);
     puts("PASS: three shared Custom slots, empty exclusion, axis isolation/polarity, inherited protection, strict records and no implicit selection");
     puts("PASS: calibrated equivalent-star parameters, all bounds/legacy binding, per-axis/profile isolation, direction, preset restoration and unchanged protection caps");
     puts("Independent motor profile tests passed");

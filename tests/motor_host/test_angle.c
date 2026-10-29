@@ -11,12 +11,6 @@ uint32_t MT6701_GetSampleCounter(void) { return samples; }
 
 int main(void)
 {
-    float history[4]={0},oracle[4]={0};uint8_t index=0,count=0,oi=0,oc=0;
-    for(unsigned i=0;i<10000;++i) {
-        float position=sinf((float)i*.005f)*3,dt=i%2 ? .001f : .002f;
-        float old=oracle[oi];oracle[oi]=position;oi=(oi+1U)%4U;if(oc<4)++oc;
-        assert(MotorMath_WindowVelocity(position,history,&index,&count,dt)==(position-old)/(dt*oc));
-    }
     for(int direction=-1;direction<=1;direction+=2) {
         Angle=6.2811853f;++samples;
         AngleSource *source=AngleSrc_Encoder_Init(direction*11);
@@ -28,10 +22,14 @@ int main(void)
         for(unsigned i=0;i<8;++i) { Angle+=.001f;++samples;AngleSrc_Encoder_Update(.001f); }
         assert(fabsf(source->getVelocity()-direction)<.001f);
         float position=source->getMechanicalAngle();
+        for(unsigned i=0;i<10;++i) {
+            (void)source->getElectricalAngle();(void)source->getVelocity();
+            assert(source->getMechanicalAngle()==position);
+        }
         AngleSrc_Encoder_Update(.001f);assert(source->getMechanicalAngle()==position);
         healthy=0;Angle=2;AngleSrc_Encoder_Update(.001f);
         healthy=1;++samples;AngleSrc_Encoder_Update(.001f);
         assert(source->getMechanicalAngle()==position && source->getVelocity()==0);
     }
-    puts("PASS: common velocity window vs previous arithmetic, signed encoder polarity, electrical alignment, wrap, duplicate sample and recovery without false motion");
+    puts("PASS: real M1 adapter, signed encoder polarity, electrical alignment, wrap, pure getters, duplicate sample and recovery without false motion");
 }

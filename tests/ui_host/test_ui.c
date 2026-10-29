@@ -1,6 +1,7 @@
 #include <assert.h>
 #include <math.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include "main.h"
 #include "ui_app.h"
@@ -1212,6 +1213,9 @@ static uint32_t query_model_hash(void) {
 }
 static void check_query_rows(void) {
     char label[24],value[32];
+    const char *trace_path=getenv("UI_QUERY_TRACE");
+    FILE *trace=trace_path ? fopen(trace_path,"wb") : NULL;
+    assert(!trace_path || trace);
     /* All rows agree with the real local formatter, across both axes and all
      * three control modes. Queries never update the local info buffers. */
     for(unsigned axis=1;axis<=2;++axis) for(unsigned m=0;m<3;++m) {
@@ -1236,6 +1240,7 @@ static void check_query_rows(void) {
                 fprintf(stderr,"Query mismatch M%u mode%u group%u row%u: %s=%s vs %s=%s\n",
                     axis,m,g,r,label,value,p->rows[r].name,p->rows[r].value);
             assert(!strcmp(label,p->rows[r].name) && !strcmp(value,p->rows[r].value));
+            if(trace) fprintf(trace,"M%u mode%u group%u row%u %s=%s\n",axis,m,g,r,label,value);
             assert(query_model_hash()==original);
         }
         for(unsigned g=0;g<8;++g) for(unsigned r=0;r<app->info_pages[g].row_count;++r) {
@@ -1243,6 +1248,7 @@ static void check_query_rows(void) {
             assert(query_model_hash()==original);
         }
     }
+    if(trace) assert(fclose(trace)==0);
     /* Independent queries read current state rather than a UI refresh/TTL. */
     velocity=1.2f;assert(App_ReadRow(1,2,3,label,value)>0 && !strcmp(value,"1.2 rad/s"));
     velocity=3.4f;assert(App_ReadRow(1,2,3,label,value)>0 && !strcmp(value,"3.4 rad/s"));

@@ -69,8 +69,10 @@ typedef enum {
     MOTOR_AXIS_COUNT
 } MotorAxis;
 
-/* Equivalent-star result: low 24 bits retain signed poles and Rs; high byte
- * binds it to profile+1. Zero denotes factory parameters. */
+/* Equivalent-star result. Zero denotes factory parameters.
+ * poles_rs low signed byte: native MT6701 raw-count direction * pole pairs,
+ * not the runtime Angle direction (Angle=2pi-raw). Bits 23:8: Rs in mOhm;
+ * high byte: base preset + 1. Kept unchanged for saved v6/v7 records. */
 typedef struct { uint32_t poles_rs,ls_uh,flux_uwb; } MotorCalibration;
 uint8_t MotorParams_SetCalibration(MotorAxis axis,const MotorCalibration *record);
 uint8_t MotorParams_IsCalibrated(MotorAxis axis);

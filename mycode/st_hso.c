@@ -71,6 +71,21 @@ __attribute__((optimize("Os"))) static bool valid_config(const StHsoConfig *c)
         c->voltage_pole_rps>=100 && c->voltage_pole_rps<=1000000 &&
         fabsf(c->sample_delay_cycles)<=0.25f;
 }
+/* Record only on rejection, keeping sqrt/diagnostic work off the successful
+ * 10 kHz CONTROL path. H Actual is the observer flux; raw corrected EMF can
+ * violate its own gate even when that flux is still close to the reference. */
+__attribute__((noinline,optimize("Os"))) static void reject_control(StHsoReason reason,
+    StHsoReason detail,Voltages_Uab_t emf,float hz)
+{
+    float ea=from_q30(emf.A)*VOLTAGE_SCALE,eb=from_q30(emf.B)*VOLTAGE_SCALE;
+    float expected=active.flux_wb*hz*TWO_PI;
+    live.capture_reason=detail;
+    live.capture_angle_rad=live.angle_error_rad;
+    live.capture_frequency_error_hz=live.emf_hz-hz;
+    live.capture_emf_ratio=expected!=0 ? sqrtf(ea*ea+eb*eb)/fabsf(expected) : NAN;
+    live.capture_drift_rad=NAN; /* Drift is a CAPTURE-only quantity. */
+    reject(reason);
+}
 __attribute__((optimize("Os"))) void StHso_Init(const MotorParams *motor)
 {
     __HAL_RCC_CORDIC_CLK_ENABLE();
@@ -272,7 +287,10 @@ __attribute__((noinline,optimize("Os"))) static void check_observer(Voltages_Uab
     else if (control && (live.flux_wb<active.flux_wb*0.1f || live.flux_wb>active.flux_wb*3)) bad=ST_HSO_REASON_FLUX;
     else if (control && previous_valid && aerr>=0.785398163f) bad=ST_HSO_REASON_ANGLE;
     previous_angle=live.angle_rad; previous_valid=true;
-    if (bad!=ST_HSO_REASON_NONE && (phase!=ST_HSO_ALIGN || bad==ST_HSO_REASON_NUMERIC)) { reject(bad); return; }
+    if (bad!=ST_HSO_REASON_NONE && (phase!=ST_HSO_ALIGN || bad==ST_HSO_REASON_NUMERIC)) {
+        if (control) reject_control(bad,bad,emf,hz); else reject(bad);
+        return;
+    }
     float ea=from_q30(emf.A)*VOLTAGE_SCALE,eb=from_q30(emf.B)*VOLTAGE_SCALE;
     float expected=active.flux_wb*hz*TWO_PI;
     float raw_strength=ea*ea+eb*eb,strength=raw_strength;
@@ -290,8 +308,9 @@ __attribute__((noinline,optimize("Os"))) static void check_observer(Voltages_Uab
     else if (live.emf_hz*hz<=0 || ferr>frequency_tolerance) bad=ST_HSO_REASON_FREQUENCY;
     else if (live.flux_wb<active.flux_wb*(control ? 0.4f : 0.5f) ||
              live.flux_wb>active.flux_wb*(control ? 1.6f : 1.5f)) bad=ST_HSO_REASON_FLUX;
-    if (strength<minimum || strength>maximum)
-        bad=ST_HSO_REASON_FLUX;
+    StHsoReason detail=bad;
+    if (strength<minimum) { bad=ST_HSO_REASON_FLUX; detail=ST_HSO_REASON_EMF_LOW; }
+    else if (strength>maximum) { bad=ST_HSO_REASON_FLUX; detail=ST_HSO_REASON_EMF_HIGH; }
     live.reason=bad;
     if (control || bad!=ST_HSO_REASON_NONE) live.entry_reason=bad;
     if (phase==ST_HSO_CAPTURE) {
@@ -299,7 +318,9 @@ __attribute__((noinline,optimize("Os"))) static void check_observer(Voltages_Uab
         qualify_capture(bad,hz,expected,
             raw_frequency_ok && raw_strength>=minimum && raw_strength<=maximum,raw_frequency_ok);
     } else if (control) {
-        if (bad!=ST_HSO_REASON_NONE) { if (++live.bad_samples>=20U) { reject(bad); return; } }
+        if (bad!=ST_HSO_REASON_NONE) {
+            if (++live.bad_samples>=20U) { reject_control(bad,detail,emf,hz); return; }
+        }
         else live.bad_samples=0;
         if (blend<1000U) ++blend;
     }
@@ -544,6 +565,7 @@ __attribute__((optimize("Os"))) const char *StHso_ReasonText(StHsoReason reason)
         "FLUX TIMEOUT\0"
         "LOCK TIMEOUT\0"
         "PHASE DRIFT\0"
+        "EMF HIGH\0"
         "UNKNOWN";
     _Static_assert(ST_HSO_REASON_NONE==0,"Text enum order");
     _Static_assert(ST_HSO_REASON_OFF==1,"Text enum order");
@@ -566,5 +588,6 @@ __attribute__((optimize("Os"))) const char *StHso_ReasonText(StHsoReason reason)
     _Static_assert(ST_HSO_REASON_LEARN_TIMEOUT==18,"Text enum order");
     _Static_assert(ST_HSO_REASON_CAPTURE_TIMEOUT==19,"Text enum order");
     _Static_assert(ST_HSO_REASON_PHASE_DRIFT==20,"Text enum order");
-    return CompactText_At(names,(unsigned)reason<21U ? (unsigned)reason : 21U);
+    _Static_assert(ST_HSO_REASON_EMF_HIGH==21,"Text enum order");
+    return CompactText_At(names,(unsigned)reason<22U ? (unsigned)reason : 22U);
 }

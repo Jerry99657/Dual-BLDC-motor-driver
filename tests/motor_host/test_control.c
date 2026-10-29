@@ -629,10 +629,10 @@ static void check_calibration(void)
     MotorCalibration measured={(2U<<24)|(1920U<<8)|(uint8_t)-11,440,9290},empty={0};
     assert(MotorControl_ApplyCalibration(MOTOR_AXIS_1,&measured));
     assert(!output_requested && !output2 && !state(MOTOR_AXIS_1).active && JerryFOC_needsAlignment());
-    assert(fabsf(iq_loop_M0.P-.11f)<1e-6f && fabsf(id_loop_M0.I-480)<.001f && selected_pp==-11);
+    assert(fabsf(iq_loop_M0.P-.11f)<1e-6f && fabsf(id_loop_M0.I-480)<.001f && selected_pp==11);
     assert(!memcmp(&settings.calibration[0],&measured,sizeof(measured)) && !settings.calibration[1].poles_rs);
     MotorControl_StopAll();MotorControl_Init(); /* Restart from the saved, model-bound record. */
-    assert(MotorParams_IsCalibrated(MOTOR_AXIS_1) && selected_pp==-11 && !output_requested);
+    assert(MotorParams_IsCalibrated(MOTOR_AXIS_1) && selected_pp==11 && !output_requested);
     JerryFOC_alignStart();JerryFOC_alignFinish();aligned=healthy=1;ms(8,0);
     assert(MotorControl_Command(MOTOR_AXIS_1,JERRYFOC_MODE_VELOCITY,10,0,true));
     assert(!MotorControl_ApplyCalibration(MOTOR_AXIS_1,&empty)); /* Active request cannot be retuned. */
@@ -652,14 +652,14 @@ static void check_custom_motors(void)
     assert(MotorControl_SaveCustom(0,&r) && MotorParams_CustomMask()==1);
     assert(MotorParams_GetActiveProfile()==MOTOR_PROFILE_2804 && !output_requested && !output2);
     assert(MotorControl_SelectProfile(MOTOR_AXIS_1,MOTOR_PROFILE_CUSTOM1));
-    assert(selected_pp==-11 && fabsf(iq_loop_M0.P-.11f)<1e-6f && JerryFOC_needsAlignment());
+    assert(selected_pp==11 && fabsf(iq_loop_M0.P-.11f)<1e-6f && JerryFOC_needsAlignment());
     assert(((settings.control_config>>24)&3U)==1 && (settings.flags&APP_FLAG_MOTOR_4015));
     assert(!MotorControl_SaveCustom(0,&r) && !MotorControl_ApplyCalibration(MOTOR_AXIS_1,&empty));
     assert(MotorControl_SelectProfile(MOTOR_AXIS_2,MOTOR_PROFILE_CUSTOM1));
     assert(((settings.control_config>>26)&3U)==1 && MotorParams_GetAxis(MOTOR_AXIS_2)->encoder_direction==1);
     MotorControl_StopAll();MotorControl_Init();
     assert(MotorParams_GetAxisProfile(MOTOR_AXIS_1)==MOTOR_PROFILE_CUSTOM1 && MotorParams_GetAxisProfile(MOTOR_AXIS_2)==MOTOR_PROFILE_CUSTOM1);
-    assert(selected_pp==-11 && !output_requested && !output2);
+    assert(selected_pp==11 && !output_requested && !output2);
     assert(MotorControl_SelectProfile(MOTOR_AXIS_1,MOTOR_PROFILE_4015));
     assert(!MotorControl_SaveCustom(0,&r)); /* M2 still selects this shared bank. */
     assert(MotorControl_SelectProfile(MOTOR_AXIS_2,MOTOR_PROFILE_2804));
@@ -668,6 +668,90 @@ static void check_custom_motors(void)
     r.ls_uh=880;assert(MotorControl_SaveCustom(0,&r) && settings.custom[0].ls_uh==880);
     assert(MotorParams_GetActive()==&MOTOR_4015 && !output_requested && !output2);
     puts("PASS: actual Custom save/select/boot, no flash/empty/active/selected-bank rejection, PI and direction reload, no implicit motion and factory isolation");
+}
+
+static void check_encoder2_estimator(void)
+{
+    boot(MOTOR_WORK_SINGLE_M2);
+    float previous=enc2.angle,position=0,history[4]={0},filtered=0;
+    unsigned index=0;
+    float tf=MotorParams_GetAxis(MOTOR_AXIS_2)->vel_filter_Tf;
+    int direction=MotorParams_GetAxis(MOTOR_AXIS_2)->encoder_direction;
+    /* Verify the actual M2 adapter including its existing LPF, not just the
+     * shared arithmetic. Boot has filled the four-point window at standstill. */
+    for(unsigned i=0;i<16000;++i) {
+        float speed=i<4000 ? 80 : i<8000 ? -110 :
+            i<12000 ? .174532925f*2*PI*4*cosf((float)i*.001f*2*PI*4) :
+            .15f*sinf((float)i*.005f);
+        ms(1,speed*.001f);
+        float delta=enc2.angle-previous;
+        if(delta>PI)delta-=2*PI;
+        else if(delta< -PI)delta+=2*PI;
+        previous=enc2.angle;position+=delta*direction;
+        float raw=(position-history[index])/.004f;
+        history[index]=position;index=(index+1)%4;
+        float alpha=tf/(tf+.001f);
+        filtered=alpha*filtered+(1-alpha)*raw;
+        MotorAxisSnapshot s=state(MOTOR_AXIS_2);
+        assert(s.position==position && s.velocity==filtered);
+        if(i%31==0) {
+            float saved=enc2.angle;enc2.angle=2;
+            JerryFOC_OuterIRQ(); /* Same frame cannot advance M2 or its LPF. */
+            assert(state(MOTOR_AXIS_2).position==s.position && state(MOTOR_AXIS_2).velocity==s.velocity);
+            enc2.angle=saved;
+        }
+    }
+    ms(100,0);
+    assert(MotorControl_Command(MOTOR_AXIS_2,JERRYFOC_MODE_VELOCITY,10,0,true));
+    float held=state(MOTOR_AXIS_2).position;
+    enc2.healthy=0;ms(1,0);
+    assert(!output2 && !state(MOTOR_AXIS_2).active && state(MOTOR_AXIS_2).velocity==0);
+    enc2.healthy=1;enc2.angle=2;
+    JerryFOC_OuterIRQ(); /* Recovery requires a fresh counter. */
+    assert(state(MOTOR_AXIS_2).position==held && state(MOTOR_AXIS_2).velocity==0);
+    ms(1,0);
+    assert(state(MOTOR_AXIS_2).position==held && state(MOTOR_AXIS_2).velocity==0);
+    assert(!MotorControl_Command(MOTOR_AXIS_2,JERRYFOC_MODE_VELOCITY,10,0,true));
+    assert(!strcmp(MotorControl_CommandText(),"ENCODER SETTLE"));
+    ms(4,0);
+    assert(!state(MOTOR_AXIS_2).active && !output2); /* No automatic restart. */
+    assert(!MotorControl_Command(MOTOR_AXIS_2,JERRYFOC_MODE_VELOCITY,10,0,true));
+    assert(!strcmp(MotorControl_CommandText(),"NOT ALIGNED"));
+    assert(MotorControl_RequestAlign(MOTOR_AXIS_2));
+    MotorControl_Service(now);assert(state(MOTOR_AXIS_2).aligning);
+    now+=3000;MotorControl_Service(now);
+    assert(state(MOTOR_AXIS_2).aligned && !output2);
+    assert(state(MOTOR_AXIS_2).position==0 && state(MOTOR_AXIS_2).velocity==0);
+    ms(4,0);
+    assert(MotorControl_Command(MOTOR_AXIS_2,JERRYFOC_MODE_VELOCITY,10,0,true));
+    MotorControl_StopAll();
+    puts("PASS: actual M2 four-point/LPF parity over 16000 frames, duplicate admission, lost-encoder stop, zero-speed rebase, settling, explicit alignment and restart");
+}
+
+static void check_m2_current_path(void)
+{
+    boot(MOTOR_WORK_SINGLE_M2);bus=20;
+    assert(MotorControl_SelectProfile(MOTOR_AXIS_2,MOTOR_PROFILE_4015));
+    MotorCalibration measured={(2U<<24)|(1920U<<8)|(uint8_t)-11,440,9290};
+    assert(MotorControl_ApplyCalibration(MOTOR_AXIS_2,&measured));
+    MotorControl_Service(now);assert(state(MOTOR_AXIS_2).aligning);
+    now+=3000;MotorControl_Service(now);ms(8,0);
+    for(unsigned loop=0;loop<2;++loop) {
+        assert(MotorControl_Command(MOTOR_AXIS_2,JERRYFOC_MODE_TORQUE,loop ? 0 : 1,0,loop));
+        ms(60,0); /* Complete gain transfer at standstill before changing speed. */
+        ms(300,.008f);
+        MotorAxisSnapshot s=state(MOTOR_AXIS_2);
+        float a=(float)tim8.CCR1/tim8.ARR,b=(float)tim8.CCR2/tim8.ARR,c=(float)tim8.CCR3/tim8.ARR;
+        float alpha=(a-(a+b+c)/3)*bus,beta=(b-c)*bus/sqrtf(3);
+        float d=alpha*cosf(s.electrical_angle)+beta*sinf(s.electrical_angle);
+        float q=beta*cosf(s.electrical_angle)-alpha*sinf(s.electrical_angle);
+        float expected=loop ? 11*s.velocity*.00929f : 1;
+        assert(fabsf(q-expected)<.006f && fabsf(d)<.006f);
+        assert(s.current_loop==(loop!=0) && s.active);
+        MotorControl_StopAll();ms(200,0);
+    }
+    bus=12;
+    puts("PASS: actual M2 adapter selects per-axis measured PM flux and feedback speed; voltage mode stays in volts and zero-current mode applies back-EMF FF");
 }
 
 static void check_profile_settings(void)
@@ -795,6 +879,8 @@ int main(int argc,char **argv)
     if (argc>1 && !strcmp(argv[1],"follow-current")) { follow_current_models(false); return 0; }
     check_calibration();check_custom_motors();
     check_profile_settings();
+    check_encoder2_estimator();
+    check_m2_current_path();
     check_global_control_stop();
     check_six_profile_switch();
     check_six_control();

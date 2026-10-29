@@ -1,4 +1,3 @@
-#include "compact_text.h"
 #if defined(__GNUC__) && !defined(_WIN32)
 /* User protocol handlers stay shared; official compilation is unchanged. */
 #pragma GCC optimize ("Os,no-ipa-cp-clone")
@@ -34,7 +33,7 @@ static ProtoCtx ctx[2];
 static volatile int8_t hso_result;
 int8_t Protocol_GetHsoResult(void) { return hso_result; }
 
-static bool parse_hso_values(const char *text, float *values, unsigned count)
+__attribute__((noinline,noclone)) static bool parse_hso_values(const char *text, float *values, unsigned count)
 {
     for (unsigned i = 0U; i < count; ++i) {
         const char *end;
@@ -48,28 +47,39 @@ static bool parse_hso_values(const char *text, float *values, unsigned count)
     return true;
 }
 
+/* Exact enum tokens in packed NUL strings. Retain every legacy spelling;
+ * one cold matcher serves configuration and transport-format commands. */
+__attribute__((noinline,noclone)) static unsigned enum_value(const char *names,const char *value,unsigned count)
+{
+    for(unsigned i=0;i<count;++i) {
+        if(!strcmp(value,names)) return i;
+        while(*names++);
+    }
+    return count;
+}
 static void handle_hso(const char *command,MotorInput input)
 {
+    unsigned kind=enum_value("On\0" "Off\0" "Encoder\0" "Use\0" "Learn",command,5);
     hso_result = 1;
     if (!MotorControl_HsoAllowed()) {
-        if (!strcmp(command,"Off")) { StHso_Enable(false); return; }
-        if (strcmp(command,"Encoder") || MotorControl_GetWork()!=MOTOR_WORK_SINGLE_M1) {
+        if (kind==1) { StHso_Enable(false); return; }
+        if (kind!=2 || MotorControl_GetWork()!=MOTOR_WORK_SINGLE_M1) {
             hso_result=-3; return;
         }
     }
-    if (strcmp(command, "On") == 0) {
+    if (kind==0) {
         if (JerryFOC_isHSOActive()) { hso_result = -3; return; }
         StHso_Enable(true);
-    } else if (strcmp(command, "Off") == 0) {
+    } else if (kind==1) {
         if (JerryFOC_isHSOActive() || JerryFOC_hasHSOFault()) (void)JerryFOC_useHSO(0U);
         StHso_Enable(false);
-    } else if (strcmp(command, "Encoder") == 0) {
+    } else if (kind==2) {
         if (!MotorControl_SelectFeedback(false)) hso_result=-3;
-    } else if (strcmp(command, "Use") == 0) {
+    } else if (kind==3) {
         uint32_t mask=__get_PRIMASK(); __disable_irq();
         if (!Protocol_RequestCurrent() || !MotorControl_ClaimInput(MOTOR_AXIS_1,input) || !JerryFOC_useHSO(1U)) hso_result = -3;
         __set_PRIMASK(mask);
-    } else if (strcmp(command, "Learn") == 0) {
+    } else if (kind==4) {
         if (JerryFOC_isHSOActive() || JerryFOC_hasHSOFault() ||
             !JerryFOC_isDriveReady() || g_openloop_debug ||
             !StHso_LearnFlux()) hso_result = -3;
@@ -153,6 +163,7 @@ __attribute__((noinline,noclone)) bool Protocol_RequestCurrent(void)
 enum { CONFIG_WORK,CONFIG_MOTOR1,CONFIG_MOTOR2,CONFIG_FEEDBACK,
        CONFIG_GEAR,CONFIG_ALIGN,CONFIG_FOCUS,CONFIG_COUNT,
        CMD_SPEED=CONFIG_COUNT,CMD_ANGLE,CMD_TORQUE,CMD_THROTTLE,CMD_OPEN,CMD_HSO,CMD_STREAM,CMD_APP,CMD_ROW,CMD_FORMAT,CMD_COUNT };
+_Static_assert(CMD_THROTTLE==CMD_SPEED+3,"Contiguous scalar motion commands");
 /* One source for names and lengths; no per-name NUL/padding in Flash. */
 #define COMMAND_PREFIXES(X) \
     X("Work:",5) X("Motor1:",7) X("Motor2:",7) X("Feedback:",9) \
@@ -170,12 +181,12 @@ COMMAND_PREFIXES(PREFIX_CHECK)
 #undef PREFIX_CHECK
 #undef COMMAND_PREFIXES
 _Static_assert(sizeof(command_lengths)==CMD_COUNT,"Command order/count");
-static unsigned command_kind(const char *s)
+static unsigned command_kind(const char *s,const char **argument)
 {
     const char *name=command_names;
     for(unsigned i=0;i<CMD_COUNT;++i) {
         unsigned length=command_lengths[i];
-        if(!strncmp(s,name,length)) return i;
+        if(!strncmp(s,name,length)) { *argument=s+length; return i; }
         name+=length;
     }
     return CMD_COUNT;
@@ -192,24 +203,21 @@ static bool apply_configuration(uint8_t kind,const char *value)
         "SyncPosition\0"
         "MasterM1\0"
         "MasterM2";
-        for (unsigned i=0;i<MOTOR_WORK_COUNT;++i)
-            if (!strcmp(value,CompactText_At(names,i))) return MotorControl_SelectWork((MotorWorkMode)i);
-        break;
+        unsigned i=enum_value(names,value,MOTOR_WORK_COUNT);
+        return i<MOTOR_WORK_COUNT && MotorControl_SelectWork((MotorWorkMode)i);
     }
     case CONFIG_MOTOR1: case CONFIG_MOTOR2: {
         MotorAxis a=kind==CONFIG_MOTOR1 ? MOTOR_AXIS_1 : MOTOR_AXIS_2;
-        if (!strcmp(value,"2804")) return App_SelectMotor(a,MOTOR_PROFILE_2804);
-        if (!strcmp(value,"4015")) return App_SelectMotor(a,MOTOR_PROFILE_4015);
-        if (a==MOTOR_AXIS_1 && !strcmp(value,"ESC")) return App_SelectMotor(a,MOTOR_PROFILE_ESC);
-        if(!strncmp(value,"Custom",6) && value[6]>='1' && value[6]<='3' && !value[7])
-            return App_SelectMotor(a,(MotorProfile)(MOTOR_PROFILE_CUSTOM1+value[6]-'1'));
-        break;
+        static const char names[]="2804\0" "4015\0" "ESC\0" "Custom1\0" "Custom2\0" "Custom3";
+        _Static_assert(MOTOR_PROFILE_2804==0 && MOTOR_PROFILE_4015==1 && MOTOR_PROFILE_ESC==2 &&
+            MOTOR_PROFILE_CUSTOM1==3 && MOTOR_PROFILE_CUSTOM3==5 && MOTOR_PROFILE_COUNT==6,"Motor command order");
+        unsigned i=enum_value(names,value,MOTOR_PROFILE_COUNT);
+        return i<MOTOR_PROFILE_COUNT && (i!=MOTOR_PROFILE_ESC || a==MOTOR_AXIS_1) && App_SelectMotor(a,(MotorProfile)i);
     }
-    case CONFIG_FEEDBACK:
-        if (!strcmp(value,"Encoder")) return MotorControl_SelectFeedback(false);
-        if (!strcmp(value,"HSO")) return MotorControl_SelectFeedback(true);
-        if (!strcmp(value,"SixStep")) return MotorControl_SelectSixStep(true);
-        break;
+    case CONFIG_FEEDBACK: {
+        unsigned i=enum_value("Encoder\0" "HSO\0" "SixStep",value,3);
+        return i<2 ? MotorControl_SelectFeedback(i!=0) : i==2 && MotorControl_SelectSixStep(true);
+    }
     case CONFIG_GEAR: {
         float v[2];
         if (parse_hso_values(value,v,2) && fabsf(v[0])>=0.01f && fabsf(v[0])<=10.0f && fabsf(v[1])<=62.83f)
@@ -217,7 +225,7 @@ static bool apply_configuration(uint8_t kind,const char *value)
         break;
     }
     case CONFIG_ALIGN: case CONFIG_FOCUS:
-        if (!strcmp(value,"M1") || !strcmp(value,"M2")) {
+        if (value[0]=='M' && (value[1]=='1' || value[1]=='2') && value[2]=='\0') {
             MotorAxis a=value[1]=='1' ? MOTOR_AXIS_1 : MOTOR_AXIS_2;
             if (kind==CONFIG_FOCUS) { MotorControl_SetFocus(a); return true; }
             uint32_t mask=__get_PRIMASK(); __disable_irq();
@@ -229,6 +237,10 @@ static bool apply_configuration(uint8_t kind,const char *value)
     }
     return false;
 }
+/* Inspect only characters known to be present; a truncated prefix is data,
+ * never an axis selector. Both immediate Stop and queued dispatch use this. */
+__attribute__((noinline,noclone)) static bool axis_prefix(const char *s)
+{ return s[0]=='M' && (s[1]=='1' || s[1]=='2') && s[2]==':'; }
 static void receive_line(char *line,MotorInput input)
 {
     uint32_t id=0;
@@ -243,7 +255,7 @@ static void receive_line(char *line,MotorInput input)
     }
     if(strlen(line)>=PROTO_LINE_MAX) { control_result=-2; return; }
     const char *action=line;
-    if(!strncmp(action,"M1:",3) || !strncmp(action,"M2:",3)) action+=3;
+    if(axis_prefix(action)) action+=3;
     uint32_t mask=__get_PRIMASK(); __disable_irq();
     if(!strcmp(action,"Stop")) {
         ++stop_generation; config_count=0;
@@ -296,20 +308,20 @@ __attribute__((noinline,noclone)) static int8_t handle_line(char *line,MotorInpu
     MotorWorkMode work=MotorControl_GetWork();
     MotorAxis axis=work==MOTOR_WORK_SINGLE_M2 ? MOTOR_AXIS_2 : MOTOR_AXIS_1;
     bool explicit_axis=false;
-    if (!strncmp(line,"M1:",3) || !strncmp(line,"M2:",3)) {
+    if (axis_prefix(line)) {
         axis=line[1]=='1' ? MOTOR_AXIS_1 : MOTOR_AXIS_2; line+=3; explicit_axis=true;
     }
-    unsigned kind=command_kind(line);
+    const char *argument=line;
+    unsigned kind=command_kind(line,&argument);
     if(kind==CMD_FORMAT) {
         if(explicit_axis) return -2;
-        if(!strcmp(line+7,"Native")) Telemetry_SetNative(true);
-        else if(!strcmp(line+7,"JustFloat")) Telemetry_SetNative(false);
-        else return -2;
-        return 1;
+        unsigned i=enum_value("Native\0" "JustFloat",argument,2);
+        if(i==2) return -2;
+        Telemetry_SetNative(i==0); return 1;
     }
     if (kind==CMD_APP || kind==CMD_ROW) {
         float v[3];
-        if (explicit_axis || !parse_hso_values(line+command_lengths[kind],v,3)) return -2;
+        if (explicit_axis || !parse_hso_values(argument,v,3)) return -2;
         for (unsigned i=0;i<3;++i) if (v[i]<-100000 || v[i]>100000 || v[i]!=(float)(int32_t)v[i]) return -2;
         if (kind==CMD_APP) {
             if(!Protocol_RequestCurrent()) return -4;
@@ -322,12 +334,12 @@ __attribute__((noinline,noclone)) static int8_t handle_line(char *line,MotorInpu
     if (kind<CONFIG_COUNT) {
         if (!App_CanConfigure()) return -3;
         if(kind==CONFIG_ALIGN && command_was_stopped && HAL_GetTick()-command_at>10U) return -4;
-        result=!explicit_axis && apply_configuration(kind,line+command_lengths[kind]) ? 1 : -1;
+        result=!explicit_axis && apply_configuration(kind,argument) ? 1 : -1;
         if(result==1 && kind!=CONFIG_ALIGN) App_ConfigChanged();
         return result;
     }
     if (kind==CMD_STREAM) {
-        result=!explicit_axis && Telemetry_Select(line+7) ? 1 : -2;
+        result=!explicit_axis && Telemetry_Select(argument) ? 1 : -2;
         return result;
     }
     /* Stop is transport-independent and remains available during configuration. */
@@ -342,26 +354,26 @@ __attribute__((noinline,noclone)) static int8_t handle_line(char *line,MotorInpu
         /* Parse outside the existing control critical section. The adapter
          * queues configuration for ADC1; never call ST library code here. */
         if (axis!=MOTOR_AXIS_1) { hso_result=-3; return -3; }
-        handle_hso(line + 4,input);
+        handle_hso(argument,input);
         result=hso_result;
         if (result==1 && line[4]=='U') App_RemoteMotion(axis,false);
         return result;
     }
     /* Invalid input must not change mode or release an HSO recovery stop. */
     float command_values[2] = {0.0f, 4.0f};
-    bool speed_cmd=kind==CMD_SPEED;
+    bool motion_cmd=kind-CMD_SPEED<4U;
     bool angle_cmd=kind==CMD_ANGLE;
     bool torque_cmd=kind==CMD_TORQUE;
     bool throttle_cmd=kind==CMD_THROTTLE;
     bool open_cmd=kind==CMD_OPEN;
     if (work>=MOTOR_WORK_INDEPENDENT && !explicit_axis &&
-        (speed_cmd || angle_cmd || torque_cmd || throttle_cmd || open_cmd)) { result=-2; return result; }
-    if ((speed_cmd || angle_cmd || torque_cmd || throttle_cmd) &&
-        !parse_hso_values(line+command_lengths[kind],command_values,1U)) { result=-2; return result; }
+        (motion_cmd || open_cmd)) { result=-2; return result; }
+    if (motion_cmd &&
+        !parse_hso_values(argument,command_values,1U)) { result=-2; return result; }
     if ((throttle_cmd && (axis!=MOTOR_AXIS_1 || !MotorControl_SixStepAllowed())) ||
         (torque_cmd && MotorControl_SixStepAllowed())) { result=-1; return result; }
-    if (open_cmd && !parse_hso_values(line + 9, command_values,
-                                     strchr(line + 9, ',') ? 2U : 1U)) { result=-2; return result; }
+    if (open_cmd && !parse_hso_values(argument, command_values,
+                                     strchr(argument, ',') ? 2U : 1U)) { result=-2; return result; }
     uint32_t primask = __get_PRIMASK();
     __disable_irq();
     /* A command received with the stop latch set must not wait through the
@@ -370,8 +382,8 @@ __attribute__((noinline,noclone)) static int8_t handle_line(char *line,MotorInpu
 
     if (!strcmp(line,"Follow")) {
         result=MotorControl_StartFollow() ? 1 : -1;
-    } else if (speed_cmd || angle_cmd || torque_cmd || throttle_cmd) {
-        JerryFOC_ControlMode mode=speed_cmd ? JERRYFOC_MODE_VELOCITY :
+    } else if (motion_cmd) {
+        JerryFOC_ControlMode mode=kind==CMD_SPEED ? JERRYFOC_MODE_VELOCITY :
                                   angle_cmd ? JERRYFOC_MODE_POSITION : JERRYFOC_MODE_TORQUE;
         uint32_t flags=MotorControl_GetOptions(axis);
         float value=command_values[0];
@@ -542,7 +554,7 @@ static void telemetry_reply(void)
             TelemetryReply *r=&telemetry_packet.payload.reply;
             _Static_assert(sizeof(TelemetryReply)==92 && offsetof(AppSettings,calibration)-offsetof(AppSettings,speed_x10)==84,"RPC settings layout");
             r->id=reply_id; r->result=reply_result; r->source=reply_source;
-            r->schema=2; r->firmware=105; r->save=(uint8_t)App_SaveState(); r->focus=(uint8_t)MotorControl_GetFocus();
+            r->schema=2; r->firmware=113; r->save=(uint8_t)App_SaveState(); r->focus=(uint8_t)MotorControl_GetFocus();
             memcpy(r->settings,&AppStorage_Get()->speed_x10,sizeof(r->settings));
             r->settings[(offsetof(AppSettings,control_config)-offsetof(AppSettings,speed_x10))/4U]=
                 (AppStorage_Get()->control_config & ~(7UL<<28)) | (MotorParams_CustomMask()<<28);

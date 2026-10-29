@@ -162,7 +162,7 @@ for mode in ("Debug", "Release"):
     raw_resources=resources();packed_resources=pack(raw_resources)
     assert packed_resources in image and unpack(packed_resources,len(raw_resources))==raw_resources,mode
     text_image=image+raw_resources
-    assert b"UI-R105-MOT" in text_image and b"UI-R90-UART" not in text_image, mode
+    assert b"UI-R113-HPI" in text_image and b"UI-R90-UART" not in text_image, mode
     assert b"Format:" in text_image and b"JustFloat" in text_image and b"TX Format:" in text_image,mode
     assert "App_FloatToDoubleBits" in symbols and "__aeabi_f2d" in symbols,mode
     for unused in ("__aeabi_dadd","__aeabi_dsub","__adddf3","__subdf3"):
