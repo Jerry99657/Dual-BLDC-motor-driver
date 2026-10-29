@@ -48,7 +48,7 @@ static struct {
     const MotorFollowParams *group_follow;
     float follow_estimate[2],follow_velocity[2];
     float follow_weight;
-    float follow_activity;
+    float follow_activity,follow_gain;
     float follow_motion_anchor,follow_acceleration;
     uint16_t follow_quiet_ms;
     uint16_t follow_count_interval;
@@ -70,6 +70,13 @@ static float slew(float actual,float target,float accel,float decel)
     float step=(braking ? decel : accel)*0.001f;
     if (actual*target<0.0f) target=0.0f;
     return actual+clamp(target-actual,-step,step);
+}
+/* Stopping-distance envelope with a finite response allowance. Shared by
+ * moving-target Follow and finite synchronous-position trajectories. */
+static float braking_speed(float distance,float decel,float response)
+{
+    float margin=decel*response;
+    return copysignf(sqrtf(margin*margin+2.0f*decel*fabsf(distance))-margin,distance);
 }
 static float ratio(void) { return control.gear_ratio; }
 static float offset(void) { return control.gear_offset; }
@@ -623,6 +630,7 @@ __attribute__((noinline,noclone,optimize("Oz"))) bool MotorControl_StartFollow(v
     }
     control.follow_weight=0;
     control.follow_activity=1; control.follow_acceleration=0;
+    control.follow_gain=m->vel_current_P;
     control.follow_motion_anchor=control.origins[master];
     control.follow_quiet_ms=0; control.follow_count_interval=1;
     control.follow_quiet=control.follow_hold=false;
@@ -650,10 +658,12 @@ float MotorControl_VelocityControl(MotorAxis axis,PIDController *velocity,float 
     float integral=velocity->integral_prev;
     float gain=velocity->P;
     float igain=velocity->I;
-    /* Retain R35 moving gains. Withdraw R36's extra low-speed P and terminal
-     * damping after the real-board vibration report and encoder-noise tests. */
+    /* Retain the R35 gain range. Smooth its error-driven scheduling over
+     * about 4 ms instead of modulating P directly with each encoder sample. */
     if (fast) {
-        velocity->P=gain+(control.group_follow->velocity_P-gain)*clamp(fabsf(error),0,1);
+        control.follow_gain+=0.2f*(gain+(control.group_follow->velocity_P-gain)*
+            clamp(fabsf(error),0,1)-control.follow_gain);
+        velocity->P=control.follow_gain;
         /* Hysteresis in follower radians: enter within four encoder counts,
          * leave beyond eight. Preserve the holding integral/load torque;
          * suppress tiny speed-noise corrections instead of disabling PWM. */
@@ -669,9 +679,10 @@ float MotorControl_VelocityControl(MotorAxis axis,PIDController *velocity,float 
     }
     float output=JerryFOC_PID_Calc(velocity,error);
     velocity->P=gain; velocity->I=igain;
-    /* Conditional integration during fast-follow current saturation. Allow
-     * reverse error to unwind; never carry a saturated acceleration into stop. */
-    if (fast && output*error>0 && fabsf(output)>=velocity->limit)
+    /* Every encoder speed PI must reject further winding into saturation,
+     * including ordinary Position and voltage mode. Retain R113 HSO PI. */
+    if (!(axis==MOTOR_AXIS_1 && MotorControl_HsoAllowed()) &&
+        output*error>0 && fabsf(output)>=velocity->limit)
         velocity->integral_prev=integral;
     return output;
 }
@@ -685,7 +696,9 @@ float MotorControl_PositionVelocity(MotorAxis axis,PIDController *position,float
     if (!control.group_active || !MotorControl_IsHandFollow() || MotorControl_IsPassive(axis))
     {
         position->limit=fminf(position->limit,position_speed(axis));
-        return JerryFOC_PID_Calc(position,error);
+        float feedforward=control.group_active && control.work==MOTOR_WORK_SYNC_POSITION ?
+            control.group_speed*(axis==MOTOR_AXIS_1 ? 1.0f : ratio()) : 0.0f;
+        return feedforward+JerryFOC_PID_Calc(position,error);
     }
     const MotorFollowParams *m=control.group_follow;
     float velocity=axis==MOTOR_AXIS_1 ? JerryFOC_getVelocity() : control.m2.velocity;
@@ -694,7 +707,13 @@ float MotorControl_PositionVelocity(MotorAxis axis,PIDController *position,float
      * and relative-speed damping. No position integral or step derivative. */
     /* Keep the planned position/speed pair through braking and settling.
      * Do not switch to a second raw-position PD controller at the endpoint. */
-    return control.group_speed+m->P*error+m->damping*(control.group_speed-velocity);
+    /* Bounded 4 ms reference lead from the existing 10 Hz acceleration
+     * estimate. Fast motion only, in follower mechanical units; never raw
+     * angle differentiation or an unmeasured inertia/current feedforward. */
+    float lead=m->fast_tracking && !control.follow_quiet ?
+        clamp(0.004f*ratio()*control.follow_acceleration,-0.5f,0.5f)*
+        control.follow_weight*clamp((control.follow_activity-0.3f)/0.4f,0,1) : 0;
+    return control.group_speed+lead+m->P*error+m->damping*(control.group_speed-velocity);
 }
 __attribute__((noinline,noclone,optimize("Oz"))) bool MotorControl_CommandFrom(MotorAxis axis,JerryFOC_ControlMode mode,float value,float limit,bool loop,MotorInput input)
 {
@@ -945,7 +964,6 @@ static void coordinate(void)
          * trajectory limits, never as an extra unbounded final command. */
         float deceleration=m->fast_tracking ? 100+(m->decel-100)*weight : m->decel;
         float response_time=m->fast_tracking ? 0.021833334f+0.003166666f*weight : 0.5f/m->response+0.001f;
-        float margin=deceleration*response_time;
         float master_speed=velocities[master];
         if (m->fast_tracking) master_speed+=weight*(control.follow_master_velocity-master_speed);
         float terminal=clamp(k*master_speed,-cap,cap);
@@ -953,7 +971,7 @@ static void coordinate(void)
          * Adding sqrt(2*a*error) to terminal speed would overestimate the
          * available braking distance during a fast catch-up/reversal. */
         float distance=error+terminal*fabsf(terminal)/(2.0f*deceleration)+terminal*response_time;
-        float envelope=copysignf(sqrtf(margin*margin+2.0f*deceleration*fabsf(distance))-margin,distance);
+        float envelope=braking_speed(distance,deceleration,response_time);
         float linear=terminal+(m->fast_tracking ? 12+(m->response-12)*weight : 0.5f*m->response)*error;
         float desired=clamp(error>0 ? fminf(linear,envelope) : fmaxf(linear,envelope),-cap,cap);
         float previous=control.group_speed;
@@ -974,11 +992,15 @@ static void coordinate(void)
         float accel=100.0f/fmaxf(1.0f,fabsf(k));
         float decel=150.0f/fmaxf(1.0f,fabsf(k));
         float cap=fminf(speed_limit((MotorAxis)master),speed_limit((MotorAxis)slave)/fabsf(k));
-        if (control.group_mode==JERRYFOC_MODE_POSITION) cap=fminf(cap,control.group_position_limit);
+        if (control.group_mode==JERRYFOC_MODE_POSITION)
+            cap=fminf(cap,fminf(control.group_position_limit,
+                fminf(position_speed((MotorAxis)master),position_speed((MotorAxis)slave)/fabsf(k))));
         float desired=control.group_target;
         if (control.group_mode==JERRYFOC_MODE_POSITION) {
             float error=control.group_target-control.group_reference;
-            desired=copysignf(fminf(cap,sqrtf(2.0f*decel*fabsf(error))),error);
+            /* 30 ms is a conservative planning allowance, not a measured
+             * motor time constant. Feedforward must reserve braking time. */
+            desired=clamp(braking_speed(error,decel,0.03f),-cap,cap);
         }
         control.group_speed=slew(control.group_speed,clamp(desired,-cap,cap),accel,decel);
         float targets[2];

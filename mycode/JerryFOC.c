@@ -1034,8 +1034,8 @@ void JerryFOC_OuterIRQ(void)
     } else if (foc.current_control_mode == JERRYFOC_MODE_VELOCITY) {
         float velocity_reference =
             update_velocity_reference(JerryFOC_Target_Velocity);
-        float error_vel = velocity_reference - filtered_velocity_global;
-        JerryFOC_Target_Iq = JerryFOC_PID_Calc(&vel_loop_M0, error_vel);
+        JerryFOC_Target_Iq = MotorControl_VelocityControl(MOTOR_AXIS_1,&vel_loop_M0,
+            velocity_reference,filtered_velocity_global);
     }
 
     MotorControl_Outer();

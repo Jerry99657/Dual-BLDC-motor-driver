@@ -9,6 +9,7 @@
 #include "app_storage.h"
 #include "MT6701.h"
 #include "motor_sixstep.h"
+#include <stdlib.h>
 
 static uint32_t now;
 static AppSettings settings;
@@ -245,6 +246,7 @@ typedef struct {
     float terminal_speed,terminal_q,terminal_dq;
     unsigned paused;
 } CurrentTrial;
+static FILE *follow_trace;
 static CurrentTrial follow_current_trial(MotorAxis slave,float acceleration_gain,unsigned motion)
 {
     boot(slave==MOTOR_AXIS_1 ? MOTOR_WORK_MASTER_M2 : MOTOR_WORK_MASTER_M1);
@@ -271,6 +273,8 @@ static CurrentTrial follow_current_trial(MotorAxis slave,float acceleration_gain
     float gap_at_stop=0,catch_delay=0,major_stop_delay=0;
     float terminal_v2=0,terminal_q2=0,terminal_dq2=0;
     unsigned paused=0,count=0;
+    const float frequencies[]={.5f,1,2,3,5};
+    float hz=motion>=27 && motion<=31 ? frequencies[motion-27] : 4;
     for(unsigned n=0;n<6000;++n) {
         bool smooth_plant=motion>=15 && motion<=20;
         float q=state(slave).target_iq;
@@ -315,6 +319,8 @@ static CurrentTrial follow_current_trial(MotorAxis slave,float acceleration_gain
         if (motion==23 || motion==25) master_velocity=n<100 ? 0 : 0.6f;
         if (motion==24) master_velocity=n<100 ? 0 : 1;
         if (motion==26) master_velocity=n<100 ? 0 : 0.6f+0.15f*sinf(2*PI*(n-100)*0.001f);
+        if (motion>=27) master_velocity=n<100 || (motion==32 && n>=1737) ? 0 :
+            (10*PI/180)*(2*PI*hz)*cosf(2*PI*hz*(n-100)*.001f);
         positions[slave]+=velocity*0.001f;
         positions[1U-slave]+=master_velocity*0.001f;
         float noise=motion==11 || motion==25 ? quantum*sinf(74*PI*n*0.001f) :
@@ -337,6 +343,11 @@ static CurrentTrial follow_current_trial(MotorAxis slave,float acceleration_gain
         HAL_TIM_PeriodElapsedCallback(&(TIM_HandleTypeDef){.Instance=TIM2});
         for(unsigned f=0;f<10;++f) HAL_ADCEx_InjectedConvCpltCallback(&hadc1);
         assert(MotorControl_IsGroupActive() && state(slave).active && state(slave).current_loop);
+        if (follow_trace) {
+            MotorAxisSnapshot s=state(slave);
+            fprintf(follow_trace,"%u,%.8f,%.8f,%.8f,%.8f,%.8f,%.8f,%.8f\n",n,
+                positions[1U-slave],positions[slave],s.target_position,master_velocity,velocity,s.target_velocity,q);
+        }
         max_gap=fmaxf(max_gap,fabsf(positions[slave]-positions[1U-slave]));
         unsigned stop_at=motion==12 ? 400 : 2000;
         if ((motion==9 || motion==12) && n>=stop_at) {
@@ -352,13 +363,13 @@ static CurrentTrial follow_current_trial(MotorAxis slave,float acceleration_gain
             if (rise90<0 && progress>=0.9f) rise90=0.001f*n;
             if (n>=200 && fabsf(progress-1)>0.02f) settle=0.001f*n;
         }
-        if (n>=1000) {
+        if (n>=(motion>=27 ? 2000U : 1000U)) {
             float error=positions[slave]-positions[1U-slave];
             err2+=error*error; vel2+=(velocity-master_velocity)*(velocity-master_velocity);
             float dq=(q-last_q)*1000;
             slew2+=dq*dq; min_speed=fminf(min_speed,velocity);
             if (master_velocity>0.1f && velocity<0.2f*master_velocity) ++paused;
-            float phase=8*PI*(n-100)*0.001f;
+            float phase=2*PI*hz*(n-100)*0.001f;
             ss+=positions[slave]*sinf(phase); sc+=positions[slave]*cosf(phase);
             rs+=positions[1U-slave]*sinf(phase); rc+=positions[1U-slave]*cosf(phase);
             float center=motion==10 ? 0.03f : motion==22 || motion==24 ? 1 : motion>=21 ? 0.6f : 0.2f;
@@ -384,7 +395,7 @@ static CurrentTrial follow_current_trial(MotorAxis slave,float acceleration_gain
 }
 static void follow_current_models(bool verify)
 {
-    for(unsigned a=0;a<2;++a) for(unsigned k=0;k<3;++k) for(unsigned v=0;v<27;++v) {
+    for(unsigned a=0;a<2;++a) for(unsigned k=0;k<3;++k) for(unsigned v=0;v<33;++v) {
         const float gains[]={300,1500,3000};
         CurrentTrial t=follow_current_trial((MotorAxis)a,gains[k],v);
         if (verify) {
@@ -398,7 +409,7 @@ static void follow_current_models(bool verify)
             if (v==5) {
                 assert(t.error_rms<0.085f && t.phase> -45 && t.phase<5);
                 assert(t.gain>0.8f && t.gain<1.05f && t.torque_slew<12);
-                if (k>0) assert(t.error_rms<0.03f);
+                if (k>0) assert(t.error_rms<0.02f && t.gain>.9f && fabsf(t.phase)<6);
             }
             /* R37 withdraws R36's moving P boost after real-board vibration.
              * Preserve the R35 moving ripple envelope, and independently
@@ -433,6 +444,13 @@ static void follow_current_models(bool verify)
              * low-gain plant retains its pre-existing resonant amplification. */
             if (v==26) assert(t.hand_ripple>0.13f && t.hand_ripple<0.23f &&
                 t.torque_slew<1.1f && t.error_rms<0.05f && t.min_speed>0.15f);
+            if(v>=27 && v<=31) {
+                /* Coverage, not a claim of 1:1 motion at every frequency:
+                 * low-frequency reversals expose the original static-friction
+                 * dead zone in this deliberately unmeasured actuator model. */
+                assert(t.gain>.25f && t.gain<1.15f && t.phase<8 && t.phase> -75 && t.torque_slew<20);
+            }
+            if(v==32)assert(fabsf(t.final_error)<.025f && t.terminal_speed<.03f);
         }
         printf("CURRENT MODEL ONLY: M%u gain=%.0f motion=%u posRMS=%.4f speedRMS=%.4f min=%.3f dIqRMS=%.3f paused=%u\n",
             a+1,gains[k],v,t.error_rms,t.speed_rms,t.min_speed,t.torque_slew,t.paused);
@@ -440,6 +458,8 @@ static void follow_current_models(bool verify)
             a+1,gains[k],v,t.rise90,t.settle,t.peak);
         if (v==5) printf("CURRENT 4HZ MODEL ONLY: M%u plant=%.0f amplitude=%.4f phase=%.2fdeg errorRMS=%.4fdeg\n",
             a+1,gains[k],t.gain,t.phase,t.error_rms*180/PI);
+        if (v>=27 && v<=31)printf("CURRENT BAND MODEL ONLY: M%u plant=%.0f case=%u amplitude=%.4f phase=%.2fdeg errorRMS=%.4fdeg\n",
+            a+1,gains[k],v,t.gain,t.phase,t.error_rms*180/PI);
         if (v==9) printf("CURRENT COAST MODEL ONLY: M%u plant=%.0f velocity settle=%.3fs final_error=%.5frad\n",
             a+1,gains[k],t.stop_delay,t.final_error);
         if (v==7 || v==8 || v==10 || v==11) printf("CURRENT SLOW MODEL ONLY: M%u plant=%.0f motion=%u velocityRipple=%.4f hand6Hz=%.4f finalError=%.5f\n",
@@ -875,6 +895,12 @@ int existing_control_main(int argc,char **argv)
 int main(int argc,char **argv)
 #endif
 {
+    if (argc>1 && !strcmp(argv[1],"follow-trace")) {
+        assert(argc==6);follow_trace=fopen(argv[2],"w");assert(follow_trace);
+        fputs("ms,master,actual,reference,master_velocity,velocity,target_velocity,iq\n",follow_trace);
+        (void)follow_current_trial((MotorAxis)atoi(argv[3]),strtof(argv[4],NULL),(unsigned)atoi(argv[5]));
+        fclose(follow_trace);follow_trace=NULL;return 0;
+    }
     if (argc>1 && !strcmp(argv[1],"follow-model")) { follow_models(false); return 0; }
     if (argc>1 && !strcmp(argv[1],"follow-current")) { follow_current_models(false); return 0; }
     check_calibration();check_custom_motors();

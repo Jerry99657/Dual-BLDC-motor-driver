@@ -130,7 +130,7 @@
     X(text_keyrpt,"KeyRpt") \
     X(text_disperr,"DispErr") \
     X(text_fw,"FW") \
-    X(text_firmware,"UI-R114-INV") \
+    X(text_firmware,"UI-R115-POS") \
     X(text_clear_diag,"Clear diag") \
     X(text_mcu,"MCU") \
     X(text_stm32g431,"STM32G431") \

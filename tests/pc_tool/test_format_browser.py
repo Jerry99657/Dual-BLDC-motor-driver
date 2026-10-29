@@ -38,7 +38,7 @@ with sync_playwright() as p:
         page.evaluate('data=>{fakeBoard.reply=data.reply;fakeBoard.jf=data.jf}',{'reply':list(reply),'jf':list(jf)})
         assert page.evaluate('fakeBoard.writes')==[]
         page.click('#connect')
-        page.wait_for_function("outputFormat==='Native'&&boardConfig?.firmware===114")
+        page.wait_for_function("outputFormat==='Native'&&boardConfig?.firmware===115")
         assert page.evaluate('fakeBoard.writes')==['Format:Native','@1:Get']
         assert page.locator('#formatState').inner_text()=='Native 已确认 · 完整控制台'
         saved=page.evaluate('JSON.stringify(boardConfig.settings)')

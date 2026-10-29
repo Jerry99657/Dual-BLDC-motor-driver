@@ -19,6 +19,7 @@ suites = {
     "angle": ["mycode/angle_src_encoder.c","mycode/motor_math.c","tests/motor_host/test_angle.c"],
     "detect": ["mycode/JerryFOC.c", "mycode/motor_control.c", "mycode/protocol.c", "mycode/number_parse.c", "mycode/motor_params.c", "tests/motor_host/test_detect.c"],
     "control": ["mycode/JerryFOC.c", "mycode/motor_control.c", "mycode/protocol.c", "mycode/number_parse.c", "mycode/motor_params.c", "tests/motor_host/test_control.c"],
+    "motion": ["mycode/JerryFOC.c", "mycode/motor_control.c", "mycode/protocol.c", "mycode/number_parse.c", "mycode/motor_params.c", "tests/motor_host/test_motion.c"],
     "sensorless": ["mycode/JerryFOC.c", "mycode/motor_control.c", "mycode/protocol.c", "mycode/number_parse.c", "mycode/st_hso.c", "mycode/motor_params.c", "tests/motor_host/test_sensorless.c"],
     "profiles": ["mycode/motor_params.c", "tests/motor_host/test_profiles.c"],
     "motor_math": ["mycode/motor_math.c", "tests/motor_host/test_motor_math.c"],
@@ -44,20 +45,20 @@ if not selected or "sampling" in selected:
 for name, sources in suites.items():
     if selected and name not in selected: continue
     sources += ["tests/diag_stub.c"]
-    if name in ("angle","encoder","detect","control","sensorless"):
+    if name in ("angle","encoder","detect","control","motion","sensorless"):
         sources += ["mycode/encoder_estimator.c"]
     if "mycode/protocol.c" in sources: sources += ["tests/motor_host/app_stub.c"]
-    if name in ("detect","control","sensorless"): sources += ["mycode/motor_sixstep.c","mycode/motor_detect.c"]
+    if name in ("detect","control","motion","sensorless"): sources += ["mycode/motor_sixstep.c","mycode/motor_detect.c"]
     if name in ("inverter","current","foc","protocol","telemetry","justfloat"):
         sources += ["tests/motor_host/control_stub.c"]
     if name in ("protocol","telemetry","justfloat"): sources += ["tests/motor_host/telemetry_stubs.c"]
-    if name in ("inverter","current","foc","control","sensorless","detect","sixstep","sixstep_wave","sixstep_plant"):
+    if name in ("inverter","current","foc","control","motion","sensorless","detect","sixstep","sixstep_wave","sixstep_plant"):
         sources += ["mycode/motor_math.c"]
     command = [compiler, "-std=c11", "-Wall", "-Wextra", "-Werror", "-O1",
                "-Itests/motor_host", "-Imycode", "-IThirdParty/ST_HSO", *sources, "-lm", "-o", str(out / (name + ".exe"))]
     if name=="sampling": command.insert(1,"-DMOTOR_SAMPLING_HOST_HOOKS")
     if name=="inverter": command.insert(1,"-DMOTOR_INVERTER_HOST")
-    if name in ("detect","control","sensorless"): command.insert(1,"-DMOTOR_HOST_REAL_CONTROL")
+    if name in ("detect","control","motion","sensorless"): command.insert(1,"-DMOTOR_HOST_REAL_CONTROL")
     if name=="motor_math": command.insert(1,"-DMOTOR_MATH_CORDIC_HOST")
     subprocess.run(command, cwd=repo, check=True)
     subprocess.run([str(out / (name + ".exe"))], cwd=repo, check=True)
