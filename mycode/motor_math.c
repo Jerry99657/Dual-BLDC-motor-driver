@@ -1,4 +1,20 @@
 #include "motor_math.h"
+extern uint32_t SystemCoreClock;
+
+float MotorMath_PredictAngle(float angle,float speed,int32_t cycles)
+{
+    int32_t maximum=(int32_t)(SystemCoreClock/1000U);
+    if (!isfinite(speed) || cycles>maximum || cycles< -maximum) return angle;
+    return angle+speed*((float)cycles/(float)SystemCoreClock);
+}
+uint32_t MotorMath_DeadTicks(uint32_t dtg,uint32_t ckd)
+{
+    if (ckd>2U) return 0U;
+    dtg&=255U;
+    uint32_t ticks=dtg<128U ? dtg : dtg<192U ? (64U+(dtg&63U))*2U :
+        dtg<224U ? (32U+(dtg&31U))*8U : (32U+(dtg&31U))*16U;
+    return ticks*(1U<<ckd);
+}
 
 /* Preserve fmin/fmax NaN semantics in all three existing callers. */
 __attribute__((noinline,noclone,optimize("Os")))

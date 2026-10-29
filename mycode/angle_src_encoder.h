@@ -13,6 +13,7 @@ void AngleSrc_Encoder_Align(float electrical_angle_rad);
 /* 由 1 kHz 运动控制任务唯一调用，更新多圈机械角和机械速度。
  * 其余 getter 均为纯读取，不再修改跨圈状态。 */
 void AngleSrc_Encoder_Update(float sample_period_s);
+float AngleSrc_Encoder_At(float mechanical_speed,uint32_t cycles);
 uint8_t AngleSrc_Encoder_IsAligned(void);
 uint8_t AngleSrc_Encoder_IsSource(const AngleSource *source);
 

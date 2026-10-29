@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <string.h>
 #include "MT6701.h"
+HostDwt host_dwt;
 #include "spi_port.h"
 void SpiPort_Service(SPI_HandleTypeDef *h) { (void)h; }
 #include "w25q64.h"
@@ -695,11 +696,21 @@ int main(int argc,char **argv) {
     assert(W25Q_Init());
     MT6701_2_Snapshot out;
     MT6701_2_GetSnapshot(&out); assert(!out.healthy);
+    float timed;uint32_t stamp;
+    assert(!MT6701_GetTimedAngle(2,&timed,&stamp));
+    assert(!MT6701_GetTimedAngle(0,&timed,&stamp));
+    assert(!MT6701_GetTimedAngle(1,&timed,&stamp));
+    host_dwt.CYCCNT=1234;
     tick=1; poll(); MT6701_2_GetSnapshot(&out);
     assert(out.healthy && out.raw_angle==1000 && out.samples==1 && out.errors==0);
+    assert(MT6701_GetTimedAngle(1,&timed,&stamp) && stamp==1234 && timed==out.angle);
     poll(); assert(reads==1); /* Same millisecond: no extra transaction. */
+    host_dwt.CYCCNT=5432;
     tick=2; payload=0x1F400CU; poll(); MT6701_2_GetSnapshot(&out); assert(out.raw_angle==2000);
+    assert(MT6701_GetTimedAngle(1,&timed,&stamp) && stamp==5432 && timed==out.angle);
+    host_dwt.CYCCNT=9876;
     tick=3; payload^=1U; poll(); MT6701_2_GetSnapshot(&out); assert(out.samples==2 && out.errors==1);
+    assert(MT6701_GetTimedAngle(1,&timed,&stamp) && stamp==5432 && timed==out.angle);
     tick=4; poll_result=HAL_TIMEOUT; poll(); MT6701_2_GetSnapshot(&out);
     assert(out.errors==2 && aborts==1 && out.raw_angle==2000);
     tick=8; MT6701_2_GetSnapshot(&out); assert(!out.healthy);
@@ -710,11 +721,14 @@ int main(int argc,char **argv) {
     gpio_b.pins |= W25_NSS_Pin; ++tick; poll(); MT6701_2_GetSnapshot(&out); assert(out.healthy && out.raw_angle==3000);
     MT6701_2_GetSnapshot(NULL);
     /* Original M1 DMA path still decodes the same CRC/status format. */
+    host_dwt.CYCCNT=0xfffffff0U;
     payload=0x0FA006U; MT6701_StartContinuous(); assert(dma_rx);
     receive_frame(dma_rx); unsigned before=dma_starts; preempt_on_tick=1;
+    host_dwt.CYCCNT=9000;
     HAL_SPI_TxRxCpltCallback(&hspi1);
     assert(dma_starts==before); /* ADC cannot reuse the DMA buffer during publication. */
     assert(MT6701_IsHealthy() && MT6701_GetRawAngle()==1000 && MT6701_GetSampleCounter()==1);
+    assert(MT6701_GetTimedAngle(0,&timed,&stamp) && stamp==0xfffffff0U && timed==Angle);
     tick+=6; assert(!MT6701_IsHealthy()); /* ADC scheduler stopped: age cycles alone cannot detect this. */
     MT6701_Service(); receive_frame(dma_rx); HAL_SPI_TxRxCpltCallback(&hspi1); assert(MT6701_IsHealthy());
     for(unsigned i=0;i<3;++i) MT6701_Service();

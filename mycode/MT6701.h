@@ -35,6 +35,10 @@ uint8_t MT6701_GetStatus(void);
 uint32_t MT6701_GetSampleCounter(void);
 uint32_t MT6701_GetErrorCounter(void);
 uint16_t MT6701_GetSampleAgeCycles(void);
+/* Last fully published SSI angle and CS-assert DWT timestamp. axes 0/1.
+ * Caller retains the existing health/admission checks; this never refreshes
+ * sample age or treats a rejected frame as valid. */
+bool MT6701_GetTimedAngle(unsigned axis,float *angle,uint32_t *cycles);
 
 typedef enum {
     MT6701_ERROR_NONE = 0,

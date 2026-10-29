@@ -17,6 +17,7 @@ static inline void HAL_NVIC_SetPriority(int n,unsigned p,unsigned s) { (void)n;(
 static inline void HAL_NVIC_ClearPendingIRQ(int n) { (void)n; }
 static inline void HAL_NVIC_EnableIRQ(int n) { (void)n; }
 #define TIM_CR1_OPM (1U<<3)
+#define TIM_CR1_UDIS (1U<<1)
 #define TIM_CR1_URS (1U<<2)
 #define TIM_EGR_UG 1U
 #ifndef TIM_DIER_UIE
@@ -40,11 +41,16 @@ extern TIM_TypeDef tim2;
 #define TIM_CHANNEL_2 4U
 #define TIM_CHANNEL_3 8U
 #define __HAL_TIM_GET_AUTORELOAD(h) ((h)->Instance->ARR)
+#ifdef MOTOR_INVERTER_HOST
+void MotorHost_Compare(TIM_HandleTypeDef *timer,unsigned channel,uint32_t value);
+#define __HAL_TIM_SET_COMPARE(h,ch,value) MotorHost_Compare((h),(ch),(value))
+#else
 #define __HAL_TIM_SET_COMPARE(h,ch,value) do { \
     if ((ch)==TIM_CHANNEL_1) (h)->Instance->CCR1=(value); \
     else if ((ch)==TIM_CHANNEL_2) (h)->Instance->CCR2=(value); \
     else (h)->Instance->CCR3=(value); \
 } while(0)
+#endif
 #define TIM_CR1_CEN 1U
 #define TIM_CR1_DIR (1U << 4)
 #define TIM_CR1_CMS (3U << 5)

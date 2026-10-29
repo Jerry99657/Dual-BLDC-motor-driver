@@ -166,9 +166,14 @@ static void m1_path_tests(void)
     assert(!output_requested);
     puts("PASS: actual M1 run adapter uses applied calibration and feedback speed, voltage mode remains direct volts, Stop clears feedforward and disconnects output");
 }
+#ifdef MOTOR_INVERTER_HOST
+#define main legacy_current_main
+#endif
 int main(void)
 {
     tim1.ARR=tim8.ARR=8499;healthy=aligned=1;ready=calibrated=output_requested=true;
     JerryFOC_setAngleSource(&source);
     bumpless_tests();feedforward_tests();saturation_tests();plant_tests();m1_path_tests();
+    return 0;
 }
+#undef main

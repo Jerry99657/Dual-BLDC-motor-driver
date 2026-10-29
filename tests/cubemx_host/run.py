@@ -42,6 +42,11 @@ def fixture(edits, accepted):
 
 
 audit(root)
+fixture({'Core/Src/tim.c':[('DeadTime = 17;','DeadTime = 128;'),('TIM_CLOCKDIVISION_DIV1','TIM_CLOCKDIVISION_DIV4')]},True)
+fixture({'Core/Src/tim.c':[('DeadTime = 17;','DeadTime = 255;'),('TIM_CLOCKDIVISION_DIV1','TIM_CLOCKDIVISION_DIV2')]},True)
+fixture({'Core/Src/tim.c':[('DeadTime = 17;','DeadTime = 256;')]},False)
+fixture({'Core/Src/tim.c':[('TIM_CLOCKDIVISION_DIV1','TIM_CLOCKDIVISION_DIV8')]},False)
+fixture({'Core/Src/tim.c':[('HAL_TIM_PWM_ConfigChannel(&htim1, &sConfigOC, TIM_CHANNEL_2)','HAL_TIM_OC_ConfigChannel(&htim1, &sConfigOC, TIM_CHANNEL_2)')]},False)
 fixture({'USB_Device/Target/usbd_conf.c': [('Init.lpm_enable = DISABLE;', 'Init.lpm_enable =   DISABLE ;')]},True)
 fixture({'USB_Device/Target/usbd_conf.h': [('#define USBD_LPM_ENABLED     0U','#define USBD_LPM_ENABLED     1U')]},False)
 fixture({'USB_Device/Target/usbd_conf.c': [('Init.lpm_enable = DISABLE','Init.lpm_enable = ENABLE')]},False)

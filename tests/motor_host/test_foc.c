@@ -129,6 +129,9 @@ uint32_t MT6701_GetErrorCounter(void) { return 0; }
 void MT6701_Service(void) { ++encoder_services; }
 void AngleSrc_Encoder_Align(float angle) { (void)angle; ++aligns; }
 void AngleSrc_Encoder_Update(float dt) { (void)dt; }
+float AngleSrc_Encoder_At(float speed,uint32_t cycles) { (void)speed;(void)cycles;return source.getElectricalAngle(); }
+bool MT6701_GetTimedAngle(unsigned axis,float *angle,uint32_t *cycles)
+{ (void)axis;(void)angle;(void)cycles;return false; }
 uint8_t AngleSrc_Encoder_IsSource(const AngleSource *s) { return s==&source; }
 uint8_t AngleSrc_Encoder_IsAligned(void) { return aligned; }
 void HAL_ADCEx_InjectedConvCpltCallback(ADC_HandleTypeDef *);

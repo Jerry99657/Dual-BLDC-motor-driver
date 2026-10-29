@@ -19,6 +19,25 @@ static volatile uint16_t mt6701_sample_age_cycles = UINT16_MAX;
 static volatile uint32_t mt6701_sample_counter = 0U;
 static volatile uint32_t mt6701_sample_at = 0U;
 static MT6701Diagnostics first_diag;
+typedef struct { float angle; uint32_t cycles; } TimedAngle;
+static TimedAngle timed_angle[2][2];
+static volatile uint8_t timed_index[2],timed_valid[2];
+static uint32_t timed_start[2];
+/* Publish a complete pair before changing the active index. The ADC ISR can
+ * preempt a DMA publisher; it must see the old complete pair in that case. */
+static void publish_timed(unsigned axis,float angle)
+{
+    unsigned index=timed_index[axis]^1U;
+    timed_angle[axis][index]=(TimedAngle){angle,timed_start[axis]};
+    __DMB();timed_index[axis]=(uint8_t)index;timed_valid[axis]=1;
+}
+bool MT6701_GetTimedAngle(unsigned axis,float *angle,uint32_t *cycles)
+{
+    if (axis>1 || !timed_valid[axis]) return false;
+    uint32_t mask=__get_PRIMASK();__disable_irq();
+    TimedAngle sample=timed_angle[axis][timed_index[axis]];
+    __set_PRIMASK(mask);*angle=sample.angle;*cycles=sample.cycles;return true;
+}
 
 /* 10 kHz 调度下允许连续 3 个控制周期没有新样本；超过后有感 FOC 撤掉输出。 */
 #define MT6701_MAX_SAMPLE_AGE_CYCLES 3U
@@ -110,6 +129,7 @@ static uint8_t MT6701_RequestSample(void)
     mt6701_transfer_age=0U;
     mt6701_transfer_at=HAL_GetTick();
     CS_Enable;
+    timed_start[0]=DWT->CYCCNT;
     HAL_StatusTypeDef status = SpiPort_ExchangeDMA(
         &hspi1, MT6701_Data, MT6701_Data, 3);
     if (status != HAL_OK) {
@@ -149,6 +169,7 @@ void HAL_SPI_TxRxCpltCallback(SPI_HandleTypeDef *hspi)
 
         Angle_Raw = (int)raw_angle;
         Angle = 2.0f * PI - (2.0f * PI * (float)Angle_Raw / 16384.0f);
+        publish_timed(0,Angle);
 
         mt6701_sample_age_cycles = 0U;
         mt6701_sample_at = HAL_GetTick();
@@ -414,6 +435,7 @@ static void second_prepare(void)
 {
     second_configure(true);
     HAL_GPIO_WritePin(MT6701_CSN2_GPIO_Port,MT6701_CSN2_Pin,GPIO_PIN_RESET);
+    timed_start[1]=DWT->CYCCNT;
 }
 
 
@@ -436,6 +458,7 @@ static void second_publish(const uint8_t rx[3])
     second_valid=true;
     second.raw_angle=raw;
     second.angle=2.0f*PI-2.0f*PI*(float)raw/16384.0f;
+    publish_timed(1,second.angle);
     second_sample_at=HAL_GetTick();
     second_age=0U;
     ++second.samples;

@@ -28,6 +28,13 @@ static float angle_meas_mechanical(void)
 {
     return encoder.position;
 }
+float AngleSrc_Encoder_At(float speed,uint32_t cycles)
+{
+    float angle;uint32_t at;
+    if (!MT6701_GetTimedAngle(0,&angle,&at)) return angle_meas_electrical();
+    angle=(float)(DIR*pp)*angle-zero_electric_angle;
+    return _normalizeAngle(MotorMath_PredictAngle(angle,(float)pp*speed,(int32_t)(cycles-at)));
+}
 
 static float angle_meas_velocity(void)
 {

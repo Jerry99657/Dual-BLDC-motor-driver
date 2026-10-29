@@ -2,6 +2,7 @@
 #define MOTOR_HOST_MAIN_H
 #include <stdint.h>
 #include <stddef.h>
+#define __DMB() __asm__ volatile("" ::: "memory")
 typedef enum { HAL_OK, HAL_ERROR, HAL_BUSY, HAL_TIMEOUT } HAL_StatusTypeDef;
 #ifdef MOTOR_IRQ_INTEGRATION
 typedef struct { union { uint32_t pins,IDR; }; } GPIO_TypeDef;

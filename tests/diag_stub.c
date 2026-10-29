@@ -2,6 +2,7 @@
  * module and irq_host verifies the entry/exit instrumentation separately. */
 #include "board_diag.h"
 #include <string.h>
+uint32_t SystemCoreClock=170000000U;
 bool diag_host_clear_allowed=true;
 unsigned diag_host_clears,diag_host_faults,diag_host_timings;
 unsigned diag_host_outer;uint32_t diag_host_at,diag_host_age;

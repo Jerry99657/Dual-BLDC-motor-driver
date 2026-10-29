@@ -46,7 +46,7 @@ int main(void)
     Protocol_Feed(PROTO_SRC_USART,(const uint8_t *)"ive\n",4);
     Protocol_Service();assert(Telemetry_IsNative());
     command("@91:Get");Telemetry_Service();assert(inflight_len==106 && inflight[3]==32 && inflight[12]==91);
-    assert(inflight[17]==113 && inflight[14]==1);
+    assert(inflight[17]==114 && inflight[14]==1);
     command("Stream:ENC2");assert(Protocol_GetControlResult()==1);
     command("Format:JustFloat");jf(12); /* Native-only diagnostics reset safely to Auto. */
     command("@92:Format:Native");Telemetry_Service();assert(inflight[3]==32 && inflight[12]==92);

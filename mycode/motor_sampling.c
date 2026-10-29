@@ -894,6 +894,12 @@ __attribute__((noinline,noclone)) bool MotorSampling_Capture(void)
     uint32_t now_cycles=DWT->CYCCNT,counter=htim1.Instance->CNT;
     bool off=acquisition.sixstep && acquisition.six_off;
     bool down=(htim1.Instance->CR1 & TIM_CR1_DIR)!=0U;
+    /* Core and APB2 timer run at the same generated clock (build-checked).
+     * Ranks 1/4 latch after 12.5/157.5 ADC clocks, ADC synchronous /4.
+     * Account for the direction too: a delayed ISR may have passed the peak. */
+    uint32_t arr=htim1.Instance->ARR;
+    uint32_t phase=off ? (down ? arr-counter : arr+counter) : (down ? 2U*arr-counter : counter);
+    uint32_t trigger_cycles=now_cycles-phase*(htim1.Instance->PSC+1U);
     uint32_t center_age=off ? htim1.Instance->ARR-counter : counter;
     uint32_t width=off ? htim1.Instance->ARR-htim1.Instance->CCR1 : htim1.Instance->CCR1;
     acquisition.frame.m1_sixstep_off=off;
@@ -1001,6 +1007,9 @@ __attribute__((noinline,noclone)) bool MotorSampling_Capture(void)
     }
     for (unsigned i = 0U; i < 3U; ++i)
         acquisition.frame.m1_voltage[i] = (float)acquisition.frame.m1_voltage_raw[i] * voltage_volts;
+    acquisition.frame.current_cycles[0]=trigger_cycles+50U;
+    acquisition.frame.current_cycles[1]=trigger_cycles+630U;
+    acquisition.frame.timing_valid=true;
     ++acquisition.frame.sequence;
     acquisition.frame_at = HAL_GetTick();
     return true;

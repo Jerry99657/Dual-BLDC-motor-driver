@@ -13,6 +13,7 @@ compiler = shutil.which("gcc") or "gcc"
 subprocess.run([sys.executable, "tests/motor_host/check_spi_clock.py"],
                cwd=repo, check=True)
 suites = {
+    "inverter": ["mycode/JerryFOC.c", "mycode/protocol.c", "mycode/number_parse.c", "mycode/motor_params.c", "tests/motor_host/test_inverter.c"],
     "current": ["mycode/JerryFOC.c", "mycode/protocol.c", "mycode/number_parse.c", "mycode/motor_params.c", "tests/motor_host/test_current.c"],
     "estimator": ["mycode/encoder_estimator.c","tests/motor_host/test_estimator.c"],
     "angle": ["mycode/angle_src_encoder.c","mycode/motor_math.c","tests/motor_host/test_angle.c"],
@@ -47,14 +48,15 @@ for name, sources in suites.items():
         sources += ["mycode/encoder_estimator.c"]
     if "mycode/protocol.c" in sources: sources += ["tests/motor_host/app_stub.c"]
     if name in ("detect","control","sensorless"): sources += ["mycode/motor_sixstep.c","mycode/motor_detect.c"]
-    if name in ("current","foc","protocol","telemetry","justfloat"):
+    if name in ("inverter","current","foc","protocol","telemetry","justfloat"):
         sources += ["tests/motor_host/control_stub.c"]
     if name in ("protocol","telemetry","justfloat"): sources += ["tests/motor_host/telemetry_stubs.c"]
-    if name in ("current","foc","control","sensorless","detect","sixstep","sixstep_wave","sixstep_plant"):
+    if name in ("inverter","current","foc","control","sensorless","detect","sixstep","sixstep_wave","sixstep_plant"):
         sources += ["mycode/motor_math.c"]
     command = [compiler, "-std=c11", "-Wall", "-Wextra", "-Werror", "-O1",
                "-Itests/motor_host", "-Imycode", "-IThirdParty/ST_HSO", *sources, "-lm", "-o", str(out / (name + ".exe"))]
     if name=="sampling": command.insert(1,"-DMOTOR_SAMPLING_HOST_HOOKS")
+    if name=="inverter": command.insert(1,"-DMOTOR_INVERTER_HOST")
     if name in ("detect","control","sensorless"): command.insert(1,"-DMOTOR_HOST_REAL_CONTROL")
     if name=="motor_math": command.insert(1,"-DMOTOR_MATH_CORDIC_HOST")
     subprocess.run(command, cwd=repo, check=True)

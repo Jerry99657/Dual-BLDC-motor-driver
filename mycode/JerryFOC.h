@@ -87,6 +87,10 @@ void JerryFOC_setPhaseVoltage(float Uq, float Ud, float angle_el);
  * anti-windup. M2 calls do not overwrite M1's HSO voltage history. */
 void JerryFOC_setAxisVoltage(MotorAxis axis, float Uq, float Ud, float angle_el,
                             float *applied_q, float *applied_d);
+/* Encoder FOC only: timed voltage angle, bounded nominal inverter model and
+ * CCR-quantized applied voltage. HSO is explicitly routed to the old path. */
+void JerryFOC_setEncoderVoltage(MotorAxis axis,float uq,float ud,float angle,
+    float mechanical_speed,float *applied_q,float *applied_d);
 
 /* PID 与滤波计算 */
 float JerryFOC_LPF_Calc(LowPassFilter* filter, float x);

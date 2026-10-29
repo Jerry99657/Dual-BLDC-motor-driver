@@ -293,6 +293,21 @@ def audit(root):
                                 'OCNPolarity': 'TIM_OCNPOLARITY_HIGH'}.items():
             check(lambda b=body, f=field, e=expected: require(b, 'sConfigOC.' + f, e))
         check(lambda b=body: require(b, 'sBreakDeadTimeConfig.AutomaticOutput', 'TIM_AUTOMATICOUTPUT_DISABLE'))
+        # Encoder timing uses both center-aligned update boundaries, while
+        # inverter compensation decodes the GENERATED DTG/CKD at runtime.
+        def deadtime_format(b=body,p=port):
+            if value(b,f'htim{p}.Init.ClockDivision') not in ('TIM_CLOCKDIVISION_DIV1','TIM_CLOCKDIVISION_DIV2','TIM_CLOCKDIVISION_DIV4'):
+                raise ConfigError(f'TIM{p}: adapt inverter tDTS decoder before using another CKD format')
+            try:
+                dtg=int(value(b,'sBreakDeadTimeConfig.DeadTime'),0)
+            except ValueError:
+                raise ConfigError(f'TIM{p}: inverter compensation requires a numeric generated 8-bit DTG')
+            if not 0<=dtg<=255:
+                raise ConfigError(f'TIM{p}: DTG must fit its generated 8-bit field')
+            for ch in (1,2,3):
+                if not re.search(r'HAL_TIM_PWM_ConfigChannel\s*\(\s*&htim'+str(p)+r'\s*,\s*&sConfigOC\s*,\s*TIM_CHANNEL_'+str(ch)+r'\s*\)',b):
+                    raise ConfigError(f'TIM{p}: encoder voltage commit requires generated PWM/preload setup for all phases')
+        check(deadtime_format)
     for port, fields in {
         1: {'sMasterConfig.MasterOutputTrigger2': 'TIM_TRGO2_OC4REF',
             'sBreakInputConfig.Source': 'TIM_BREAKINPUTSOURCE_COMP4',

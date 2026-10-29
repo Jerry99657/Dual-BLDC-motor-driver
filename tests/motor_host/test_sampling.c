@@ -747,6 +747,18 @@ int main(int argc,char **argv) {
     near(out.m1_voltage[0],1111*36.3f/4095.0f);
     near(out.m1_voltage[1],2222*36.3f/4095.0f);
     near(out.m1_voltage[2],3333*36.3f/4095.0f);
+    /* Rank-specific S/H times from the real paired frame publisher, including
+     * counter direction and unsigned cycle-counter wrap. */
+    for(unsigned down=0;down<2;++down)for(unsigned wrap=0;wrap<2;++wrap) {
+        tim1.CNT=down ? 6000 : 680;
+        if(down)tim1.CR1|=TIM_CR1_DIR;else tim1.CR1&=~TIM_CR1_DIR;
+        uint32_t now=wrap ? 20U : 50000U;
+        host_dwt.CYCCNT=now;
+        uint32_t origin=now-(down ? 2*tim1.ARR-tim1.CNT : tim1.CNT);
+        frame(0);assert(MotorSampling_Capture());MotorSampling_CopyFrame(&out);
+        assert(out.timing_valid && out.current_cycles[0]==origin+50 && out.current_cycles[1]==origin+630);
+    }
+    tim1.CR1&=~TIM_CR1_DIR;tim1.CNT=680;
     publish(2707); near(MotorSampling_GetBusVoltage(),2707*36.3f/4095.0f);
     /* Reproduces the old GetTick()-ISR_timestamp underflow: an ADC/DMA IRQ
      * publishes a timestamp in the next tick before GetTick returns the old one. */
@@ -755,7 +767,9 @@ int main(int argc,char **argv) {
     MotorSampling_GetDiagnostics(NULL);
     /* An incomplete paired sequence must never become a new frame. */
     uint32_t before_pair_error=MotorSampling_GetFrame()->sequence;
+    uint32_t before_cycles=MotorSampling_GetFrame()->current_cycles[0];
     assert(!MotorSampling_Capture()); off(); assert(MotorSampling_GetFrame()->sequence==before_pair_error);
+    assert(MotorSampling_GetFrame()->current_cycles[0]==before_cycles);
     assert(diagnostics().fault==MOTOR_SAMPLE_FAULT_PAIR);
     sample_ms(20,2707); off();
     assert(diagnostics().bus_fresh && diagnostics().bus_samples>600);

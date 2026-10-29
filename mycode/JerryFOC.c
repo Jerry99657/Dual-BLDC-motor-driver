@@ -292,7 +292,17 @@ __attribute__((noinline,noclone)) void JerryFOC_CurrentControl(MotorAxis axis,
     float ud=JerryFOC_CurrentPI(&loops->d,target_d-id)+ffd;
     float aq,ad;
     bool blocked=axis==MOTOR_AXIS_1 && !JerryFOC_isDriveReady();
-    JerryFOC_setAxisVoltage(axis,blocked ? 0.0f : uq,blocked ? 0.0f : ud,angle,&aq,&ad);
+    if (hso || blocked) JerryFOC_setAxisVoltage(axis,blocked ? 0.0f : uq,blocked ? 0.0f : ud,angle,&aq,&ad);
+    else JerryFOC_setEncoderVoltage(axis,uq,ud,angle,speed,&aq,&ad);
+    if (!hso && !blocked) {
+        /* CCR quantization is bounded by one PWM tick; integrating it as
+         * saturation biases PI even with zero current error. Keep the real
+         * CCR estimate, but ignore sub-tick differences for anti-windup. */
+        TIM_TypeDef *timer=axis==MOTOR_AXIS_1 ? htim1.Instance : htim8.Instance;
+        float quantum=timer->ARR ? MotorSampling_GetBusVoltage()/(float)timer->ARR : 0.0f;
+        if (fabsf(aq-uq)<quantum) aq=uq;
+        if (fabsf(ad-ud)<quantum) ad=ud;
+    }
     JerryFOC_TrackCurrent(&loops->q,aq,uq);
     JerryFOC_TrackCurrent(&loops->d,ad,ud);
 }
@@ -352,14 +362,26 @@ __RAM_FUNC static void setAxisPwm(MotorAxis axis, float da, float db, float dc)
 
     TIM_HandleTypeDef *timer = axis == MOTOR_AXIS_1 ? &htim1 : &htim8;
     uint32_t arr = __HAL_TIM_GET_AUTORELOAD(timer);
-
+    uint32_t mask=__get_PRIMASK();__disable_irq();
+    uint32_t udis=timer->Instance->CR1 & TIM_CR1_UDIS;
+    SET_BIT(timer->Instance->CR1,TIM_CR1_UDIS);
     __HAL_TIM_SET_COMPARE(timer, TIM_CHANNEL_1, (uint32_t)(da * (float)arr));
     __HAL_TIM_SET_COMPARE(timer, TIM_CHANNEL_2, (uint32_t)(db * (float)arr));
     __HAL_TIM_SET_COMPARE(timer, TIM_CHANNEL_3, (uint32_t)(dc * (float)arr));
+    if (!udis) CLEAR_BIT(timer->Instance->CR1,TIM_CR1_UDIS);
+    __set_PRIMASK(mask);
 }
 
-__RAM_FUNC void JerryFOC_setAxisVoltage(MotorAxis axis, float Uq, float Ud, float angle_el,
-                                       float *applied_q, float *applied_d)
+extern uint32_t SystemCoreClock;
+/* Only encoder FOC opts in. The nominal bridge model deliberately takes the
+ * larger of MCU/JSM6288Q deadtimes, not their unjustified sum. It is bounded
+ * to 0.5% duty, uses a continuous +/-0.1 A current transition and the TI
+ * 25 C / 10 V-gate nominal Rds=1.8 mOhm. These are initial model values. */
+static float inverter_loss(float amps,float dead_voltage)
+{ return dead_voltage*MotorMath_Clamp(amps*10.0f,-1.0f,1.0f)+0.0018f*amps; }
+
+__RAM_FUNC __attribute__((noinline,noclone)) static void axis_voltage(MotorAxis axis,
+    float Uq,float Ud,float angle_el,float *applied_q,float *applied_d,bool encoder,float speed)
 {
     if ((unsigned)axis >= MOTOR_AXIS_COUNT) return;
     const MotorParams *motor=MotorParams_GetAxis(axis);
@@ -375,7 +397,21 @@ __RAM_FUNC void JerryFOC_setAxisVoltage(MotorAxis axis, float Uq, float Ud, floa
         }
         return;
     }
-    angle_el = _normalizeAngle(angle_el);
+    TIM_TypeDef *timer=(axis==MOTOR_AXIS_1 ? htim1.Instance : htim8.Instance);
+    const MotorSampleFrame *frame=MotorSampling_GetFrame();
+    uint32_t half=timer->ARR*(timer->PSC+1U);
+    if (encoder && !half) goto neutral;
+    float loss_a=0,loss_b=0,loss_c=0;
+    if (encoder && half) {
+        uint32_t dead=MotorMath_DeadTicks(timer->BDTR & 255U,(timer->CR1>>8U)&3U);
+        float nominal=fmaxf((float)dead,(float)SystemCoreClock*0.0000002f);
+        float dv=bus_voltage*fminf(0.005f,nominal/(2.0f*(float)half));
+        float ia=axis==MOTOR_AXIS_1 ? frame->m1_current[0] : frame->m2_current[0];
+        float ib=axis==MOTOR_AXIS_1 ? frame->m1_current[1] : frame->m2_current[1];
+        float ic=axis==MOTOR_AXIS_1 ? frame->m1_current[2] : -(ia+ib);
+        loss_a=inverter_loss(ia,dv);loss_b=inverter_loss(ib,dv);loss_c=inverter_loss(ic,dv);
+        if (!isfinite(loss_a) || !isfinite(loss_b) || !isfinite(loss_c)) goto neutral;
+    }
 
     /* d/q 电压矢量限幅，保留 5% 裕量给死区和母线波动。 */
     /* Measured VBUS sets duty scaling. Retain the configured motor voltage
@@ -390,57 +426,98 @@ __RAM_FUNC void JerryFOC_setAxisVoltage(MotorAxis axis, float Uq, float Ud, floa
         Ud *= scale;
     }
 
-    float sin_angle,cos_angle;
-    MotorMath_SinCos(angle_el,&sin_angle,&cos_angle);
+    /* Retry a crossed/near update boundary rather than use an angle for a
+     * different latch. Bounded work: three attempts, then neutral; the whole
+     * IRQ's existing 100 us timing protection remains in force. */
+    for (unsigned attempt=0;attempt<3U;++attempt) {
+        float angle=angle_el;uint32_t latch=0;
+        bool timed=encoder && frame->timing_valid && half && timer->CNT<=timer->ARR;
+        if (timed) {
+            uint32_t now=DWT->CYCCNT,count=timer->CNT;
+            uint32_t distance=((timer->CR1 & TIM_CR1_DIR) ? count : timer->ARR-count)*(timer->PSC+1U);
+            if (!distance) distance=half;
+            latch=now+distance;
+            angle=MotorMath_PredictAngle(angle,speed*(float)motor->pole_pairs,
+                (int32_t)(latch+half-frame->current_cycles[axis]));
+        }
+        angle=_normalizeAngle(angle);
+        float sin_angle,cos_angle;
+        MotorMath_SinCos(angle,&sin_angle,&cos_angle);
 
-    /* 逆 Park 变换 */
-    float Ualpha = -Uq * sin_angle + Ud * cos_angle;
-    float Ubeta  =  Uq * cos_angle + Ud * sin_angle;
+        /* 逆 Park 变换 */
+        float Ualpha = -Uq * sin_angle + Ud * cos_angle;
+        float Ubeta  =  Uq * cos_angle + Ud * sin_angle;
 
-    uint32_t start_cycles = DWT->CYCCNT;
+        /* 逆 Clarke 变换 */
+        float Ua = Ualpha;
+        float Ub = -0.5f * Ualpha + 0.86602540378f * Ubeta;
+        float Uc = -0.5f * Ualpha - 0.86602540378f * Ubeta;
+        if (encoder) { Ua+=loss_a;Ub+=loss_b;Uc+=loss_c; }
 
-    /* 逆 Clarke 变换 */
-    float Ua = Ualpha;
-    float Ub = -0.5f * Ualpha + 0.86602540378f * Ubeta;
-    float Uc = -0.5f * Ualpha - 0.86602540378f * Ubeta;
+        /* 相电压转 0~1 占空比 */
+        float inv_Vbus = 1.0f / bus_voltage;
+        float da = Ua * inv_Vbus + 0.5f;
+        float db = Ub * inv_Vbus + 0.5f;
+        float dc = Uc * inv_Vbus + 0.5f;
 
-    /* 相电压转 0~1 占空比 */
-    float inv_Vbus = 1.0f / bus_voltage;
-    float da = Ua * inv_Vbus + 0.5f;
-    float db = Ub * inv_Vbus + 0.5f;
-    float dc = Uc * inv_Vbus + 0.5f;
+        /* 连续 SVPWM（Min-Max 零序注入） */
+        float duty_max = da > db ? (da > dc ? da : dc) : (db > dc ? db : dc);
+        float duty_min = da < db ? (da < dc ? da : dc) : (db < dc ? db : dc);
+        float d_com = 0.5f - 0.5f * (duty_max + duty_min);
 
-    /* 连续 SVPWM（Min-Max 零序注入） */
-    float duty_max = da > db ? (da > dc ? da : dc) : (db > dc ? db : dc);
-    float duty_min = da < db ? (da < dc ? da : dc) : (db < dc ? db : dc);
-    float d_com = 0.5f - 0.5f * (duty_max + duty_min);
+        da += d_com;
+        db += d_com;
+        dc += d_com;
 
-    da += d_com;
-    db += d_com;
-    dc += d_com;
+        da = _constrain(da, 0.0f, 1.0f);
+        db = _constrain(db, 0.0f, 1.0f);
+        dc = _constrain(dc, 0.0f, 1.0f);
 
-    da = _constrain(da, 0.0f, 1.0f);
-    db = _constrain(db, 0.0f, 1.0f);
-    dc = _constrain(dc, 0.0f, 1.0f);
+        if (timed && (int32_t)(latch-DWT->CYCCNT)<=128) continue;
+        setAxisPwm(axis,da,db,dc);
+        if (encoder) {
+            float inv_arr=1.0f/(float)timer->ARR;
+            da=(float)timer->CCR1*inv_arr;db=(float)timer->CCR2*inv_arr;dc=(float)timer->CCR3*inv_arr;
+        }
 
-    /* 用最终占空比反算实际施加的 alpha/beta 电压（诊断用） */
-    float duty_common = (da + db + dc) * 0.3333333333f;
-    float Ua_actual = (da - duty_common) * bus_voltage;
-    float Ub_actual = (db - duty_common) * bus_voltage;
-    float Uc_actual = (dc - duty_common) * bus_voltage;
-    float actual_alpha=Ua_actual;
-    float actual_beta=(Ub_actual-Uc_actual)*0.5773502692f;
-    float actual_d=actual_alpha*cos_angle+actual_beta*sin_angle;
-    float actual_q=actual_beta*cos_angle-actual_alpha*sin_angle;
-    if (applied_q) *applied_q=actual_q;
-    if (applied_d) *applied_d=actual_d;
-    if (axis==MOTOR_AXIS_1) {
-        foc.g_shared_prev_Ualpha=actual_alpha; foc.g_shared_prev_Ubeta=actual_beta;
-        foc.g_shared_prev_Ud=actual_d; foc.g_shared_prev_Uq=actual_q;
+        /* Estimate alpha/beta from the final duties and nominal losses.
+         * This model is not an ADC measurement of terminal voltage. */
+        float duty_common = (da + db + dc) * 0.3333333333f;
+        float Ua_actual = (da - duty_common) * bus_voltage;
+        float Ub_actual = (db - duty_common) * bus_voltage;
+        float Uc_actual = (dc - duty_common) * bus_voltage;
+        float actual_alpha=Ua_actual;
+        float actual_beta=(Ub_actual-Uc_actual)*0.5773502692f;
+        if (encoder) {
+            actual_alpha-=(2.0f*loss_a-loss_b-loss_c)/3.0f;
+            actual_beta-=(loss_b-loss_c)*0.5773502692f;
+        }
+        float actual_d=actual_alpha*cos_angle+actual_beta*sin_angle;
+        float actual_q=actual_beta*cos_angle-actual_alpha*sin_angle;
+        if (applied_q) *applied_q=actual_q;
+        if (applied_d) *applied_d=actual_d;
+        if (axis==MOTOR_AXIS_1) {
+            foc.g_shared_prev_Ualpha=actual_alpha; foc.g_shared_prev_Ubeta=actual_beta;
+            foc.g_shared_prev_Ud=actual_d; foc.g_shared_prev_Uq=actual_q;
+        }
+        return;
     }
-    setAxisPwm(axis,da,db,dc);
-
-    (void)start_cycles;
+neutral:
+    setAxisPwm(axis,0.5f,0.5f,0.5f);
+    if (applied_q) *applied_q=0.0f;
+    if (applied_d) *applied_d=0.0f;
+    if (axis==MOTOR_AXIS_1)
+        foc.g_shared_prev_Ualpha=foc.g_shared_prev_Ubeta=foc.g_shared_prev_Ud=foc.g_shared_prev_Uq=0.0f;
+}
+void JerryFOC_setAxisVoltage(MotorAxis axis,float uq,float ud,float angle,float *aq,float *ad)
+{
+    axis_voltage(axis,uq,ud,angle,aq,ad,false,0.0f);
+}
+void JerryFOC_setEncoderVoltage(MotorAxis axis,float uq,float ud,float angle,float speed,float *aq,float *ad)
+{
+    bool encoder=axis!=MOTOR_AXIS_1 || !MotorControl_HsoAllowed();
+    if (axis==MOTOR_AXIS_1 && !JerryFOC_isDriveReady()) { uq=ud=0;encoder=false; }
+    axis_voltage(axis,uq,ud,angle,aq,ad,encoder,speed);
 }
 
 __RAM_FUNC void JerryFOC_setPhaseVoltage(float Uq, float Ud, float angle_el)
@@ -840,6 +917,8 @@ __RAM_FUNC void JerryFOC_run(void)
 
     float electrical_angle = MotorControl_HsoAllowed() ? StHso_ControlAngle() :
         foc.angle_source ? foc.angle_source->getElectricalAngle() : 0.0f;
+    if (!MotorControl_HsoAllowed() && foc.angle_source && AngleSrc_Encoder_IsSource(foc.angle_source) && sample->timing_valid)
+        electrical_angle=AngleSrc_Encoder_At(filtered_velocity_global,sample->current_cycles[0]);
 
     float raw_Id, raw_Iq;
     JerryFOC_Park(Ialpha, Ibeta, electrical_angle, &raw_Id, &raw_Iq);
@@ -855,7 +934,7 @@ __RAM_FUNC void JerryFOC_run(void)
     float target_id = 0.0f;
     if (MotorControl_HsoAllowed()) StHso_BlendCurrent(&target_id,&target_iq);
     if (!flag_use_current_loop) {
-        JerryFOC_setPhaseVoltage(target_iq,0.0f,electrical_angle);
+        JerryFOC_setEncoderVoltage(MOTOR_AXIS_1,target_iq,0.0f,electrical_angle,filtered_velocity_global,NULL,NULL);
     } else {
         /* Also enforce this at the fast-loop boundary: the velocity outer
          * loop and external application code can write Target_Iq directly. */

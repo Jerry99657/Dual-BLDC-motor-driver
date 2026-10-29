@@ -18,6 +18,8 @@ typedef struct {
     bool m1_sixstep_valid;
     bool m1_sixstep_off; /* OFF-center sampling: all driven phases LOW. */
     bool m1_voltage_high_plateau; /* All M1 high sides stayed on across voltage ranks; sampled before arming. */
+    uint32_t current_cycles[2]; /* DWT time of each axis' current S/H latch. */
+    bool timing_valid;
 } MotorSampleFrame;
 
 typedef enum {

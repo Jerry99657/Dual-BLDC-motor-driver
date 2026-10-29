@@ -849,6 +849,13 @@ void MotorControl_Fast(void)
     const MotorSampleFrame *f=MotorSampling_GetFrame();
     control.m2.ia=f->m2_current[0]; control.m2.ib=f->m2_current[1];
     float angle=norm(control.m2.electrical_scale*enc.angle-control.m2.electrical_zero);
+    float sensor;uint32_t at;
+    if (f->timing_valid && MT6701_GetTimedAngle(1,&sensor,&at)) {
+        angle=MotorMath_PredictAngle(control.m2.electrical_scale*sensor-control.m2.electrical_zero,
+            (float)MotorParams_GetAxis(MOTOR_AXIS_2)->pole_pairs*control.m2.velocity,
+            (int32_t)(f->current_cycles[1]-at));
+        angle=norm(angle);
+    }
     float alpha,beta,d,q;
     JerryFOC_Clarke(control.m2.ia,control.m2.ib,&alpha,&beta); JerryFOC_Park(alpha,beta,angle,&d,&q);
     control.m2.id=0.5f*(control.m2.id+d); control.m2.iq=0.5f*(control.m2.iq+q);
@@ -863,7 +870,7 @@ void MotorControl_Fast(void)
         float cap=MotorParams_GetAxis(MOTOR_AXIS_2)->rated_current;
         JerryFOC_CurrentControl(MOTOR_AXIS_2,&control.m2.loops,angle,control.m2.velocity,
             0.0f,clamp(control.m2.target_q,-cap,cap),control.m2.id,control.m2.iq);
-    } else JerryFOC_setAxisVoltage(MOTOR_AXIS_2,control.m2.target_q,0,angle,NULL,NULL);
+    } else JerryFOC_setEncoderVoltage(MOTOR_AXIS_2,control.m2.target_q,0,angle,control.m2.velocity,NULL,NULL);
 }
 static void update_encoder2(void)
 {
