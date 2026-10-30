@@ -42,6 +42,9 @@ def fixture(edits, accepted):
 
 
 audit(root)
+tim2_body=function(original[Path('Core/Src/tim.c')],'MX_TIM2_Init')
+fixture({'Core/Src/tim.c':[(tim2_body,tim2_body.replace(
+    'TIM_CLOCKSOURCE_INTERNAL','TIM_CLOCKSOURCE_ETRMODE2'))]},False)
 fixture({'Core/Src/spi.c':[('GPIO_InitStruct.Pull = GPIO_PULLUP;', 'GPIO_InitStruct.Pull = GPIO_NOPULL;')]},False)
 fixture({'Core/Src/spi.c':[('PA6     ------> SPI1_MISO','PA4     ------> SPI1_MISO'),
     ('GPIO_InitStruct.Pin = GPIO_PIN_6;', 'GPIO_InitStruct.Pin = GPIO_PIN_4;')]},True)
@@ -101,6 +104,7 @@ for file, before, after in (
               'HAL_TIM_PWM_ConfigChannel(&htim3, &sConfigOC, TIM_CHANNEL_2)'),
     ('tim.c', 'htim1.Init.Period = 8499;', 'htim1.Init.Period = 4249;'),
     ('tim.c', 'htim2.Init.Period = 999;', 'htim2.Init.Period = 499;'),
+    ('tim.c', 'htim2.Init.CounterMode = TIM_COUNTERMODE_UP;', 'htim2.Init.CounterMode = TIM_COUNTERMODE_DOWN;'),
     ('tim.c', 'TIM_BREAK_ENABLE;', 'TIM_BREAK_DISABLE;'),
     ('comp.c', 'COMP_INPUT_MINUS_DAC3_CH2;', 'COMP_INPUT_MINUS_VREFINT;'),
     ('main.c', 'RCC_HCLK_DIV1;', 'RCC_HCLK_DIV2;'),

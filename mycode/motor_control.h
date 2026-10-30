@@ -27,6 +27,8 @@ void MotorControl_Fast(void);  /* ADC JEOS, after the complete paired frame. */
 void MotorControl_PrepareOuter(void); /* Both new measurements, then shared references. */
 void MotorControl_Outer(void); /* TIM2, 1 kHz; after M1 encoder/outer update. */
 void MotorControl_RecordCycles(uint32_t cycles);
+bool MotorControl_OuterRequired(void); /* Powered normal FOC; excludes alignment/detection/open loop. */
+void MotorControl_TimingFault(const char *reason); /* Both gates first; reset-only latch. */
 bool MotorControl_AxisEnabled(MotorAxis axis);
 bool MotorControl_IsCoupled(void);
 bool MotorControl_IsHandFollow(void);

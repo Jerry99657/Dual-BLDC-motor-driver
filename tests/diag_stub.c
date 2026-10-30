@@ -7,6 +7,7 @@ bool diag_host_clear_allowed=true;
 unsigned diag_host_clears,diag_host_faults,diag_host_timings;
 unsigned diag_host_outer;uint32_t diag_host_at,diag_host_age;
 void BoardDiag_Init(void) {}
+void BoardDiag_OuterReset(void) {}
 bool BoardDiag_Clear(void) { if(diag_host_clear_allowed) ++diag_host_clears; return diag_host_clear_allowed; }
 void BoardDiag_Motion(unsigned axis,unsigned mode,float a,float b,float c,float d,float e)
 { (void)axis;(void)mode;(void)a;(void)b;(void)c;(void)d;(void)e; }

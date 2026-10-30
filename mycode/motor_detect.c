@@ -218,7 +218,7 @@ __attribute__((noinline)) bool MotorDetect_Process(const MotorSampleFrame *f) {
         /* Forced rotating current vector, then two complete mechanical turns
          * checked separately with the measured encoder motion. No preset R/L,
          * flux, pole count or encoder electrical offset is used. */
-        speed=fminf(80,speed+0.002f); /* electrical rad/s, 20 rad/s^2 */
+        speed=MotorMath_Min(80,speed+0.002f); /* electrical rad/s, 20 rad/s^2 */
         if(stage==FLUX_RAMP && ticks==50000U) {
             phase=FLUX_MEASURE; message="FLUX TEST"; ticks=0;
             window=(uint32_t)((float)abs((int8_t)candidate)*785.398163f+0.5f);
@@ -249,10 +249,10 @@ __attribute__((noinline)) bool MotorDetect_Process(const MotorSampleFrame *f) {
     if(stage>=FLUX_RAMP) {
         /* Conservative 20 V/(A*s) PI integrators, just as the existing DC
          * detector. Actual applied dq values are tracked for voltage limiting. */
-        float ceiling=fminf(4,MotorSampling_GetBusVoltage()*0.2f);
+        float ceiling=MotorMath_Min(4,MotorSampling_GetBusVoltage()*0.2f);
         q_integral=clip(q_integral-iq*0.002f,-ceiling,ceiling);
     }
-    float ceiling=fminf(4,MotorSampling_GetBusVoltage()*0.2f);
+    float ceiling=MotorMath_Min(4,MotorSampling_GetBusVoltage()*0.2f);
     d_integral=clip(d_integral+(current-id)*0.002f,-ceiling,ceiling);
     JerryFOC_setAxisVoltage(MOTOR_AXIS_1,stage>=FLUX_RAMP ? q_integral : 0,d_integral,angle,&q_integral,&applied);
     return true;

@@ -722,7 +722,7 @@ int main(int argc,char **argv) {
             }
             assert(EncoderHost_Crc(bits)==crc);
         }
-        puts("PASS: SSI CRC lookup equals independent bitwise polynomial for all 262144 angle/status inputs");
+        puts("PASS: SSI CRC equals independent bitwise polynomial for all 262144 angle/status inputs");
     }
     flash_cr1=spi2.CR1=SPI_MODE_MASTER|SPI_NSS_SOFT|SPI_BAUDRATEPRESCALER_8;
     flash_cr2=spi2.CR2=SPI_DATASIZE_8BIT|SPI_RXFIFO_THRESHOLD_QF;

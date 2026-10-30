@@ -24,6 +24,7 @@ typedef struct {
 } BoardDiagCrash;
 typedef struct {
     uint32_t adc_max,outer_max,adc_jitter,outer_jitter,center_age,overruns;
+    uint32_t outer_overruns,outer_gaps,outer_stalls;
 } BoardDiagTiming;
 
 void BoardDiag_Init(void);
@@ -34,11 +35,12 @@ void BoardDiag_Motion(unsigned axis,unsigned mode,float target_speed,float targe
  * First event remains frozen across restart/reset until explicit Clear. */
 void BoardDiag_Fault(unsigned axis,unsigned source,const char *reason);
 void BoardDiag_Timing(unsigned outer,uint32_t entered,uint32_t center_age);
+void BoardDiag_OuterReset(void); /* Stop caller holds PRIMASK; clear session heartbeat. */
 const BoardDiagFault *BoardDiag_LastFault(void);
 const BoardDiagCrash *BoardDiag_LastCrash(void);
 const BoardDiagTiming *BoardDiag_Times(void);
 /* Extra rows appended to the existing Diagnostics info page / GetRow group6. */
-#define BOARD_DIAG_ROWS 30U
+#define BOARD_DIAG_ROWS 31U
 const char *BoardDiag_Row(unsigned axis,unsigned row,char value[32]);
 
 #if defined(__arm__) || defined(__thumb__)

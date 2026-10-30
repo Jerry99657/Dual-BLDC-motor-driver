@@ -1,7 +1,10 @@
 /* Exercise the real implementation; white-box access models retained SRAM
  * corruption and startup clearing without adding test APIs to firmware. */
 #define __DMB() ((void)0)
-#include "../../mycode/board_diag.c"
+#ifndef BOARD_DIAG_TEST_SOURCE
+#define BOARD_DIAG_TEST_SOURCE "../../mycode/board_diag.c"
+#endif
+#include BOARD_DIAG_TEST_SOURCE
 #include <assert.h>
 #include <math.h>
 #include <stdio.h>
@@ -9,6 +12,15 @@ uint32_t host_primask;
 HostDwt host_dwt;
 static uint32_t now,recorded_cycles;
 static bool requested[2],recurse;
+static bool guard_allowed=true;
+static unsigned timing_faults;
+static const char *timing_reason;
+bool MotorControl_OuterRequired(void) { return guard_allowed && (requested[0] || requested[1]); }
+void MotorControl_TimingFault(const char *reason) {
+ if(!requested[0] && !requested[1]) return;
+ requested[0]=requested[1]=false;++timing_faults;timing_reason=reason;
+ BoardDiag_Fault(0,DIAG_CONTROL,reason);
+}
 static MotorSampleFrame sample;
 static MotorGlobalStopRecord stop;
 void MotorSampling_GetGlobalStop(MotorGlobalStopRecord *out) { *out=stop; }
@@ -75,7 +87,7 @@ static void retention(void) {
 }
 static void stop_rows(void) {
  char value[32];
- for(unsigned row=26;row<BOARD_DIAG_ROWS;++row) {
+ for(unsigned row=26;row<30U;++row) {
   assert(BoardDiag_Row(0,row,value) && !strcmp(value,"--"));
  }
  const char *names[]={"CPU BOOT","KEY1 EDGE","KEY1 LOW","KEY1 PEND","COMMAND"};
@@ -143,4 +155,81 @@ static void timing_test(void) {
  host_dwt.CYCCNT=19;BoardDiag_Timing(0,10,20);assert(!timing.adc_jitter && timing.adc_max==9);
  puts("PASS: 10 kHz ADC/1 kHz outer-loop duration, start jitter, PWM age, deadline counter, DWT wrap, existing protection forwarding and clear/rebaseline");
 }
-int main(void) { retention();loader_debug_retention();stop_rows();timing_test();return 0; }
+static void report(unsigned outer,uint32_t entered,uint32_t duration) {
+ host_dwt.CYCCNT=entered+duration;BoardDiag_Timing(outer,entered,0);
+}
+static void monitor_start(unsigned axis,uint32_t origin) {
+ requested[0]=requested[1]=false;assert(BoardDiag_Clear());
+ timing_faults=0;timing_reason=NULL;guard_allowed=true;
+ requested[axis]=true;report(1,origin,4000);
+}
+static void outer_trip(void) {
+ monitor_start(0,0);requested[1]=true;
+ report(1,170000,475830); /* Reported 2799 us, not a single ADC overrun. */
+ assert(timing_faults==1 && !requested[0] && !requested[1]);
+ assert(!strcmp(timing_reason,"OUTER OVERRUN"));
+ assert(!strcmp(BoardDiag_LastFault()->reason,"OUTER OVERRUN"));
+}
+#if BOARD_DIAG_ROWS>=31U
+static void outer_monitor(void) {
+ outer_trip();
+ for(unsigned axis=0;axis<2;++axis) {
+  uint32_t t=0xffff0000U;monitor_start(axis,t);
+  for(unsigned i=0;i<1000;++i) { t+=170000U;report(1,t,66810); }
+  assert(!timing_faults && !timing.outer_overruns && !timing.outer_gaps);
+  /* Isolated execution overruns count; a healthy cycle clears the streak. */
+  t+=170000;report(1,t,170000);t+=170000;report(1,t,4000);
+  t+=170000;report(1,t,170000);t+=170000;report(1,t,170000);
+  assert(!timing_faults && timing.outer_overruns==3);
+  assert(!BoardDiag_Clear()); /* Cannot erase a running fault streak. */
+  t+=170000;report(1,t,170000);
+  assert(timing_faults==1 && timing.outer_overruns==4 && !requested[axis]);
+  BoardDiagFault first=*BoardDiag_LastFault();
+  BoardDiag_Fault(1,DIAG_ENCODER,"REPLACE");assert(!memcmp(&first,BoardDiag_LastFault(),sizeof(first)));
+  report(1,t+170000,600000);assert(timing_faults==1);
+  for(unsigned short_gap=0;short_gap<2;++short_gap) {
+   t=0xffff0000U;monitor_start(axis,t);
+   for(unsigned i=0;i<2;++i) { t+=short_gap ? 84999U : 255001U;report(1,t,4000); }
+   assert(!timing_faults && timing.outer_gaps==2);
+   t+=short_gap ? 84999U : 255001U;report(1,t,4000);
+   assert(timing_faults==1 && !strcmp(timing_reason,"OUTER GAP") && timing.outer_gaps==3);
+  }
+  /* ADC observes a completely missing completion, including DWT wrap. */
+  monitor_start(axis,0xffff0000U);t=0xffff0000U+4000U;
+  report(0,t+339999U-1U,1);assert(!timing_faults);
+  report(0,t+340000U-1U,1);
+  assert(timing_faults==1 && timing.outer_stalls==1 && !strcmp(timing_reason,"OUTER STALE"));
+  /* Also arm from ADC when TIM2 has NEVER completed after start. */
+  requested[0]=requested[1]=false;assert(BoardDiag_Clear());
+  timing_faults=0;requested[axis]=true;
+  report(0,0xfffffff0U,1);
+  report(0,0xfffffff0U+339999U,1);assert(!timing_faults);
+  report(0,0xfffffff0U+340000U,1);
+  assert(timing_faults==1 && timing.outer_stalls==1 && !strcmp(timing_reason,"OUTER STALE"));
+  monitor_start(axis,0);guard_allowed=false;
+  report(0,10000000,1);report(1,11000000,500000);
+  assert(!timing_faults && !timing.outer_overruns && !timing.outer_stalls);
+  guard_allowed=true;requested[0]=requested[1]=false;BoardDiag_OuterReset();
+  requested[axis]=true;report(0,20000000,1);report(1,20010000,4000);
+  assert(!timing_faults && !timing.outer_gaps);
+  /* Exact gap bounds are admitted; 1000 us execution is a miss, not 999. */
+  t=20010000;host_primask=1;
+  t+=85000;report(1,t,169999);assert(host_primask==1 && !timing.outer_overruns);
+  t+=255000;report(1,t,4000);assert(host_primask==1 && !timing.outer_gaps);
+  host_primask=0;
+  requested[0]=requested[1]=false;assert(BoardDiag_Clear());
+  char value[32];for(unsigned row=30;row<31;++row) {
+   assert(BoardDiag_Row(axis,row,value) && !strcmp(value,"0/0/0"));
+  }
+ }
+ puts("PASS: outer execution/gap/stall monitoring: 393us normal, 2799us immediate trip, three consecutive misses, isolated recovery, no-callback ADC watchdog, both axes, wrap, idle/align exclusion, restart, Clear gate and PRIMASK");
+}
+#endif
+int main(int argc,char **argv) {
+ if(argc>1 && !strcmp(argv[1],"outer-trip")) { outer_trip();return 0; }
+ retention();loader_debug_retention();stop_rows();timing_test();
+#if BOARD_DIAG_ROWS>=31U
+ outer_monitor();
+#endif
+ return 0;
+}

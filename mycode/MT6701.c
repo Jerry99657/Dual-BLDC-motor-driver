@@ -47,17 +47,14 @@ bool MT6701_GetTimedAngle(unsigned axis,float *angle,uint32_t *cycles)
  * CRC 覆盖前 18 位，生成多项式 x^6 + x + 1（去掉最高项后为 0x03），MSB 先入。 */
 static uint8_t MT6701_CalculateCrc6(uint32_t data18)
 {
-    /* Six bits per step, same x^6+x+1 / MSB-first / initial-zero CRC.
-     * Keep the full check on BOTH 10kHz streams without 18 bitwise rounds. */
-    static const uint8_t next[64]={
-        0,3,6,5,12,15,10,9,24,27,30,29,20,23,18,17,
-        48,51,54,53,60,63,58,57,40,43,46,45,36,39,34,33,
-        35,32,37,38,47,44,41,42,59,56,61,62,55,52,49,50,
-        19,16,21,22,31,28,25,26,11,8,13,14,7,4,1,2
-    };
-    uint8_t crc=next[(data18>>12)&63U];
-    crc=next[crc^((data18>>6)&63U)];
-    return next[crc^(data18&63U)];
+    /* x^6 = x+1 modulo x^6+x+1. Fold the full 18-bit word three
+     * times instead of storing a lookup table or iterating over 18 bits. */
+    uint32_t crc=data18^(data18<<1);
+    for(unsigned n=0;n<3;++n) {
+        uint32_t high=crc>>6;
+        crc=(crc&63U)^high^(high<<1);
+    }
+    return (uint8_t)crc;
 }
 #ifdef MOTOR_ENCODER_HOST_HOOKS
 uint8_t EncoderHost_Crc(uint32_t data18) { return MT6701_CalculateCrc6(data18); }

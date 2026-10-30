@@ -43,7 +43,7 @@ static struct {
     JerryFOC_ControlMode group_mode;
     float group_target, group_reference, group_speed, origins[2], group_error;
     uint32_t group_started, error_ms, max_cycles;
-    const char *m1_stop_reason,*group_stop_reason;
+    const char *m1_stop_reason,*group_stop_reason,*timing_reason;
     float group_position_limit;
     const MotorFollowParams *group_follow;
     float follow_estimate[2],follow_velocity[2];
@@ -240,6 +240,7 @@ void MotorControl_StopAll(void)
     uint32_t mask=__get_PRIMASK(); __disable_irq();
     control.group_active=false;
     stop_axis(MOTOR_AXIS_1); stop_axis(MOTOR_AXIS_2);
+    BoardDiag_OuterReset();
     __set_PRIMASK(mask);
 }
 void MotorControl_Stop(MotorAxis axis)
@@ -248,6 +249,7 @@ void MotorControl_Stop(MotorAxis axis)
     if (MotorControl_IsCoupled()) { MotorControl_StopAll(); return; }
     uint32_t mask=__get_PRIMASK(); __disable_irq();
     stop_axis(axis);
+    if (!MotorSampling_IsOutputRequested() && !MotorSampling_IsAxisOutputRequested(MOTOR_AXIS_2)) BoardDiag_OuterReset();
     __set_PRIMASK(mask);
 }
 __attribute__((noinline,noclone)) static bool stationary(void)
@@ -523,7 +525,6 @@ __attribute__((noinline,noclone)) void MotorControl_GetAxis(MotorAxis axis,Motor
     if (out->ready && !out->healthy) out->status=MotorControl_EncoderLostText(axis);
     if (control.group_stop_reason && MotorControl_IsCoupled() && !out->active &&
         (out->ready || MotorControl_IsPassive(axis))) out->status=control.group_stop_reason;
-    if (control.timing_fault) { out->ready=false; out->status="CONTROL OVERRUN"; }
     if (axis==MOTOR_AXIS_1 && MotorControl_SixStepAllowed()) {
         SixStepSnapshot ss; SixStep_GetSnapshot(&ss);
         out->mode=ss.speed_control ? JERRYFOC_MODE_VELOCITY : JERRYFOC_MODE_TORQUE; out->velocity=ss.velocity;
@@ -533,15 +534,17 @@ __attribute__((noinline,noclone)) void MotorControl_GetAxis(MotorAxis axis,Motor
         out->ia=frame->m1_current[0]; out->ib=frame->m1_current[1]; out->iq=out->id=0;
         out->healthy=out->aligned=true; out->current_loop=false;
         out->aligning=false;
-        out->ready=MotorSampling_IsReady() && !control.timing_fault;
+        out->ready=MotorSampling_IsReady();
         if (out->ready) out->status=ss.status;
     }
     if (!MotorControl_AxisEnabled(axis)) { out->ready=false; out->status="AXIS DISABLED"; }
+    if (control.timing_fault) { out->ready=false; out->status=control.timing_reason; }
     if (MotorSampling_IsGlobalStopped()) out->status="GLOBAL STOP";
     __set_PRIMASK(mask);
 }
 static bool can_start(MotorAxis axis)
 {
+    if (control.timing_fault) { command_text=control.timing_reason; return false; }
     if (MotorControl_IsCoupled() && MotorSampling_IsIbusTripped()) {
         command_text="M1 IBUS TRIP"; return false;
     }
@@ -550,7 +553,7 @@ static bool can_start(MotorAxis axis)
         if (!MotorSampling_IsReady() || !MotorSampling_IsCalibrated()) {
             command_text=MotorSampling_GetAxisStatusText(axis); return false;
         }
-        return !control.timing_fault;
+        return true;
     }
     if (!MotorControl_AxisEnabled(axis)) command_text="AXIS DISABLED";
     else if (!s.ready && !(axis==MOTOR_AXIS_1 && JerryFOC_hasHSOFault() &&
@@ -564,7 +567,6 @@ static bool can_start(MotorAxis axis)
     }
     else if (!s.aligned || s.aligning) command_text="NOT ALIGNED";
     else if (!s.active && (!isfinite(s.velocity) || fabsf(s.velocity)>1.0f)) command_text="Wait for stop";
-    else if (control.timing_fault) command_text="CONTROL OVERRUN";
     else return true;
     return false;
 }
@@ -1073,11 +1075,26 @@ void MotorControl_PrepareOuter(void)
 void MotorControl_RecordCycles(uint32_t cycles)
 {
     if (cycles>control.max_cycles) control.max_cycles=cycles;
-    if (cycles>=17000U && (MotorSampling_IsOutputRequested() ||
+    if (cycles>=17000U) MotorControl_TimingFault("CONTROL OVERRUN");
+}
+bool MotorControl_OuterRequired(void)
+{
+    /* Owners publish only after an explicit normal start succeeds. Boot,
+     * calibration and alignment do not claim an input; Stop clears it.
+     * Do not repeat readiness/encoder diagnostics in the 10kHz watchdog. */
+    return !g_openloop_debug && !MotorControl_SixStepAllowed() && !MotorDetect_Active() &&
+        ((control.input[0] && MotorSampling_IsOutputRequested()) ||
+         (control.input[1] && MotorSampling_IsAxisOutputRequested(MOTOR_AXIS_2)));
+}
+void MotorControl_TimingFault(const char *reason)
+{
+    uint32_t mask=__get_PRIMASK(); __disable_irq();
+    if (!control.timing_fault && (MotorSampling_IsOutputRequested() ||
         MotorSampling_IsAxisOutputRequested(MOTOR_AXIS_2))) {
-        control.timing_fault=true;
+        control.timing_fault=true;control.timing_reason=command_text=reason;
         (void)MotorSampling_SetOutputEnabled(false);
         (void)MotorSampling_SetAxisOutputEnabled(MOTOR_AXIS_2,false);
-        BoardDiag_Fault(0U,DIAG_CONTROL,"CONTROL OVERRUN"); MotorControl_StopAll();
+        BoardDiag_Fault(0U,DIAG_CONTROL,reason); MotorControl_StopAll();
     }
+    __set_PRIMASK(mask);
 }

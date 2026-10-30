@@ -162,7 +162,7 @@ __attribute__((optimize("Os"))) bool StHso_Start(float target)
     live.capture_angle_rad=live.capture_frequency_error_hz=live.capture_emf_ratio=live.capture_drift_rad=0;
     quiet=0;
     forced_angle=forced_speed=angle_offset=0;
-    capture_speed=copysignf(fminf(fabsf(target),TWO_PI*15/(float)pole_pairs),target);
+    capture_speed=copysignf(MotorMath_Min(fabsf(target),TWO_PI*15/(float)pole_pairs),target);
     config_pending=true; previous_valid=false;
     live.usable=false; live.bad_samples=0; live.reason=live.entry_reason=ST_HSO_REASON_NONE;
     return true;
@@ -279,7 +279,7 @@ __attribute__((noinline,optimize("Os"))) static void check_observer(Voltages_Uab
     live.angle_error_rad=wrap(live.angle_rad-(control ?
         previous_angle+live.emf_hz*TWO_PI*0.0001f : forced_angle));
     float raw_ferr=fabsf(live.emf_hz-hz),ferr=raw_ferr,aerr=fabsf(live.angle_error_rad);
-    float frequency_tolerance=fmaxf(control ? 3 : 1,fabsf(hz)*(control ? 0.25f : 0.15f));
+    float frequency_tolerance=MotorMath_Max(control ? 3 : 1,fabsf(hz)*(control ? 0.25f : 0.15f));
     StHsoReason bad=ST_HSO_REASON_NONE;
     if (!isfinite(live.angle_rad) || !isfinite(live.emf_hz) ||
         !isfinite(live.velocity_rad_s) || !isfinite(live.flux_wb)) bad=ST_HSO_REASON_NUMERIC;
@@ -294,7 +294,7 @@ __attribute__((noinline,optimize("Os"))) static void check_observer(Voltages_Uab
     float ea=from_q30(emf.A)*VOLTAGE_SCALE,eb=from_q30(emf.B)*VOLTAGE_SCALE;
     float expected=active.flux_wb*hz*TWO_PI;
     float raw_strength=ea*ea+eb*eb,strength=raw_strength;
-    float minimum=fmaxf(0.04f,expected*expected*0.16f),maximum=expected*expected*2.56f;
+    float minimum=MotorMath_Max(0.04f,expected*expected*0.16f),maximum=expected*expected*2.56f;
     /* Capture evaluates sustained independent observer frequency and EMF
      * energy, rather than raw derivative/PWM ripple. CONTROL keeps its
      * existing per-frame protection. Last-frame strict entry remains. */
@@ -392,7 +392,7 @@ __attribute__((optimize("O2"))) void StHso_Process(const MotorSampleFrame *f,boo
     }
     if (phase==ST_HSO_RAMP) {
         float delta=capture_speed-forced_speed;
-        forced_speed+=fmaxf(-0.002f,fminf(0.002f,delta)); /* 20 rad/s^2. */
+        forced_speed+=MotorMath_Max(-0.002f,MotorMath_Min(0.002f,delta)); /* 20 rad/s^2. */
         if (fabsf(delta)<=0.002f) {
             forced_speed=capture_speed;
             phase=active.flux_wb<0.00001f ? ST_HSO_LEARNING : ST_HSO_CAPTURE;
@@ -429,7 +429,7 @@ __attribute__((optimize("O2"))) void StHso_Process(const MotorSampleFrame *f,boo
         live.flux_wb=from_q30(HSO_getFluxAmpl_Wb(&observer));
         Vector_ab_t offset=HSO_getOffset_ab_pu(&observer);
         float ox=from_q30(offset.A)*VOLTAGE_SCALE,oy=from_q30(offset.B)*VOLTAGE_SCALE;
-        live.emf_offset_v=fmaxf(fabsf(ox),fabsf(oy));
+        live.emf_offset_v=MotorMath_Max(fabsf(ox),fabsf(oy));
         live.emf_offset_limit_v=from_q30(HSO_getOffsetLimit(&observer))*VOLTAGE_SCALE;
         check_observer(emf,forced_hz);
         if (!running) return;
@@ -475,7 +475,7 @@ __attribute__((optimize("Os"))) float StHso_Position(void)
 }
 float StHso_ControlAngle(void)
 {
-    return phase==ST_HSO_CONTROL ? live.angle_rad-angle_offset*(1-fminf((float)blend/500,1)) : forced_angle;
+    return phase==ST_HSO_CONTROL ? live.angle_rad-angle_offset*(1-MotorMath_Min((float)blend/500,1)) : forced_angle;
 }
 float StHso_ControlVelocity(void)
 {
@@ -484,7 +484,7 @@ float StHso_ControlVelocity(void)
 }
 float StHso_CurrentD(void)
 {
-    float weight=phase==ST_HSO_ALIGN ? fminf((float)elapsed/2500,1) :
+    float weight=phase==ST_HSO_ALIGN ? MotorMath_Min((float)elapsed/2500,1) :
         phase==ST_HSO_CONTROL ? 1-(float)blend/1000 : 1;
     return running ? align_current*weight : 0;
 }
@@ -495,7 +495,7 @@ __attribute__((optimize("Os"))) void StHso_BlendCurrent(float *d,float *q)
         /* Preserve the physical I/F current vector as the reference frame
          * rotates. Crossfade it to speed-PI torque over 100 ms; changing only
          * angle/Id would discard the startup torque at a load angle. */
-        float turn=angle_offset*fminf((float)blend/500,1);
+        float turn=angle_offset*MotorMath_Min((float)blend/500,1);
         float sn,cs;
         MotorMath_SinCos(turn,&sn,&cs);
         *d=amplitude*cs;

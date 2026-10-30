@@ -36,7 +36,7 @@ CSV 载入和诊断查询显示 24 格进度：CSV 按实际读取字节数，�
 
 ## 使用
 
-1. 板子使用本项目 `UI-R118-IRQ` 固件；构建产物位于 `build/Debug/`、`build/Release/`。R101～R103 也兼容原有功能，参数应用新增操作要求 R104；R88～R100 兼容完整设置／诊断，R87 仅兼容原有优先控制／读回功能。R102 的 Diagnostics 新增全局停止来源、时间／启动阶段及触发／实时按键状态，R103 修正 KEY1 冷启动电平检查过早的问题。
+1. 板子使用本项目 `UI-R119-OUT` 固件；构建产物位于 `build/Debug/`、`build/Release/`。R101～R103 也兼容原有功能，参数应用新增操作要求 R104；R88～R100 兼容完整设置／诊断，R87 仅兼容原有优先控制／读回功能。R102 的 Diagnostics 新增全局停止来源、时间／启动阶段及触发／实时按键状态，R103 修正 KEY1 冷启动电平检查过早的问题。
 2. 用桌面 Chrome／Edge 打开 `pc_tool/index.html`。也可以把这一个文件复制到其他位置打开。
 3. 点击“选择串口并连接”，在浏览器对话框中选择 USB CDC 或 USB 转 USART 的串口。USART1 保持 **115200、8N1**。
 4. 工具首先发送普通文本 `Format:Native`，然后发送带编号的 `Get` 并等待配置回执确认。R101 上电默认 JustFloat，USB／USART 同步切换；连接不会自动运行电机，也不会用网页残留值覆盖板端设置。
@@ -239,3 +239,5 @@ R107 压缩应用层诊断显示与命令解析，命令、读回及线格式保
 R108 关闭未使用的 USB 硬件双缓冲支持，端点继续采用原生成的单缓冲配置；纯开关净省 2816 B，计入版本更新后净省 2812 B。详见 [R108 USB 单缓冲配置](../docs/USB_single_buffer_R108.md)。
 
 R113 通过保存的 CubeMX 配置关闭未使用的 USB LPM 扩展，保留普通挂起／恢复，Debug／Release 净省 120 B Flash、8 B RAM。详见 [R113 LPM 配置测量](../docs/USB_LPM_R113.md)。
+
+R119 新增外环时序保护，Diagnostics 末尾 `Outer E/G/S` 分别为执行超期、间隔异常和完成心跳缺失次数；时序故障需复位解除，Clear diag 仅清记录。规则和验证见 [Outer_deadline_R119.md](../docs/Outer_deadline_R119.md)。

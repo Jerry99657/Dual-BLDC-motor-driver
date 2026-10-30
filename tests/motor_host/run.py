@@ -52,7 +52,7 @@ for name, sources in suites.items():
     if name in ("inverter","current","foc","protocol","telemetry","justfloat"):
         sources += ["tests/motor_host/control_stub.c"]
     if name in ("protocol","telemetry","justfloat"): sources += ["tests/motor_host/telemetry_stubs.c"]
-    if name in ("inverter","current","foc","control","motion","sensorless","detect","sixstep","sixstep_wave","sixstep_plant"):
+    if name in ("inverter","current","foc","control","motion","sensorless","detect","hso","sixstep","sixstep_wave","sixstep_plant"):
         sources += ["mycode/motor_math.c"]
     command = [compiler, "-std=c11", "-Wall", "-Wextra", "-Werror", "-O1",
                "-Itests/motor_host", "-Imycode", "-IThirdParty/ST_HSO", *sources, "-lm", "-o", str(out / (name + ".exe"))]
@@ -63,6 +63,11 @@ for name, sources in suites.items():
     if name=="motor_math": command.insert(1,"-DMOTOR_MATH_CORDIC_HOST")
     subprocess.run(command, cwd=repo, check=True)
     subprocess.run([str(out / (name + ".exe"))], cwd=repo, check=True)
+    if name=="control":
+        for work in range(7):
+            for reason in ("OUTER OVERRUN","OUTER GAP","OUTER STALE"):
+                subprocess.run([str(out/"control.exe"),"outer-trip",str(work),reason],cwd=repo,check=True)
+        subprocess.run([str(out/"control.exe"),"outer-exclude"],cwd=repo,check=True)
     if name=="sixstep_plant":
         for bus in (12,20):
             for direction in (-1,1):

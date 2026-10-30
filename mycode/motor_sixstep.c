@@ -117,7 +117,7 @@ static void zero_crossing(const MotorSampleFrame *f,float bus)
     uint32_t now=DWT->CYCCNT;
     float age=(float)(now-stepped)/CYCLES_US;
     if (!f->m1_sixstep_valid) { s.gate='W'; return; }
-    if (seen || age<fmaxf(200.0f,period_us*0.15f)) return;
+    if (seen || age<MotorMath_Max(200.0f,period_us*0.15f)) return;
     unsigned h=high_phase[s.sector],l=low_phase[s.sector],z=3U-h-l;
     const float *v=f->m1_voltage;
     /* Project early Rank2 V to Rank3, 1.412us later, using the 40us RC.
@@ -130,7 +130,7 @@ static void zero_crossing(const MotorSampleFrame *f,float bus)
     bool rising=((s.sector & 1U)!=0U)!=negative;
     if (!rising) e=-e;
     s.bemf=rising ? e : -e;
-    float hysteresis=fmaxf(0.03f,bus*0.0025f);
+    float hysteresis=MotorMath_Max(0.03f,bus*0.0025f);
     if (e< -hysteresis) { opposite=true; cross_pending=false; positive_samples=0; }
     s.gate=opposite ? 'Z' : 'P';
     if (opposite && !cross_pending && previous_stamp && previous_bemf<0 && e>=0) {
@@ -155,7 +155,7 @@ static void zero_crossing(const MotorSampleFrame *f,float bus)
     s.period_pct=percent(ratio);
     s.period_fraction=(uint8_t)((uint32_t)(ratio*1000.0f)%10U);
     for(unsigned i=0;i<5;++i) s.period_10us[i]=s.period_10us[i+1];
-    s.period_10us[5]=(uint16_t)fminf(interval*0.1f,65535.0f);
+    s.period_10us[5]=(uint16_t)MotorMath_Min(interval*0.1f,65535.0f);
     s.gate='T';
     if (phase<0.10f || phase>0.85f || ratio<0.55f || ratio>1.45f) {
         s.reject=phase<0.10f ? SIX_REJECT_EARLY : phase>0.85f ? SIX_REJECT_LATE :
@@ -199,7 +199,7 @@ __attribute__((noinline)) static void sine_start(const MotorSampleFrame *f,float
      * Speed targets still cap the forced frequency; never overspeed them
      * merely to obtain stronger BEMF. Throttle needs no pole count here. */
     float capture=emf_voltage>=0.7f && frequency>=12.0f ? frequency : 60.0f;
-    if(s.speed_control) capture=fminf(capture,fabsf(s.target)*m->pole_pairs/6.283185307f);
+    if(s.speed_control) capture=MotorMath_Min(capture,fabsf(s.target)*m->pole_pairs/6.283185307f);
     float step=s.ramp_hz_s*0.0001f;
     if(s.state==SIX_RAMP) frequency+=clamp(capture-frequency,-step,step);
     float omega=(negative ? -6.283185307f : 6.283185307f)*frequency;
@@ -211,9 +211,9 @@ __attribute__((noinline)) static void sine_start(const MotorSampleFrame *f,float
     MotorMath_SinCos(forced_angle,&sn,&cs);
     float ia=f->m1_current[0], ib=(ia+2*f->m1_current[1])*0.577350269f;
     float id=ia*cs+ib*sn, iq=ib*cs-ia*sn;
-    float reference=s.startup_current*fminf(1.0f,(float)elapsed/400000.0f);
+    float reference=s.startup_current*MotorMath_Min(1.0f,(float)elapsed/400000.0f);
     float ed=reference-id, eq=-iq;
-    float limit=s.state==SIX_ALIGN ? fminf(bus*0.15f,3.0f) : fminf(bus*0.5f,12.0f);
+    float limit=s.state==SIX_ALIGN ? MotorMath_Min(bus*0.15f,3.0f) : MotorMath_Min(bus*0.5f,12.0f);
     float ki=0.012f, kp=0.2f;
     id_sum=clamp(id_sum+ki*ed,-limit,limit);
     iq_sum=clamp(iq_sum+ki*eq,-limit,limit);
@@ -235,7 +235,7 @@ __attribute__((noinline)) static void sine_start(const MotorSampleFrame *f,float
         if(!tracking) { fail("6STEP CURRENT"); return; }
         s.state=SIX_RAMP; s.status="6STEP SINE";
     }
-    bool strength=emf_voltage>=fmaxf(0.6f,bus*0.01f);
+    bool strength=emf_voltage>=MotorMath_Max(0.6f,bus*0.01f);
     if(frequency<12.0f || frequency>capture+0.001f || !tracking || !strength) s.startup_ms=0;
     else if(s.startup_ms<5000U) ++s.startup_ms;
     s.startup_emf=emf_voltage;
@@ -250,7 +250,7 @@ __attribute__((noinline)) static void sine_start(const MotorSampleFrame *f,float
         bool room=s.duty<0.7f;
         s.ramp_hz_s=tracking && room ? 20.0f : 0;
         if(room && s.startup_ms<1000U)
-            s.startup_current=fminf(0.5f,s.startup_current+0.000005f);
+            s.startup_current=MotorMath_Min(0.5f,s.startup_current+0.000005f);
     }
     if(s.startup_ms>=5000U && fabsf(forced_angle-boundary)<0.013f) {
         s.state=SIX_SYNC; s.status="6STEP SYNC";
@@ -300,26 +300,26 @@ void SixStep_Process(const MotorSampleFrame *f)
             /* Limit relative speed change while BEMF updates are far apart:
              * <= about 5% per 60deg at low speed, up to the old 40rad/s^2.
              * Zero is still immediate coast, handled in command(). */
-            float rise=fminf(0.04f,0.00005f*s.velocity*s.velocity*m->pole_pairs);
+            float rise=MotorMath_Min(0.04f,0.00005f*s.velocity*s.velocity*m->pole_pairs);
             float delta=clamp(requested-s.reference,-2.0f*rise,rise);
             s.reference+=delta;
             float error=s.reference-fabsf(s.velocity);
             float candidate=integral+0.001f*m->vel_I*error;
             feedforward=m->bus_voltage*s.reference/m->rated_speed_mech;
             float desired=feedforward+m->vel_P*error+candidate;
-            float limit=fminf(bus*0.85f,m->bus_voltage);
+            float limit=MotorMath_Min(bus*0.85f,m->bus_voltage);
             if (desired>0 && desired<limit && peak<m->rated_current) integral=candidate;
             voltage=clamp(desired,0,limit);
         } else if (s.state==SIX_RUN) {
             /* Normalized throttle, bounded by bootstrap/nominal voltage and
              * the same current protection as Speed. No speed PI here. */
-            voltage=(generic ? bus*0.85f : fminf(bus*0.85f,m->bus_voltage))*requested*0.01f;
+            voltage=(generic ? bus*0.85f : MotorMath_Min(bus*0.85f,m->bus_voltage))*requested*0.01f;
             s.reference=fabsf(s.velocity);
         }
-        float cap=generic ? (s.state==SIX_RUN ? 0.5f : fminf(0.5f,1.2f*s.startup_current)) :
+        float cap=generic ? (s.state==SIX_RUN ? 0.5f : MotorMath_Min(0.5f,1.2f*s.startup_current)) :
             m->rated_current*(s.state==SIX_RUN ? 1.0f : 0.6f);
         float desired=clamp(voltage/bus,0.01f,0.85f);
-        if (current>cap) desired=fminf(desired,s.duty*cap/current);
+        if (current>cap) desired=MotorMath_Min(desired,s.duty*cap/current);
         s.duty+=clamp(desired-s.duty,-0.02f,0.002f);
         if (!MotorSampling_SixStepPattern(s.sector,s.duty)) { fail("6STEP OUTPUT"); return; }
     }

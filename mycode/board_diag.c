@@ -21,6 +21,10 @@ static BoardDiagMotion motion[2];
 static BoardDiagTiming timing;
 static uint32_t previous[2];
 static uint8_t seen;
+static uint32_t outer_completed;
+/* 0: stopped, 1: first completion pending, 2: healthy, 3/4: consecutive
+ * misses. Keeping warm-up and streak in one word makes reset atomic. */
+static uint32_t outer_watch;
 
 static uint32_t checksum(void)
 {
@@ -57,13 +61,18 @@ void BoardDiag_Init(void)
 const BoardDiagFault *BoardDiag_LastFault(void) { return &retained.fault; }
 const BoardDiagCrash *BoardDiag_LastCrash(void) { return &retained.crash; }
 const BoardDiagTiming *BoardDiag_Times(void) { return &timing; }
+void BoardDiag_OuterReset(void)
+{
+    /* Both stop callers hold PRIMASK; one aligned word clears the guard. */
+    outer_watch=0;
+}
 bool BoardDiag_Clear(void)
 {
     uint32_t mask=__get_PRIMASK(); __disable_irq();
     bool ok=!MotorSampling_IsOutputRequested() && !MotorSampling_IsAxisOutputRequested(MOTOR_AXIS_2);
     if (ok) {
         retained.magic=0; memset(&retained.crash,0,sizeof(retained)-8U); commit();
-        memset(&timing,0,sizeof(timing)); seen=0;
+        memset(&timing,0,sizeof(timing)); seen=outer_watch=0;
     }
     __set_PRIMASK(mask); return ok;
 }
@@ -111,18 +120,44 @@ void BoardDiag_Fault(unsigned axis,unsigned source,const char *reason)
     }
     __set_PRIMASK(mask);
 }
+__attribute__((optimize("Os")))
 void BoardDiag_Timing(unsigned outer,uint32_t entered,uint32_t center_age)
 {
-    uint32_t elapsed=DWT->CYCCNT-entered;
+    uint32_t now=DWT->CYCCNT,elapsed=now-entered,interval=0;
+    const char *fault=NULL;
+    /* ADC and TIM2 priorities are generated, not assumed. Protect only the
+     * small integer monitor; restore before fault capture/controller cleanup. */
+    uint32_t mask=__get_PRIMASK(); __disable_irq();
     uint32_t *maximum=outer ? &timing.outer_max : &timing.adc_max;
     uint32_t *jitter=outer ? &timing.outer_jitter : &timing.adc_jitter;
     if (elapsed>*maximum) *maximum=elapsed;
     if (seen&(1U<<outer)) {
-        uint32_t interval=entered-previous[outer],period=outer ? 170000U : 17000U;
+        interval=entered-previous[outer];
+        uint32_t period=outer ? 170000U : 17000U;
         uint32_t error=interval>period ? interval-period : period-interval;
         if (error>*jitter) *jitter=error;
     }
     seen|=(uint8_t)(1U<<outer); previous[outer]=entered;
+    if (!MotorControl_OuterRequired()) outer_watch=0;
+    else {
+        if (!outer_watch) { outer_watch=1;outer_completed=now; }
+        if (outer) {
+            bool over=elapsed>=170000U;
+            bool gap=outer_watch>=2U && interval-85000U>170000U;
+            if (over) ++timing.outer_overruns;
+            if (gap) ++timing.outer_gaps;
+            if (outer_watch==1U) outer_watch=2U;
+            outer_watch=over || gap ? outer_watch+1U : 2U;
+            outer_completed=now;
+            if (elapsed>=340000U || outer_watch>=5U)
+                fault=over ? "OUTER OVERRUN" : "OUTER GAP";
+        } else if (now-outer_completed>=340000U) {
+            ++timing.outer_stalls;
+            fault="OUTER STALE";
+        }
+    }
+    __set_PRIMASK(mask);
+    if (fault) MotorControl_TimingFault(fault);
     if (!outer) {
         if (center_age>timing.center_age) timing.center_age=center_age;
         if (elapsed>=17000U) ++timing.overruns;
@@ -169,13 +204,17 @@ const char *BoardDiag_Row(unsigned axis,unsigned row,char value[32])
         "Stop Src\0"
         "Stop At\0"
         "Stop K/P\0"
-        "F Enc Gate";
-    _Static_assert(BOARD_DIAG_ROWS==30,"Diagnostic rows");
+        "F Enc Gate\0"
+        "Outer E/G/S";
+    _Static_assert(BOARD_DIAG_ROWS==31,"Diagnostic rows");
     const BoardDiagFault *f=&retained.fault; const BoardDiagCrash *c=&retained.crash;
     bool valid=true;
     if (axis>1 || row>=BOARD_DIAG_ROWS) return NULL;
     const BoardDiagMotion *m=&f->motion[axis];
-    if (row==29U) {
+    if (row==30U) {
+        UiText_Format(value,32,"%lu/%lu/%lu",(unsigned long)timing.outer_overruns,
+            (unsigned long)timing.outer_gaps,(unsigned long)timing.outer_stalls);
+    } else if (row==29U) {
         if (!f->source) strcpy(value,"--");
         else {
             uint32_t h=f->enc_health[axis];

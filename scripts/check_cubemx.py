@@ -330,7 +330,11 @@ def audit(root):
             'sBreakDeadTimeConfig.BreakPolarity': 'TIM_BREAKPOLARITY_HIGH',
             'sBreakDeadTimeConfig.OffStateRunMode': 'TIM_OSSR_ENABLE'},
         8: {'sSlaveConfig.SlaveMode': 'TIM_SLAVEMODE_TRIGGER', 'sSlaveConfig.InputTrigger': 'TIM_TS_ITR0'},
-        2: {'htim2.Init.Prescaler': '169', 'htim2.Init.Period': '999'},
+        # Outer controller and deadline monitor both assume an up-counting
+        # 1 kHz TIM2 from the checked 170 MHz APB timer clock.
+        2: {'htim2.Init.Prescaler': '169', 'htim2.Init.Period': '999',
+            'htim2.Init.CounterMode': 'TIM_COUNTERMODE_UP',
+            'sClockSourceConfig.ClockSource': 'TIM_CLOCKSOURCE_INTERNAL'},
         3: {'htim3.Init.Prescaler': '0', 'htim3.Init.Period': '212',
             'htim3.Init.CounterMode': 'TIM_COUNTERMODE_UP',
             'sConfigOC.OCMode': 'TIM_OCMODE_PWM1', 'sConfigOC.OCPolarity': 'TIM_OCPOLARITY_HIGH'},

@@ -9,6 +9,7 @@
 #include "app_storage.h"
 #include "MT6701.h"
 #include "motor_sixstep.h"
+#include "motor_detect.h"
 #include <stdlib.h>
 
 static uint32_t now;
@@ -899,6 +900,68 @@ int existing_control_main(int argc,char **argv)
 int main(int argc,char **argv)
 #endif
 {
+#ifndef MOTOR_HOST_REAL_HSO
+    if (argc>1 && !strcmp(argv[1],"outer-trip")) {
+        assert(argc==4);
+        MotorWorkMode work=(MotorWorkMode)atoi(argv[2]);
+        const char *reason=argv[3];
+        boot(work);
+        assert(!MotorControl_OuterRequired());
+        /* Requested PWM without a confirmed command (e.g. alignment) is
+         * deliberately excluded. Normal drive ownership is required. */
+        output_requested=output2=true;
+        assert(!MotorControl_OuterRequired());
+        output_requested=output2=false;
+        if (MotorControl_IsHandFollow()) assert(MotorControl_StartFollow());
+        else {
+            MotorAxis axis=work==MOTOR_WORK_SINGLE_M2 ? MOTOR_AXIS_2 : MOTOR_AXIS_1;
+            JerryFOC_ControlMode mode=work==MOTOR_WORK_SYNC_POSITION ? JERRYFOC_MODE_POSITION : JERRYFOC_MODE_VELOCITY;
+            assert(MotorControl_Command(axis,mode,10,0,true));
+            if (work==MOTOR_WORK_INDEPENDENT)
+                assert(MotorControl_Command(MOTOR_AXIS_2,JERRYFOC_MODE_VELOCITY,10,0,true));
+        }
+        assert(MotorControl_OuterRequired());
+        g_openloop_debug=1;assert(!MotorControl_OuterRequired());g_openloop_debug=0;
+        /* Only a real running request can latch; idle instrumentation cannot. */
+        host_primask=1;
+        MotorControl_TimingFault(reason);
+        assert(host_primask==1 && !output_requested && !output2);
+        assert(!MotorControl_IsGroupActive() && !MotorControl_OuterRequired());
+        for(unsigned a=0;a<2;++a) {
+            MotorAxisSnapshot s=state((MotorAxis)a);
+            assert(!s.ready && !s.active && !strcmp(s.status,reason));
+        }
+        MotorControl_StopAll();MotorControl_Init();
+        MotorControl_TimingFault("SECOND FAULT");
+        assert(!strcmp(state(MOTOR_AXIS_1).status,reason));
+        assert(!MotorControl_Command(MOTOR_AXIS_1,JERRYFOC_MODE_VELOCITY,10,0,true));
+        assert(!MotorControl_Command(MOTOR_AXIS_2,JERRYFOC_MODE_VELOCITY,10,0,true));
+        host_primask=0;ms(30,0);MotorControl_Service(now);
+        assert(!output_requested && !output2 && !strcmp(state(MOTOR_AXIS_2).status,reason));
+        puts("PASS: real controller outer-monitor admission, both-axis trip, passive masters, frozen reason, PRIMASK, settings reload and no automatic restart");
+        return 0;
+    }
+    if (argc>1 && !strcmp(argv[1],"outer-exclude")) {
+        boot(MOTOR_WORK_SINGLE_M1);
+        MotorControl_TimingFault("IDLE");
+        assert(state(MOTOR_AXIS_1).ready && !MotorControl_OuterRequired());
+        assert(MotorDetect_Start(300));
+        assert(MotorDetect_Active() && !MotorControl_OuterRequired());
+        MotorDetect_Stop();
+        assert(MotorControl_SelectSixStep(true));
+        for(unsigned n=0;n<2100;++n) MotorControl_Fast();
+        assert(MotorControl_Command(MOTOR_AXIS_1,JERRYFOC_MODE_TORQUE,30,0,false));
+        assert(output_requested && !MotorControl_OuterRequired());
+        MotorControl_StopAll();
+        for(unsigned n=0;n<2100;++n) MotorControl_Fast();
+        assert(MotorControl_SelectFeedback(true));
+        hso_usable=true;
+        assert(MotorControl_Command(MOTOR_AXIS_1,JERRYFOC_MODE_VELOCITY,10,0,true));
+        assert(MotorControl_OuterRequired());
+        puts("PASS: real controller excludes idle/alignment/identification/six-step, includes HSO outer control");
+        return 0;
+    }
+#endif
     if (argc>1 && !strcmp(argv[1],"follow-trace")) {
         assert(argc==6);follow_trace=fopen(argv[2],"w");assert(follow_trace);
         fputs("ms,master,actual,reference,master_velocity,velocity,target_velocity,iq\n",follow_trace);
