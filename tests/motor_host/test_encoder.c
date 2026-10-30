@@ -15,6 +15,12 @@ SPI_TypeDef spi1,spi2,spi3;
 SPI_HandleTypeDef hspi1={.Instance=SPI1,.State=HAL_SPI_STATE_READY},
     hspi2={.Instance=SPI2,.State=HAL_SPI_STATE_READY},hspi3={.Instance=SPI3,.State=HAL_SPI_STATE_READY};
 uint32_t host_primask;
+static unsigned atomic_publications;
+void EncoderHost_Publication(void) {
+    /* At the timed-pair commit, raw/angle/time/age/counter are still being
+     * written. An ADC consumer must not be able to preempt this interval. */
+    assert(host_primask==1); ++atomic_publications;
+}
 static uint32_t tick, payload=0x0FA006U, flash_cr1, flash_cr2;
 static unsigned reads, aborts, display_errors, dma_starts;
 static uint8_t preempt_on_tick;
@@ -30,6 +36,7 @@ static unsigned flash_failures,ignore_wren,corrupt_programs;
 static uint8_t fail_flash_command;
 static bool flash_error_latched;
 static uint32_t flash_hal_error;
+static uint32_t encoder1_hal_error;
 static unsigned flash_duplex_sends,ignore_program_wren;
 static bool next_wren_is_program;
 static bool busy_cycle,force_busy_admission,repeat_busy_race,first_status_idle;
@@ -157,7 +164,7 @@ HAL_StatusTypeDef SpiPort_Write(SPI_HandleTypeDef *h,const uint8_t *p,uint16_t n
     (void)h;(void)p;(void)n;(void)timeout;
     assert(!"Flash must drain RX in full duplex instead of TX-only polling");return HAL_ERROR;
 }
-uint32_t SpiPort_GetError(const SPI_HandleTypeDef *h) { assert(h==&hspi2);return flash_hal_error; }
+uint32_t SpiPort_GetError(const SPI_HandleTypeDef *h) { assert(h==&hspi1 || h==&hspi2);return h==&hspi1 ? encoder1_hal_error : flash_hal_error; }
 HAL_StatusTypeDef SpiPort_Read(SPI_HandleTypeDef *h,uint8_t *p,uint16_t n,uint32_t timeout) {
     (void)timeout; assert(h==&hspi2);
     flash_finish();
@@ -324,18 +331,24 @@ static void check_m1_recovery(void) {
     assert(!MT6701_IsContinuous() && !MT6701_IsHealthy() && aborts1==count);
     samples=MT6701_GetSampleCounter(); good1();
     assert(MT6701_GetSampleCounter()==samples && !MT6701_IsHealthy());
-    MT6701_StartContinuous(); good1(); assert(MT6701_IsHealthy()); MT6701_StopContinuous();
+    MT6701_StartContinuous(); good1(); assert(MT6701_IsHealthy());
+    fast1(1);encoder1_hal_error=HAL_SPI_ERROR_DMA;HAL_SPI_ErrorCallback(&hspi1);
+    MT6701_GetDiagnostics(&d);assert(d.last_error==MT6701_ERROR_DMA && !MT6701_IsHealthy());
+    assert(!strcmp(MT6701_ErrorText(d.last_error),"DMA TE"));
+    MT6701_MainService();encoder1_hal_error=0;
+    fast1(1);good1();assert(MT6701_IsHealthy());MT6701_StopContinuous();
     puts("PASS: M1 deferred DMA timeout/reset, ADC-stall/tick-wrap fallback, abort/init failures, late/reentrant/early callbacks, Stop and explicit restart");
 }
 static void check_required_retry(bool wrap) {
     tick=wrap ? UINT32_MAX-100U : 1000U;
     flash_busy_until=tick;
-    MT6701_2_SetRealtime(true); early2=true; payload=0;
+    MT6701_2_SetRealtime(true); early2=true; payload=0xFFFFFFU;
     assert(MT6701_2_Reserve(true)); /* Output has not acknowledged the fault yet. */
     for (unsigned i=0;i<5;++i) MT6701_2_FastService();
     MT6701_2_Snapshot out; MT6701_2_GetSnapshot(&out);
     MT6701Diagnostics diag; MT6701_2_GetDiagnostics(&diag);
     assert(out.stopped && !out.healthy && out.errors==5 && diag.max_age_cycles==0);
+    assert((diag.health&MT6701_HEALTH_STOPPED) && diag.failures==5);
     unsigned starts=dma2_starts;
     for (unsigned i=0;i<250;++i) { ++tick; MT6701_2_FastService(); MT6701_2_Service(tick); }
     assert(reads==0 && dma2_starts==starts); /* Never probe under a motion reservation. */
@@ -425,11 +438,20 @@ static void check_m2_recovery(void) {
     /* Ownerless FIFO/BSY and HAL-busy states no longer deadlock BOTH devices. */
     spi2.SR=SPI_SR_BSY|SPI_SR_FRLVL;MT6701_2_Service(tick);
     assert(resets2==5 && W25Q_ReadID()==0xEF4017U);
+    early2=false;MT6701_2_SetRealtime(true);MT6701_2_FastService();flash_hal_error=HAL_SPI_ERROR_DMA;
+    HAL_SPI_ErrorCallback(&hspi2);
+    MT6701Diagnostics e;MT6701_2_GetDiagnostics(&e);
+    assert(e.last_error==MT6701_ERROR_DMA && (e.health&MT6701_HEALTH_RECOVER));
+    MT6701_2_Service(tick);flash_hal_error=0;
+    early2=true;MT6701_2_FastService();MT6701_2_GetSnapshot(&out);assert(out.healthy);
     puts("PASS: SPI2 owner mode/Init repair, realtime-disable/ADC-stall/tick-wrap watchdog, sticky FIFO/BSY and abort/init failures, stale callbacks, exclusive reset, valid-only ENC2 recovery, Flash access restored");
 }
+static uint32_t native_frame(uint16_t raw);
 static MT6701Diagnostics zero_diag(unsigned axis) {
     MT6701Diagnostics d;
     if (axis) MT6701_2_GetDiagnostics(&d); else MT6701_GetDiagnostics(&d);
+    if(axis) { MT6701_2_Snapshot e;MT6701_2_GetSnapshot(&e);assert(e.healthy==!d.health); }
+    else assert(MT6701_IsHealthy()==!d.health);
     return d;
 }
 static void zero_send(unsigned axis,uint32_t word) {
@@ -438,59 +460,74 @@ static void zero_send(unsigned axis,uint32_t word) {
 }
 static void check_zero_episode(unsigned axis) {
     tick=UINT32_MAX-2U; payload=0; early1=early2=true;
+    host_dwt.CYCCNT=0xfffffff0U;
     if (axis) { MT6701_2_SetRealtime(true); MT6701_2_FastService(); }
     else MT6701_StartContinuous();
     MT6701Diagnostics d=zero_diag(axis);
-    assert(d.zero_count==1 && d.zero_age==UINT16_MAX && d.zero_after==UINT16_MAX);
-    if(!axis) assert(!MT6701_HasNearZeroGap());
-    zero_send(axis,0xFFFC1FU); /* raw=16383, CRC-valid independent test vector. */
-    d=zero_diag(axis); assert(d.zero_after==16383);
-    zero_send(axis,0); d=zero_diag(axis);
-    assert(d.zero_before==16383 && d.zero_age==1 && d.zero_count==1 && d.zero_after==UINT16_MAX);
-    zero_send(axis,0x800028U); /* raw=8192 with one wrong CRC bit: not the next valid angle. */
-    if(!axis) assert(!MT6701_HasNearZeroGap());
-    d=zero_diag(axis); assert(d.zero_after==UINT16_MAX && d.zero_count==1);
-    zero_send(axis,0); d=zero_diag(axis); assert(d.zero_count==2 && d.zero_before==16383 && d.zero_age==1);
-    tick+=4U;
-    zero_send(axis,0x430U); /* raw=1: wrapped zero crossing, first subsequent valid frame. */
-    d=zero_diag(axis); assert(d.zero_after==1 && d.zero_count==2 && d.zero_ended_at-d.zero_started_at==4U);
-    zero_send(axis,0); d=zero_diag(axis);
-    assert(d.zero_before==1 && d.zero_after==UINT16_MAX && d.zero_count==1);
-    zero_send(axis,0x823U); /* raw=2, then a far-from-zero event. */
-    zero_send(axis,0x0FA006U); zero_send(axis,0); d=zero_diag(axis);
-    assert(d.zero_before==1000 && d.zero_age==1 && d.zero_count==1);
-    if(!axis) assert(!MT6701_HasNearZeroGap());
-    zero_send(axis,0x0FA436U); d=zero_diag(axis); assert(d.zero_after==1001);
-    tick+=6U; /* Frozen sample age alone must not imply freshness. */
-    zero_send(axis,0); d=zero_diag(axis); assert(d.zero_age>3 && d.zero_before==1001);
-    zero_send(axis,0x823U);
-    for (unsigned i=0;i<5;++i) zero_send(axis,0);
-    d=zero_diag(axis); assert(d.zero_count==5 && d.zero_before==2 && d.zero_after==UINT16_MAX);
-    if (axis) {
-        MT6701_2_Snapshot out; MT6701_2_GetSnapshot(&out);
-        assert(out.stopped && !out.healthy && out.raw_angle==2); MT6701_2_Retry();
-    } else assert(!MT6701_IsHealthy() && MT6701_GetRawAngle()==2);
-    zero_send(axis,0x10CU); /* raw=0 with valid button status: not an all-zero frame. */
-    d=zero_diag(axis); assert(d.zero_after==0 && d.zero_count==5);
-    zero_send(axis,0); d=zero_diag(axis);
-    assert(d.zero_before==0 && d.zero_age==1 && d.zero_count==1 && d.zero_after==UINT16_MAX);
-    if(!axis) {
-        zero_send(0,0x430U); /* Verified raw=1 immediately before zero. */
-        uint32_t samples=MT6701_GetSampleCounter();
-        for(unsigned i=1;i<=50;++i) {
-            zero_send(0,0);
-            assert(MT6701_IsHealthy()==(i<=3)); /* FOC remains strict. */
-            assert(MT6701_HasNearZeroGap() && MT6701_GetRawAngle()==1);
-            assert(MT6701_GetSampleCounter()==samples); /* No fake fresh sample. */
-        }
-        zero_send(0,0); assert(!MT6701_HasNearZeroGap());
-        zero_send(0,0xFFFC1FU); assert(MT6701_IsHealthy() && !MT6701_HasNearZeroGap());
-        zero_send(0,0); assert(MT6701_HasNearZeroGap());
-        tick+=6U; assert(!MT6701_HasNearZeroGap());
-        zero_send(0,0); assert(!MT6701_HasNearZeroGap());
-        puts("PASS: detection-only zero-wrap gap: strict FOC 3 cycles unchanged, <=50 retained-angle cycles, no accepted/published zero, valid-post resolution and stale-wall-clock refusal");
+    assert(d.zero_count==1 && d.zero_age==UINT16_MAX && !d.health && !d.errors);
+    zero_send(axis,0x430U); /* Independent CRC vector, raw=1. */
+    d=zero_diag(axis); assert(d.zero_after==1);
+    uint32_t samples=axis ? 0 : MT6701_GetSampleCounter();
+    if(axis) { MT6701_2_Snapshot e;MT6701_2_GetSnapshot(&e);samples=e.samples; }
+    /* Stationary zero, not just a short bridge: >3 cycles and >5 ms, with
+     * ongoing completed frames, must remain valid. Cross both clock wraps. */
+    for(unsigned n=0;n<10000;++n) {
+        host_dwt.CYCCNT+=17000U;
+        if(n%10U==0) ++tick;
+        zero_send(axis,0);
+        d=zero_diag(axis);
+        assert(!d.health && !d.errors && d.age_cycles==0 && !d.failures);
     }
-    printf("PASS: E%u zero-episode before/after/count/freshness, wrap/near/far/no-history, bad CRC exclusion, unchanged stale/latch protection, valid raw zero\n",axis+1);
+    assert(d.zero_before==1 && d.zero_after==UINT16_MAX && d.zero_count==10000);
+    assert(atomic_publications>=10002U);
+    if(axis) { MT6701_2_Snapshot e;MT6701_2_GetSnapshot(&e);assert(e.raw_angle==0 && e.samples==samples+10000); }
+    else assert(MT6701_GetRawAngle()==0 && MT6701_GetSampleCounter()==samples+10000 && !MT6701_HasNearZeroGap());
+    zero_send(axis,0xFFFC1FU);d=zero_diag(axis);assert(d.zero_after==16383);
+    /* Back-and-forth wrap, every frame independently CRC-valid. */
+    for(unsigned n=0;n<1000;++n) {
+        zero_send(axis,0);zero_send(axis,0x430U);zero_send(axis,0);zero_send(axis,0xFFFC1FU);
+        assert(!zero_diag(axis).health);
+    }
+    /* Real scheduling order: ADC checks the previous sample BEFORE the new
+     * DMA completes. Three legal zero words must not become a fourth-cycle
+     * LOST just before the following completion, as in the old driver. */
+    early1=early2=false;
+    for(unsigned n=0;n<20;++n) {
+        host_dwt.CYCCNT+=17000U;zero_send(axis,0);
+        d=zero_diag(axis);assert(!d.health && d.age_cycles==1);
+        receive_frame(axis ? dma2_rx : dma_rx);
+        SPI_HandleTypeDef *h=axis ? &hspi2 : &hspi1;
+        h->State=HAL_SPI_STATE_READY;HAL_SPI_TxRxCpltCallback(h);
+        d=zero_diag(axis);assert(!d.health && d.age_cycles==0);
+    }
+    early1=early2=true;
+    /* Same 600rad/s physical limit for both presets; no target-speed gate.
+     * At 100 us raw=150 can reach zero; raw=1000 cannot. */
+    zero_send(axis,native_frame(150));host_dwt.CYCCNT+=17000U;
+    zero_send(axis,0);assert(!zero_diag(axis).errors);
+    zero_send(axis,0x0FA006U);uint32_t errors=zero_diag(axis).errors;
+    for(unsigned n=0;n<4;++n) zero_send(axis,0);
+    d=zero_diag(axis);
+    assert(d.errors==errors+4 && d.frame_errors==errors+4 && (d.health&MT6701_HEALTH_AGE));
+    if(axis) { MT6701_2_Snapshot e;MT6701_2_GetSnapshot(&e);assert(!e.healthy && e.raw_angle==1000); }
+    else assert(!MT6701_IsHealthy() && MT6701_GetRawAngle()==1000);
+    zero_send(axis,0x823U);assert(!zero_diag(axis).health);
+    /* CRC/status faults still reject data; a bad CRC cannot resolve an episode. */
+    zero_send(axis,0);zero_send(axis,0x800028U);
+    d=zero_diag(axis);assert(d.crc_errors==1 && d.zero_after==UINT16_MAX);
+    zero_send(axis,0x430U);assert(zero_diag(axis).zero_after==1);
+    /* Reacquire after >5 ms actual DWT gap, do not use an old speed prediction. */
+    zero_send(axis,0x0FA006U);host_dwt.CYCCNT+=850001U;tick+=6U;
+    zero_send(axis,0);d=zero_diag(axis);assert(!d.health && d.zero_age>3 && d.zero_after==UINT16_MAX);
+    /* A stopped scheduler with a retained zero does not synthesize freshness. */
+    tick+=6U;d=zero_diag(axis);assert(d.age_cycles==0 && (d.health&MT6701_HEALTH_WALL) && d.wall_ms==6);
+    zero_send(axis,0x823U);assert(!zero_diag(axis).health);
+    if(axis) {
+        MT6701_2_FastService();early2=false; /* previous request completed synchronously */
+        MT6701_2_FastService();HAL_SPI_ErrorCallback(&hspi2);
+        d=zero_diag(axis);assert(d.health&MT6701_HEALTH_RECOVER);
+    }
+    printf("PASS: E%u legal zero startup/1s hold/1000 reversals, sample publication, DWT/tick wrap, zero-jump rejection, wall-age and recovery diagnostics\n",axis+1);
 }
 static void check_zero_poll(void) {
     tick=1; poll();
@@ -675,6 +712,18 @@ static void check_calibration_direction(void) {
     puts("PASS: real SSI CRC/DMA decoder -> calibrated/Custom profile -> encoder source: both raw polarities, both motors, forward/reverse 38rad/s, multi-turn/zero crossing and aligned electrical feedback");
 }
 int main(int argc,char **argv) {
+    if(argc==1) {
+        extern uint8_t EncoderHost_Crc(uint32_t);
+        for(uint32_t bits=0;bits<(1U<<18);++bits) {
+            unsigned crc=0;
+            for(int b=17;b>=0;--b) {
+                unsigned feedback=((bits>>b)^(crc>>5))&1U;
+                crc=(crc<<1)&63U;if(feedback) crc^=3U;
+            }
+            assert(EncoderHost_Crc(bits)==crc);
+        }
+        puts("PASS: SSI CRC lookup equals independent bitwise polynomial for all 262144 angle/status inputs");
+    }
     flash_cr1=spi2.CR1=SPI_MODE_MASTER|SPI_NSS_SOFT|SPI_BAUDRATEPRESCALER_8;
     flash_cr2=spi2.CR2=SPI_DATASIZE_8BIT|SPI_RXFIFO_THRESHOLD_QF;
     memset(flash,255,sizeof(flash));

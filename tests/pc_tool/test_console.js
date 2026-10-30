@@ -246,7 +246,7 @@ async function main(){
  for(let i=0;i<reference.length;i++){const bad=Uint8Array.from(reference);bad[i]^=64;context.bad=bad;context.good=reference;assert.equal(evaluate('(()=>{const p=new WireParser();return p.feed(bad).length+p.feed(good).length})()'),1)}
  evaluate('parser=new WireParser();parser.feed(new Uint8Array(100000))');assert(evaluate('parser.buffer.length')<12);
  await evaluate('connect()');assert.equal(serialOptions.baudRate,115200);assert.deepEqual(writes,['Format:Native','@1:Get']);
- assert.equal(evaluate('boardConfig.firmware'),115);assert.equal(elements.get('motorModel').value,'2804');
+ assert.equal(evaluate('boardConfig.firmware'),118);assert.equal(elements.get('motorModel').value,'2804');
  assert.equal(evaluate('outputFormat'),'Native');
  // Settings editor units, real row-frame layout, import validation and Stop cancellation.
  evaluate(`$('speedLimit').value=240;$('posSpeed').value=150;$('speedStep').value=1.7`);
@@ -262,7 +262,7 @@ async function main(){
  await evaluate('readDiagnostics()');assert.equal(elements.get('diagRows').children.length,2);
  assert(evaluate("taskProgress.diagnostics.status==='done'&&taskProgress.diagnostics.completed===2&&taskProgress.diagnostics.total===2"),'Diagnostic progress uses the actual returned row count');
  await evaluate('clearDiagnostics()');assert(/:App:0,17,0$/.test(writes.at(-1)));
- evaluate('boardConfig.firmware=94');await assert.rejects(evaluate('clearDiagnostics()'),/R95/);evaluate('boardConfig.firmware=115');
+ evaluate('boardConfig.firmware=94');await assert.rejects(evaluate('clearDiagnostics()'),/R95/);evaluate('boardConfig.firmware=118');
  context.imported=JSON.parse(evaluate('JSON.stringify(editableConfig(boardConfig))'));
  evaluate(`imported.axes[1].speedLimit=300;imported.axes[1].posSpeed=180;imported.ledBrightness=63`);
  const commands=evaluate('importCommands(validateImport({format:"FOC-console-settings",version:1,editable:imported}))');
@@ -286,7 +286,7 @@ async function main(){
  await evaluate("send('Stop')");assert.equal(writes.at(-1),'Stop','Stop stays available without RPC in JustFloat');
  inject(context.jfBytes);await flush();assert(evaluate("outputFormat==='JustFloat'&&formatVerified&&!boardConfig"));
  await evaluate("send('Format:Native')");assert.equal(writes.at(-2),'Format:Native');assert(/:\s*Get$/.test(writes.at(-1)));
- assert(evaluate("outputFormat==='Native'&&boardConfig.firmware===115"));
+ assert(evaluate("outputFormat==='Native'&&boardConfig.firmware===118"));
  autoReply=false;const formatWait=evaluate("send('Get')");formatWait.catch(()=>{});await flush();
  const detectBefore=writes.length;inject(context.jfBytes);await flush();await assert.rejects(formatWait,/JustFloat/);
  assert(evaluate("outputFormat==='JustFloat'&&!boardConfig&&!pending.size"));assert.equal(writes.length,detectBefore,'Board-side JustFloat does not trigger an automatic mode override or repeat commands');
@@ -316,7 +316,7 @@ async function main(){
  evaluate('replaying=false;recording=true;recordBytes=16*1024*1024-1;recordChunks=[];recordFrame(new WireParser().feed(wireBytes)[0])');assert(!evaluate('recording'));assert(downloads.some(x=>x.endsWith('.csv')));
  evaluate('recordWriter={write:()=>{throw Error("must not enqueue")}};recording=true;recordQueuedBytes=1024*1024-1;recordFrame(new WireParser().feed(wireBytes)[0])');assert(!evaluate('recording'));assert(evaluate('recordQueuedBytes')<1024*1024);
  evaluate('recordWriter=null;recordQueuedBytes=0');
- boardReply[17]=115;evaluate('boardConfig.firmware=115');evaluate("$('calibrationAxis').value='1'");
+ boardReply[17]=118;evaluate('boardConfig.firmware=118');evaluate("$('calibrationAxis').value='1'");
  let startWrites=writes.length;await elements.get('applyDetection').onclick();assert(writes.at(-1).endsWith(':App:1,18,0'));
  await elements.get('restoreMotorPreset').onclick();assert(writes.at(-1).endsWith(':App:1,19,0'));
  assert(writes.slice(startWrites).every(x=>!/:Speed:|:Angle:|:Torque:|:Throttle:|HSO:Use/.test(x)));

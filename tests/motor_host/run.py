@@ -28,7 +28,7 @@ suites = {
     "sixstep": ["mycode/motor_sixstep.c", "mycode/motor_params.c", "tests/motor_host/test_sixstep.c"],
     "sixstep_wave": ["mycode/motor_sixstep.c", "mycode/motor_params.c", "tests/motor_host/test_sixstep_wave.c"],
     "sixstep_plant": ["mycode/motor_sixstep.c", "mycode/motor_params.c", "tests/motor_host/test_sixstep_plant.c"],
-    "sampling": ["mycode/motor_sampling.c", "mycode/motor_params.c", "tests/motor_host/test_sampling.c"],
+    "sampling": ["mycode/motor_sampling.c", "mycode/motor_math.c", "mycode/motor_params.c", "tests/motor_host/test_sampling.c"],
     "encoder": ["mycode/MT6701.c", "mycode/w25q64.c", "mycode/app_storage.c", "mycode/motor_params.c", "mycode/angle_src_encoder.c", "mycode/motor_math.c", "tests/motor_host/test_encoder.c"],
     "foc": ["mycode/JerryFOC.c", "mycode/protocol.c", "mycode/number_parse.c", "mycode/motor_params.c", "tests/motor_host/test_foc.c"],
     "hso": ["mycode/st_hso.c", "mycode/motor_params.c", "tests/motor_host/test_hso.c"],
@@ -57,6 +57,7 @@ for name, sources in suites.items():
     command = [compiler, "-std=c11", "-Wall", "-Wextra", "-Werror", "-O1",
                "-Itests/motor_host", "-Imycode", "-IThirdParty/ST_HSO", *sources, "-lm", "-o", str(out / (name + ".exe"))]
     if name=="sampling": command.insert(1,"-DMOTOR_SAMPLING_HOST_HOOKS")
+    if name=="encoder": command.insert(1,"-DMOTOR_ENCODER_HOST_HOOKS")
     if name=="inverter": command.insert(1,"-DMOTOR_INVERTER_HOST")
     if name in ("detect","control","motion","sensorless"): command.insert(1,"-DMOTOR_HOST_REAL_CONTROL")
     if name=="motor_math": command.insert(1,"-DMOTOR_MATH_CORDIC_HOST")

@@ -130,7 +130,7 @@
     X(text_keyrpt,"KeyRpt") \
     X(text_disperr,"DispErr") \
     X(text_fw,"FW") \
-    X(text_firmware,"UI-R115-POS") \
+    X(text_firmware,"UI-R118-IRQ") \
     X(text_clear_diag,"Clear diag") \
     X(text_mcu,"MCU") \
     X(text_stm32g431,"STM32G431") \
@@ -2180,6 +2180,11 @@ void KK_UI_CustomOnInput(KK_UI_PageId page, KK_UI_InputEvent event)
     /* A boot/global stop can leave the encoder unaligned. An explicit OK
      * requests alignment only; completing it must never apply the Run draft.
      * Keep held-key, hardware-trip and stationary gates in the controller. */
+    if (event.action==KK_UI_INPUT_OK && MotorControl_IsHandFollow() && MotorControl_IsGroupActive()) {
+        MotorControl_StopAll();
+        s_run_active=views[0].run_active=views[1].run_active=false;
+        KK_UI_Invalidate();return;
+    }
     if (event.action==KK_UI_INPUT_OK && !s_run_active) {
         MotorAxisSnapshot state;MotorControl_GetAxis(s_view_axis,&state);
         if (state.ready && state.healthy && (!state.aligned || state.aligning)) {
@@ -2194,13 +2199,10 @@ void KK_UI_CustomOnInput(KK_UI_PageId page, KK_UI_InputEvent event)
     }
     if (MotorControl_IsHandFollow()) {
         if (event.action==KK_UI_INPUT_OK) {
-            if (MotorControl_IsGroupActive()) { MotorControl_StopAll(); s_run_active=false; }
-            else {
-                ui_store_current();
-                s_run_active=MotorControl_StartFollow();
-                if (s_run_active) clear_run_stop();
-                else (void)KK_UI_ShowToast(MotorControl_CommandText(),1200U);
-            }
+            ui_store_current();
+            s_run_active=MotorControl_StartFollow();
+            if (s_run_active) clear_run_stop();
+            else (void)KK_UI_ShowToast(MotorControl_CommandText(),1200U);
             KK_UI_Invalidate();
         }
         return; /* Hand motion supplies the target; arrows never command a motor. */

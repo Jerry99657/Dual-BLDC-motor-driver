@@ -1324,6 +1324,22 @@ static void check_run_alignment(void) {
     press(KK_UI_KEY_OK);settle();press(KK_UI_KEY_OK);assert(!align_requests && !output_requested);
     reset();MotorControl_StopAll();drive_ready=false;aligned=false;
     press(KK_UI_KEY_OK);settle();press(KK_UI_KEY_OK);assert(!align_requests && !output_requested);
+    for(unsigned master=0;master<2;++master) {
+        reset();MotorControl_StopAll();
+        assert(MotorControl_SelectWork(master ? MOTOR_WORK_MASTER_M2 : MOTOR_WORK_MASTER_M1));
+        MotorAxisSnapshot slave={.healthy=true,.aligned=true,.ready=true,.status="READY"};
+        aligned=healthy=drive_ready=true;ControlStub_SetSecondState(slave);
+        press(KK_UI_KEY_OK);settle(); /* UI is stopped; controller starts separately. */
+        assert(MotorControl_StartFollow());
+        if(master) aligned=false;
+        else { MotorControl_GetAxis(MOTOR_AXIS_2,&slave);slave.aligned=false;ControlStub_SetSecondState(slave); }
+        unsigned requests=align_requests;
+        press(KK_UI_KEY_OK);
+        MotorControl_GetAxis(MOTOR_AXIS_2,&slave);
+        assert(!MotorControl_IsGroupActive() && !output_requested && !slave.active);
+        assert(align_requests==requests); /* Actual running Follow always stops first. */
+    }
+    puts("PASS: Follow OK stops actual group before alignment checks in both master roles, including stale stopped UI state");
     puts("PASS: R97 Run distinguishes global stop/aligning, held-key align denial, explicit align/second-confirm start, no automatic restart and unhealthy/ADC gates");
 }
 static void check_settings_service_ui(void) {

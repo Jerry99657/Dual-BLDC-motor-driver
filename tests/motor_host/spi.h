@@ -11,6 +11,7 @@ extern SPI_HandleTypeDef hspi1, hspi2, hspi3;
 #define SPI2 (&spi2)
 #define SPI3 (&spi3)
 #define HAL_SPI_STATE_READY 1U
+#define HAL_SPI_ERROR_DMA 0x10U
 #define SPI_CR1_CPHA 1U
 #define SPI_CR1_CPOL 2U
 #define SPI_CR1_BR (7U << 3)

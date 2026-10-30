@@ -112,6 +112,20 @@ def audit(root):
                             'NSSPMode': 'SPI_NSS_PULSE_DISABLE'}.items():
         check(lambda f=field, e=expected: require(spi, 'hspi2.Init.' + f, e))
 
+    # SSI zero is valid data. An open MISO must have the generated pull-up,
+    # rather than a floating input that can look like angle/status/CRC zero.
+    # Resolve the pin from CubeMX's own route, never assume PA6/PB14.
+    raw_spi = function((root / 'Core/Src/spi.c').read_text(encoding='utf-8'), 'HAL_SPI_MspInit')
+    gpio_blocks = re.findall(r'GPIO_InitStruct.Pin\s*=\s*([^;]+);(.*?)HAL_GPIO_Init\(\s*(GPIO[A-G])\s*,', spi, re.S)
+    for port in (1, 2):
+        route = re.findall(r'\bP([A-G])(\d+)\s*-+>\s*SPI'+str(port)+r'_MISO\b', raw_spi)
+        supported = len(route)==1 and any(
+            gpio=='GPIO'+route[0][0] and re.search(r'\bGPIO_PIN_'+route[0][1]+r'\b', pins) and
+            re.search(r'GPIO_InitStruct\.Pull\s*=\s*GPIO_PULLUP\s*;', body)
+            for pins,body,gpio in gpio_blocks)
+        if not supported:
+            errors.append(f'SPI{port} MISO: configure Pull-up in CubeMX and regenerate; SSI zero/open-wire validation requires a defined idle input')
+
     sources = '\n'.join(read('Core/Src/' + name) for name in ('spi.c', 'adc.c', 'tim.c'))
     mappings = re.findall(r'\b(hdma_\w+)\.Instance\s*=\s*(DMA[12]_Channel[1-6])\s*;', sources)
     used = {}

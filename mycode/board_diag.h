@@ -14,6 +14,7 @@ typedef struct {
     BoardDiagMotion motion[2];
     float bus,reference,current[2][3];
     uint32_t enc_errors[2];
+    uint32_t enc_health[2];
     uint16_t raw[2][3],enc_age[2];
     uint8_t enc_status[2],enc_error[2],work,drive[2],model[2],axis,source;
     char reason[24];
@@ -37,7 +38,7 @@ const BoardDiagFault *BoardDiag_LastFault(void);
 const BoardDiagCrash *BoardDiag_LastCrash(void);
 const BoardDiagTiming *BoardDiag_Times(void);
 /* Extra rows appended to the existing Diagnostics info page / GetRow group6. */
-#define BOARD_DIAG_ROWS 29U
+#define BOARD_DIAG_ROWS 30U
 const char *BoardDiag_Row(unsigned axis,unsigned row,char value[32]);
 
 #if defined(__arm__) || defined(__thumb__)

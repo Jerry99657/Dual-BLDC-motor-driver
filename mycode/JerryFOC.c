@@ -276,7 +276,7 @@ __attribute__((noinline,noclone)) void JerryFOC_CurrentControl(MotorAxis axis,
         float w=speed*(float)m->pole_pairs;
         if (!isfinite(w)) w=0.0f;
         float previous_gain=loops->current_feedforward;
-        float gain=fminf(1.0f,previous_gain+0.002f);
+        float gain=MotorMath_Min(1.0f,previous_gain+0.002f);
         ffq=w*(m->psi_f+m->Ls*id);ffd=-w*m->Ls*iq;
         float gain_change=gain-previous_gain;
         if (gain_change!=0.0f) {
@@ -404,8 +404,8 @@ __RAM_FUNC __attribute__((noinline,noclone)) static void axis_voltage(MotorAxis 
     float loss_a=0,loss_b=0,loss_c=0;
     if (encoder && half) {
         uint32_t dead=MotorMath_DeadTicks(timer->BDTR & 255U,(timer->CR1>>8U)&3U);
-        float nominal=fmaxf((float)dead,(float)SystemCoreClock*0.0000002f);
-        float dv=bus_voltage*fminf(0.005f,nominal/(2.0f*(float)half));
+        float nominal=MotorMath_Max((float)dead,(float)SystemCoreClock*0.0000002f);
+        float dv=bus_voltage*MotorMath_Min(0.005f,nominal/(2.0f*(float)half));
         float ia=axis==MOTOR_AXIS_1 ? frame->m1_current[0] : frame->m2_current[0];
         float ib=axis==MOTOR_AXIS_1 ? frame->m1_current[1] : frame->m2_current[1];
         float ic=axis==MOTOR_AXIS_1 ? frame->m1_current[2] : -(ia+ib);
@@ -416,7 +416,7 @@ __RAM_FUNC __attribute__((noinline,noclone)) static void axis_voltage(MotorAxis 
     /* d/q 电压矢量限幅，保留 5% 裕量给死区和母线波动。 */
     /* Measured VBUS sets duty scaling. Retain the configured motor voltage
      * ceiling when a 12 V motor is operated from a higher supply. */
-    float voltage_limit = (axis==MOTOR_AXIS_1 && SixStep_IsGeneric() ? bus_voltage : fminf(bus_voltage, motor->bus_voltage)) *
+    float voltage_limit = (axis==MOTOR_AXIS_1 && SixStep_IsGeneric() ? bus_voltage : MotorMath_Min(bus_voltage, motor->bus_voltage)) *
                           0.548482756f; /* 0.95/sqrt(3) */
     float voltage_sq = Uq * Uq + Ud * Ud;
     float voltage_limit_sq = voltage_limit * voltage_limit;
@@ -540,7 +540,7 @@ void JerryFOC_alignStart(void)
     /* 在 D 轴施加电压，迫使转子物理 D 轴对齐到电角度 0 */
     /* At standstill Id ~= Ud/Rs. Use the continuous-current target instead
      * of the old fixed 3 V (~1.3 A on this 2.3-ohm motor). */
-    float align_voltage = fminf(3.0f, active_motor->Rs * active_motor->rated_current);
+    float align_voltage = MotorMath_Min(3.0f, active_motor->Rs * active_motor->rated_current);
     JerryFOC_setPhaseVoltage(0.0f, align_voltage, 0.0f);
 }
 
@@ -771,7 +771,7 @@ void JerryFOC_setPosition(float target_pos, float limit)
     JerryFOC_Target_Position = base_angle + target_pos;
 
     if (limit <= 0.0f) limit = MOTOR_DEFAULT_POSITION_SPEED;
-    limit = fminf(limit, active_motor->max_speed_mech);
+    limit = MotorMath_Min(limit, active_motor->max_speed_mech);
     velocity_limit_global = limit;
     pos_loop_M0.limit = limit;
 }
@@ -782,7 +782,7 @@ void JerryFOC_setAbsolutePosition(float target_pos, float limit)
     recover_hso_stop_for_command();
     JerryFOC_Target_Position = target_pos;
     if (limit <= 0.0f) limit = MOTOR_DEFAULT_POSITION_SPEED;
-    limit = fminf(limit, active_motor->max_speed_mech);
+    limit = MotorMath_Min(limit, active_motor->max_speed_mech);
     velocity_limit_global = limit;
     pos_loop_M0.limit = limit;
 }
@@ -938,7 +938,7 @@ __RAM_FUNC void JerryFOC_run(void)
     } else {
         /* Also enforce this at the fast-loop boundary: the velocity outer
          * loop and external application code can write Target_Iq directly. */
-        float iq_cap=sqrtf(fmaxf(0.0f,active_motor->rated_current*active_motor->rated_current-target_id*target_id));
+        float iq_cap=sqrtf(MotorMath_Max(0.0f,active_motor->rated_current*active_motor->rated_current-target_id*target_id));
         target_iq = symmetric_limit(target_iq,iq_cap);
         /* HSO's dq crossfade is an applied current, not the 1 kHz speed-PI
          * request. Feeding it back here would blend the same request again

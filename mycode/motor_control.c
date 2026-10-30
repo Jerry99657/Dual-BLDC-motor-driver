@@ -119,13 +119,13 @@ __attribute__((noinline,noclone)) static float speed_limit(MotorAxis axis)
     uint32_t flags=MotorControl_GetOptions(axis);
     unsigned lim=(flags & APP_SPEED_LIMIT_MASK)>>APP_SPEED_LIMIT_SHIFT;
     if (!lim || lim>APP_SPEED_LIMIT_MAX) lim=APP_SPEED_LIMIT_DEFAULT;
-    return fminf((float)lim,MotorParams_GetAxis(axis)->max_speed_mech);
+    return MotorMath_Min((float)lim,MotorParams_GetAxis(axis)->max_speed_mech);
 }
 __attribute__((noinline,noclone)) static float position_speed(MotorAxis axis)
 {
     unsigned limit=AppSettings_GetPositionSpeed(MotorControl_GetOptions(axis));
     if (!limit || limit>APP_SPEED_LIMIT_MAX) limit=30;
-    return fminf((float)limit,speed_limit(axis));
+    return MotorMath_Min((float)limit,speed_limit(axis));
 }
 __attribute__((noinline,noclone)) float MotorControl_LimitSpeed(MotorAxis axis,float value)
 {
@@ -591,7 +591,7 @@ __attribute__((noinline,noclone)) static void set_target(MotorAxis axis,JerryFOC
     if (axis==MOTOR_AXIS_1) {
         if (mode==JERRYFOC_MODE_VELOCITY) JerryFOC_setVelocity(value);
         else if (mode==JERRYFOC_MODE_POSITION) JerryFOC_setAbsolutePosition(value,
-            fminf(limit>0 ? limit : position_speed(axis),position_speed(axis)));
+            MotorMath_Min(limit>0 ? limit : position_speed(axis),position_speed(axis)));
         else JerryFOC_setCurrent(value);
     } else {
         const MotorParams *m=MotorParams_GetAxis(axis);
@@ -674,7 +674,7 @@ float MotorControl_VelocityControl(MotorAxis axis,PIDController *velocity,float 
             control.follow_hold=true;
         if (control.follow_hold) {
             velocity->I=0;
-            error=copysignf(fmaxf(0,fabsf(error)-0.05f),error);
+            error=copysignf(MotorMath_Max(0,fabsf(error)-0.05f),error);
         }
     }
     float output=JerryFOC_PID_Calc(velocity,error);
@@ -695,7 +695,7 @@ float MotorControl_PositionVelocity(MotorAxis axis,PIDController *position,float
 {
     if (!control.group_active || !MotorControl_IsHandFollow() || MotorControl_IsPassive(axis))
     {
-        position->limit=fminf(position->limit,position_speed(axis));
+        position->limit=MotorMath_Min(position->limit,position_speed(axis));
         float feedforward=control.group_active && control.work==MOTOR_WORK_SYNC_POSITION ?
             control.group_speed*(axis==MOTOR_AXIS_1 ? 1.0f : ratio()) : 0.0f;
         return feedforward+JerryFOC_PID_Calc(position,error);
@@ -762,7 +762,7 @@ __attribute__((noinline,noclone,optimize("Oz"))) bool MotorControl_CommandFrom(M
         control.group_mode=mode; control.group_target=value;
         control.group_position_limit=limit>0.0f ? limit : position_speed(MOTOR_AXIS_1);
         if (mode==JERRYFOC_MODE_VELOCITY) {
-            float cap=fminf(speed_limit(MOTOR_AXIS_1),speed_limit(MOTOR_AXIS_2)/fabsf(ratio()));
+            float cap=MotorMath_Min(speed_limit(MOTOR_AXIS_1),speed_limit(MOTOR_AXIS_2)/fabsf(ratio()));
             control.group_target=clamp(value,-cap,cap);
         }
         bool loop1=(MotorControl_GetOptions(MOTOR_AXIS_1) & APP_FLAG_CURRENT_LOOP)!=0U;
@@ -832,6 +832,10 @@ void MotorControl_Fast(void)
         command_text=control.group_stop_reason="M1 IBUS TRIP";
         MotorControl_StopAll(); return;
     }
+    /* Admission and the frozen fault must refer to the same encoder
+     * publication, including when CubeMX changes relative IRQ priorities.
+     * Restore the caller mask before the current transforms / PI work. */
+    uint32_t gate_mask=__get_PRIMASK(); __disable_irq();
     if (MotorControl_AxisEnabled(MOTOR_AXIS_1) && MotorSampling_IsOutputRequested() &&
         !g_openloop_debug && !MotorControl_HsoAllowed() &&
         (!MT6701_IsHealthy() || !MotorSampling_IsAxisReady(MOTOR_AXIS_1))) {
@@ -841,7 +845,7 @@ void MotorControl_Fast(void)
         BoardDiag_Fault(1U,DIAG_ENCODER,control.m1_stop_reason);
         MotorControl_Stop(MOTOR_AXIS_1);
     }
-    if (!MotorControl_AxisEnabled(MOTOR_AXIS_2)) return;
+    if (!MotorControl_AxisEnabled(MOTOR_AXIS_2)) { __set_PRIMASK(gate_mask); return; }
     MT6701_2_Snapshot enc; MT6701_2_GetSnapshot(&enc);
     bool active=MotorSampling_IsAxisOutputRequested(MOTOR_AXIS_2);
     /* A failed startup probe must not auto-align/energize after reconnection. */
@@ -852,7 +856,7 @@ void MotorControl_Fast(void)
         command_text=control.group_stop_reason=control.m2.stop_reason;
         (void)MotorSampling_SetAxisOutputEnabled(MOTOR_AXIS_2,false);
         BoardDiag_Fault(2U,DIAG_ENCODER,control.m2.stop_reason);
-        MotorControl_Stop(MOTOR_AXIS_2); return;
+        MotorControl_Stop(MOTOR_AXIS_2); __set_PRIMASK(gate_mask); return;
     }
     if (control.group_active && (!MT6701_IsHealthy() || !enc.healthy ||
         MotorSampling_IsOutputRequested()==MotorControl_IsPassive(MOTOR_AXIS_1) ||
@@ -863,8 +867,9 @@ void MotorControl_Fast(void)
         (void)MotorSampling_SetOutputEnabled(false);
         (void)MotorSampling_SetAxisOutputEnabled(MOTOR_AXIS_2,false);
         BoardDiag_Fault(!MT6701_IsHealthy() ? 1U : !enc.healthy ? 2U : 0U,DIAG_CONTROL,command_text);
-        MotorControl_StopAll(); return;
+        MotorControl_StopAll(); __set_PRIMASK(gate_mask); return;
     }
+    __set_PRIMASK(gate_mask);
     const MotorSampleFrame *f=MotorSampling_GetFrame();
     control.m2.ia=f->m2_current[0]; control.m2.ib=f->m2_current[1];
     float angle=norm(control.m2.electrical_scale*enc.angle-control.m2.electrical_zero);
@@ -881,7 +886,7 @@ void MotorControl_Fast(void)
     if (!active) return;
     if (control.m2.aligning) {
         const MotorParams *m=MotorParams_GetAxis(MOTOR_AXIS_2);
-        JerryFOC_setAxisVoltage(MOTOR_AXIS_2,0,fminf(3.0f,m->Rs*m->rated_current),0,NULL,NULL);
+        JerryFOC_setAxisVoltage(MOTOR_AXIS_2,0,MotorMath_Min(3.0f,m->Rs*m->rated_current),0,NULL,NULL);
         return;
     }
     if (!control.m2.aligned) { MotorControl_Stop(MOTOR_AXIS_2); return; }
@@ -937,7 +942,7 @@ static void coordinate(void)
              * The same 50ms activity drives BOTH cutoff and channel blend,
              * avoiding fast cutoff modulation in differentiated setpoints. */
             control.follow_acceleration+=0.0591174f*(1000*(control.follow_velocity[master]-previous_master)-control.follow_acceleration);
-            float demand=fmaxf(0.25f*fabsf(control.follow_velocity[master]),0.04f*fabsf(control.follow_acceleration));
+            float demand=MotorMath_Max(0.25f*fabsf(control.follow_velocity[master]),0.04f*fabsf(control.follow_acceleration));
             control.follow_activity+=0.02f*(clamp(demand,0,1)-control.follow_activity);
             bool quiet=control.follow_quiet_ms>30 && control.follow_quiet_ms>2U*control.follow_count_interval;
             float fast_blend=quiet ? 0 : clamp((control.follow_activity-0.3f)/0.4f,0,1);
@@ -973,7 +978,7 @@ static void coordinate(void)
         float distance=error+terminal*fabsf(terminal)/(2.0f*deceleration)+terminal*response_time;
         float envelope=braking_speed(distance,deceleration,response_time);
         float linear=terminal+(m->fast_tracking ? 12+(m->response-12)*weight : 0.5f*m->response)*error;
-        float desired=clamp(error>0 ? fminf(linear,envelope) : fmaxf(linear,envelope),-cap,cap);
+        float desired=clamp(error>0 ? MotorMath_Min(linear,envelope) : MotorMath_Max(linear,envelope),-cap,cap);
         float previous=control.group_speed;
         if (m->fast_tracking) {
             /* Small following errors use a single pursuit stage. Blend back
@@ -989,12 +994,12 @@ static void coordinate(void)
          * brake through zero, and a reduced cap must not reset the trajectory. */
         set_target((MotorAxis)slave,JERRYFOC_MODE_POSITION,control.group_reference,cap);
     } else {
-        float accel=100.0f/fmaxf(1.0f,fabsf(k));
-        float decel=150.0f/fmaxf(1.0f,fabsf(k));
-        float cap=fminf(speed_limit((MotorAxis)master),speed_limit((MotorAxis)slave)/fabsf(k));
+        float accel=100.0f/MotorMath_Max(1.0f,fabsf(k));
+        float decel=150.0f/MotorMath_Max(1.0f,fabsf(k));
+        float cap=MotorMath_Min(speed_limit((MotorAxis)master),speed_limit((MotorAxis)slave)/fabsf(k));
         if (control.group_mode==JERRYFOC_MODE_POSITION)
-            cap=fminf(cap,fminf(control.group_position_limit,
-                fminf(position_speed((MotorAxis)master),position_speed((MotorAxis)slave)/fabsf(k))));
+            cap=MotorMath_Min(cap,MotorMath_Min(control.group_position_limit,
+                MotorMath_Min(position_speed((MotorAxis)master),position_speed((MotorAxis)slave)/fabsf(k))));
         float desired=control.group_target;
         if (control.group_mode==JERRYFOC_MODE_POSITION) {
             float error=control.group_target-control.group_reference;

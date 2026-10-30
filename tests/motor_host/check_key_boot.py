@@ -28,7 +28,7 @@ def check(path,settle):
     subprocess.run([shutil.which('gcc'),'-std=c11','-Wall','-Wextra','-Werror','-O1',
         '-DMOTOR_SAMPLING_HOST_HOOKS',f'-DKEY_EXPECT_SETTLE={int(settle)}',
         '-Itests/motor_host','-Imycode','-I'+str(out),
-        'mycode/motor_sampling.c','mycode/motor_params.c','tests/diag_stub.c',
+        'mycode/motor_sampling.c','mycode/motor_math.c','mycode/motor_params.c','tests/diag_stub.c',
         'tests/motor_host/test_key_boot.c','-lm','-o',str(exe)],cwd=root,check=True)
     scenarios=('rc','rc-wrap','held','held-wrap','released','press','cpu','pre-edge','pending') if settle else ('rc','rc-wrap')
     for scenario in scenarios:

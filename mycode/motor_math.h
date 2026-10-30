@@ -5,6 +5,10 @@
 /* Positive-turn normalization with the same binary32 remainder as fmodf. */
 float MotorMath_Wrap(float angle);
 float MotorMath_Clamp(float value,float low,float high);
+/* Match this toolchain's fminf/fmaxf value semantics (NaN and equal operands
+ * included), without libm's two out-of-line classification calls per use. */
+float MotorMath_Min(float a,float b);
+float MotorMath_Max(float a,float b);
 /* Signed DWT delta, modulo wrap; reject a prediction outside +/-1 ms.
  * Does not wrap the result: the caller normalizes once at its own boundary. */
 float MotorMath_PredictAngle(float angle,float electrical_speed,int32_t cycles);

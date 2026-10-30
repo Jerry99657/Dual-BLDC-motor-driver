@@ -27,8 +27,8 @@ void MotorSampling_GetAxisDiagnostics(MotorAxis a,MotorSamplingDiagnostics *out)
  (void)a; *out=(MotorSamplingDiagnostics){.reference_voltage=3.26f};
  if(recurse) { recurse=false;BoardDiag_Fault(2,DIAG_SAMPLE,"SECOND"); }
 }
-void MT6701_GetDiagnostics(MT6701Diagnostics *out) { *out=(MT6701Diagnostics){.errors=51,.age_cycles=4,.status=3,.last_error=MT6701_ERROR_FIELD}; }
-void MT6701_2_GetDiagnostics(MT6701Diagnostics *out) { *out=(MT6701Diagnostics){.errors=26,.age_cycles=5,.status=1,.last_error=MT6701_ERROR_TIMEOUT}; }
+void MT6701_GetDiagnostics(MT6701Diagnostics *out) { *out=(MT6701Diagnostics){.errors=51,.age_cycles=4,.status=3,.last_error=MT6701_ERROR_FIELD,.health=MT6701_HEALTH_AGE,.wall_ms=1}; }
+void MT6701_2_GetDiagnostics(MT6701Diagnostics *out) { *out=(MT6701Diagnostics){.errors=26,.age_cycles=5,.status=1,.last_error=MT6701_ERROR_TIMEOUT,.health=MT6701_HEALTH_RECOVER,.wall_ms=6,.failures=2}; }
 const char *MT6701_ErrorText(MT6701Error e) { return e==MT6701_ERROR_FIELD ? "FIELD" : "TIMEOUT"; }
 void SixStep_GetSnapshot(SixStepSnapshot *out) { *out=six; }
 void StHso_RecordControlCycles(uint32_t n) { recorded_cycles=n; }
@@ -46,6 +46,8 @@ static void retention(void) {
  assert(saved.sequence==250 && saved.motion[0].target_speed==23 && saved.at-saved.motion[0].at==20);
  assert(saved.work==MOTOR_WORK_MASTER_M2 && saved.raw[1][2]==0 && fabsf(saved.current[1][2]+.3f)<.00001f);
  assert(saved.enc_age[0]==4 && saved.enc_age[1]==5 && saved.enc_errors[1]==26);
+ assert(saved.enc_health[0]==0x108 && saved.enc_health[1]==0x20602);
+ char gate[32];BoardDiag_Row(1,29,gate);assert(!strcmp(gate,"E2 H02 T6 F2"));
  assert(saved.reference==3.26f && !strcmp(saved.reason,"ENCODER1 LOST"));
  now=900;sample.sequence=999;BoardDiag_Fault(2,DIAG_SAMPLE,"REPLACEMENT");assert(!memcmp(&saved,&retained.fault,sizeof(saved)));
  memset(motion,0,sizeof(motion));memset(&timing,0,sizeof(timing));BoardDiag_Init();assert(!memcmp(&saved,&retained.fault,sizeof(saved)));

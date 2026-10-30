@@ -16,10 +16,17 @@ uint32_t MotorMath_DeadTicks(uint32_t dtg,uint32_t ckd)
     return ticks*(1U<<ckd);
 }
 
+/* User-side hot arithmetic only; no changes to libm, HAL or ST HSO.
+ * This toolchain's min/max return b for equality, including signed zeros. */
+__attribute__((noinline,noclone)) float MotorMath_Min(float a,float b)
+{ return isnan(a) ? b : isnan(b) || a<b ? a : b; }
+__attribute__((noinline,noclone)) float MotorMath_Max(float a,float b)
+{ return isnan(a) ? b : isnan(b) || a>b ? a : b; }
+
 /* Preserve fmin/fmax NaN semantics in all three existing callers. */
 __attribute__((noinline,noclone,optimize("Os")))
 float MotorMath_Clamp(float value,float low,float high)
-{ return fminf(high,fmaxf(low,value)); }
+{ return MotorMath_Min(high,MotorMath_Max(low,value)); }
 
 /* Fixed divisor 2*pi: retain exact binary32 remainder, including very large
  * multi-turn positions. Integer mantissa division avoids retaining the

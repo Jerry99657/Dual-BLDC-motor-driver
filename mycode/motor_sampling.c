@@ -1,5 +1,6 @@
 #include "compact_text.h"
 #include "motor_sampling.h"
+#include "motor_math.h"
 #include "board_diag.h"
 #include "stm32g4xx_ll_gpio.h"
 #include "stm32g4xx_ll_exti.h"
@@ -993,7 +994,7 @@ __attribute__((noinline,noclone)) bool MotorSampling_Capture(void)
             }
             float squared = (2.0f/3.0f)*(iu*iu+iv*iv+iw*iw);
             float reference = esc ? 0.64f : motor->overload_current * motor->overload_current;
-            acquisition.energy[a] = fmaxf(0.0f, acquisition.energy[a]+squared-reference);
+            acquisition.energy[a] = MotorMath_Max(0.0f, acquisition.energy[a]+squared-reference);
             if (acquisition.energy[a] >= reference * CURRENT_SAMPLE_HZ * (esc ? 3.0f : motor->overload_budget_s))
                 trip_axis((MotorAxis)a, MOTOR_SAMPLE_FAULT_OVERLOAD, 0U, false);
         }

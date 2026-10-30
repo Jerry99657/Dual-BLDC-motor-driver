@@ -11,7 +11,7 @@
 #include <string.h>
 #include <stddef.h>
 
-#define DIAG_MAGIC 0x44393531UL /* R95 record layout; reject stale/torn RAM. */
+#define DIAG_MAGIC 0x44313631UL /* R116 record layout; reject stale/torn RAM. */
 static struct {
     uint32_t magic,check;
     BoardDiagCrash crash;
@@ -99,6 +99,7 @@ void BoardDiag_Fault(unsigned axis,unsigned source,const char *reason)
             if (a) MT6701_2_GetDiagnostics(&e); else MT6701_GetDiagnostics(&e);
             f->enc_age[a]=e.age_cycles; f->enc_status[a]=e.status;
             f->enc_error[a]=(uint8_t)e.last_error; f->enc_errors[a]=e.errors;
+            f->enc_health[a]=e.health|((uint32_t)e.wall_ms<<8)|((uint32_t)e.failures<<16);
             for (unsigned p=0;p<3;++p) {
                 f->current[a][p]=a ? (p<2 ? s->m2_current[p] : -s->m2_current[0]-s->m2_current[1]) : s->m1_current[p];
                 f->raw[a][p]=a ? (p<2 ? s->m2_current_raw[p] : 0U) : s->m1_current_raw[p];
@@ -167,13 +168,21 @@ const char *BoardDiag_Row(unsigned axis,unsigned row,char value[32])
         "CPU Return\0"
         "Stop Src\0"
         "Stop At\0"
-        "Stop K/P";
-    _Static_assert(BOARD_DIAG_ROWS==29,"Diagnostic rows");
+        "Stop K/P\0"
+        "F Enc Gate";
+    _Static_assert(BOARD_DIAG_ROWS==30,"Diagnostic rows");
     const BoardDiagFault *f=&retained.fault; const BoardDiagCrash *c=&retained.crash;
     bool valid=true;
     if (axis>1 || row>=BOARD_DIAG_ROWS) return NULL;
     const BoardDiagMotion *m=&f->motion[axis];
-    if (row>=26U) {
+    if (row==29U) {
+        if (!f->source) strcpy(value,"--");
+        else {
+            uint32_t h=f->enc_health[axis];
+            UiText_Format(value,32,"E%u H%02X T%lu F%lu",axis+1U,(unsigned)(h&255U),
+                (unsigned long)((h>>8)&255U),(unsigned long)(h>>16));
+        }
+    } else if (row>=26U) {
         MotorGlobalStopRecord stop; MotorSampling_GetGlobalStop(&stop);
         static const char sources[]=
         "--\0"

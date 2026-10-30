@@ -41,6 +41,30 @@ static void check(float angle,unsigned masked)
 int main(void)
 {
     uint32_t random=1;
+    /* Independent system libm, all binary32 classes, plus explicit ARM
+     * newlib's equal-operand rule (the host may choose a different zero). */
+    for(unsigned i=0;i<1000000;++i) {
+        random=random*1664525U+1013904223U;
+        union { uint32_t u; float f; } a={.u=random},b,actual,expected;
+        random=random*1664525U+1013904223U;b.u=random;
+        actual.f=MotorMath_Min(a.f,b.f);expected.f=fminf(a.f,b.f);
+        assert(isnan(expected.f) ? isnan(actual.f) : actual.u==expected.u);
+        actual.f=MotorMath_Max(a.f,b.f);expected.f=fmaxf(a.f,b.f);
+        assert(isnan(expected.f) ? isnan(actual.f) : actual.u==expected.u);
+    }
+    const float extrema[]={-INFINITY,-1.0f,-0x1p-149f,-0.0f,0.0f,0x1p-149f,1.0f,INFINITY,NAN};
+    for(unsigned i=0;i<9;++i) for(unsigned j=0;j<9;++j) {
+        float a=extrema[i],b=extrema[j];
+        if(a==0 && b==0) {
+            assert(!!signbit(MotorMath_Min(a,b))==!!signbit(b));
+            assert(!!signbit(MotorMath_Max(a,b))==!!signbit(b));
+        } else {
+            float low=MotorMath_Min(a,b),high=MotorMath_Max(a,b);
+            assert(isnan(fminf(a,b)) ? isnan(low) : low==fminf(a,b));
+            assert(isnan(fmaxf(a,b)) ? isnan(high) : high==fmaxf(a,b));
+        }
+    }
+    puts("PASS: user min/max vs independent libm: 1000000 binary32 pairs, nonfinite/subnormal boundaries and explicit target signed-zero equality");
     for(unsigned i=0;i<1000000;++i) {
         random=random*1664525U+1013904223U;
         union { uint32_t u; float f; } input={.u=random},actual,expected;

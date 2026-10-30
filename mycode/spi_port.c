@@ -107,14 +107,24 @@ void SpiPort_DMAIRQ(DMA_HandleTypeDef *d)
         HAL_DMA_IRQHandler(d);
         return;
     }
+    uint32_t mask=__get_PRIMASK(); __disable_irq();
     uint32_t enabled=d->Instance->CCR;
-    if (!dma_busy(h) || !(enabled&DMA_CCR_EN)) return;
+    if (!dma_busy(h)) {
+        stop_channel(d); /* Retire stale flags/IE, never spin on an idle owner. */
+        __set_PRIMASK(mask); return;
+    }
     uint32_t flags=dma_flags(d);
     uint32_t errors=dma_flags(h->hdmatx)&8U;
     if (h->hdmarx) errors|=dma_flags(h->hdmarx)&8U;
-    if ((enabled&DMA_CCR_TEIE) && errors) { fail(h,HAL_SPI_ERROR_DMA); return; }
+    /* DMA hardware clears EN on TE. Check/acknowledge errors BEFORE EN,
+     * otherwise TEIF+TEIE continually re-enter this vector and starve main. */
+    if ((enabled&DMA_CCR_TEIE) && errors) {
+        fail(h,HAL_SPI_ERROR_DMA); __set_PRIMASK(mask); return;
+    }
+    if (!(enabled&DMA_CCR_EN)) {
+        stop_channel(d); __set_PRIMASK(mask); return;
+    }
     if ((enabled&DMA_CCR_TCIE) && (flags&2U)) {
-        uint32_t mask=__get_PRIMASK(); __disable_irq();
         if (h->hdmatx->Instance->CNDTR ||
             (h->hdmarx && h->hdmarx->Instance->CNDTR)) {
             fail(h,HAL_SPI_ERROR_DMA); __set_PRIMASK(mask); return;
@@ -124,7 +134,9 @@ void SpiPort_DMAIRQ(DMA_HandleTypeDef *d)
         quiesce(h);
         __set_PRIMASK(mask);
         SpiPort_Service(h);
+        return;
     }
+    __set_PRIMASK(mask);
 }
 
 static HAL_StatusTypeDef claim(SPI_HandleTypeDef *h,HAL_SPI_StateTypeDef state)

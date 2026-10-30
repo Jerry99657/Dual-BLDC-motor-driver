@@ -42,6 +42,9 @@ def fixture(edits, accepted):
 
 
 audit(root)
+fixture({'Core/Src/spi.c':[('GPIO_InitStruct.Pull = GPIO_PULLUP;', 'GPIO_InitStruct.Pull = GPIO_NOPULL;')]},False)
+fixture({'Core/Src/spi.c':[('PA6     ------> SPI1_MISO','PA4     ------> SPI1_MISO'),
+    ('GPIO_InitStruct.Pin = GPIO_PIN_6;', 'GPIO_InitStruct.Pin = GPIO_PIN_4;')]},True)
 fixture({'Core/Src/tim.c':[('DeadTime = 17;','DeadTime = 128;'),('TIM_CLOCKDIVISION_DIV1','TIM_CLOCKDIVISION_DIV4')]},True)
 fixture({'Core/Src/tim.c':[('DeadTime = 17;','DeadTime = 255;'),('TIM_CLOCKDIVISION_DIV1','TIM_CLOCKDIVISION_DIV2')]},True)
 fixture({'Core/Src/tim.c':[('DeadTime = 17;','DeadTime = 256;')]},False)

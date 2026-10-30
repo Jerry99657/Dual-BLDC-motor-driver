@@ -2,7 +2,14 @@
 #define MOTOR_HOST_MAIN_H
 #include <stdint.h>
 #include <stddef.h>
+#ifndef __DMB
+#ifdef MOTOR_ENCODER_HOST_HOOKS
+void EncoderHost_Publication(void);
+#define __DMB() EncoderHost_Publication()
+#else
 #define __DMB() __asm__ volatile("" ::: "memory")
+#endif
+#endif
 typedef enum { HAL_OK, HAL_ERROR, HAL_BUSY, HAL_TIMEOUT } HAL_StatusTypeDef;
 #ifdef MOTOR_IRQ_INTEGRATION
 typedef struct { union { uint32_t pins,IDR; }; } GPIO_TypeDef;

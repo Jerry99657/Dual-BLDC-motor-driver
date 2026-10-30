@@ -14,6 +14,7 @@
 static uint32_t now;
 static AppSettings settings;
 static MT6701_2_Snapshot enc2;
+static bool expect_encoder_gate_lock;
 static bool ready2=true, output2, reserved, flash_owned;
 static bool ibus_trip;
 bool MotorSampling_IsIbusTripped(void) { return ibus_trip; }
@@ -34,7 +35,10 @@ bool MotorSampling_SetAxisOutputEnabled(MotorAxis axis,bool enabled)
 }
 const char *MotorSampling_GetAxisStatusText(MotorAxis axis)
 { return axis==MOTOR_AXIS_1 && ibus_trip ? "M1 IBUS TRIP" : (axis==MOTOR_AXIS_1 ? ready : ready2) ? "READY" : "ADC TRIP"; }
-void MT6701_2_GetSnapshot(MT6701_2_Snapshot *s) { *s=enc2; }
+void MT6701_2_GetSnapshot(MT6701_2_Snapshot *s) {
+    if(expect_encoder_gate_lock) assert(host_primask==1);
+    *s=enc2;
+}
 void MT6701_2_FastService(void) {}
 void MT6701_2_SetRealtime(bool e) { (void)e; }
 void MT6701_2_Retry(void) { enc2.healthy=1; enc2.stopped=0; }
@@ -1090,7 +1094,9 @@ int main(int argc,char **argv)
         boot(linked[w]);
         assert(w ? MotorControl_StartFollow() : MotorControl_Command(MOTOR_AXIS_1,JERRYFOC_MODE_VELOCITY,1,0,false));
         if(lost) enc2.healthy=0; else healthy=0;
-        MotorControl_Fast();
+        uint32_t caller_mask=host_primask;
+        expect_encoder_gate_lock=true;MotorControl_Fast();expect_encoder_gate_lock=false;
+        assert(host_primask==caller_mask);
         assert(!output_requested && !output2 && !MotorControl_IsGroupActive());
         const char *expected=lost ? "ENCODER2 LOST" : "ENCODER1 LOST";
         assert(!strcmp(state(MOTOR_AXIS_1).status,expected) && !strcmp(state(MOTOR_AXIS_2).status,expected));

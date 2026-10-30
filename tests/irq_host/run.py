@@ -52,7 +52,7 @@ subprocess.run([str(out/'irq.exe')],cwd=repo,check=True)
 subprocess.run([compiler,'-std=c11','-O1','-Wall','-Wextra','-Werror',
     '-DMOTOR_IRQ_INTEGRATION','-include','irq_constants.h',
     '-I'+str(inc),'-Itests/motor_host','-Imycode','mycode/motor_irq.c',
-    'mycode/motor_sampling.c','mycode/motor_params.c','tests/diag_stub.c','tests/motor_host/test_sampling_irq.c',
+    'mycode/motor_sampling.c','mycode/motor_math.c','mycode/motor_params.c','tests/diag_stub.c','tests/motor_host/test_sampling_irq.c',
     '-lm','-o',str(out/'sampling_irq.exe')],cwd=repo,check=True)
 for scenario in ('paired','missing','adc-error','key','break','system-break','break2'):
     subprocess.run([str(out/'sampling_irq.exe'),scenario],cwd=repo,check=True)

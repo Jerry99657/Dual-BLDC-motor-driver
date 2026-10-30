@@ -192,6 +192,31 @@ static void check_dma(void)
 }
 static void check_errors(void)
 {
+    /* G4 hardware clears EN on transfer error BEFORE entering the vector.
+     * An EN-first return leaves TEIE+TEIF asserted and starves lower IRQs. */
+    for(unsigned i=0;i<3;++i) for(unsigned owner=0;owner<(i==2 ? 1U : 2U);++owner) {
+        reset();SPI_HandleTypeDef *h=ports+i;
+        assert((i==2 ? SpiPort_WriteDMA(h,tx,3) : SpiPort_ExchangeDMA(h,tx,rx,3))==HAL_OK);
+        DMA_HandleTypeDef *d=owner || i==2 ? h->hdmatx : h->hdmarx;
+        d->Instance->CCR&=~DMA_CCR_EN; /* Real hardware TE side effect. */
+        d->DmaBaseAddress->ISR|=11UL<<d->ChannelIndex;
+        SpiPort_DMAIRQ(d);
+        assert(errors[i]==1 && SpiPort_GetError(h)==HAL_SPI_ERROR_DMA);
+        assert(!(d->Instance->CCR&(DMA_CCR_TEIE|DMA_CCR_TCIE|DMA_CCR_HTIE)));
+        assert(!(d->DmaBaseAddress->ISR&(15UL<<d->ChannelIndex)));
+        SpiPort_DMAIRQ(d);assert(errors[i]==1);check_other_channels();
+    }
+    for(unsigned i=0;i<3;++i) {
+        reset();SPI_HandleTypeDef *h=ports+i;
+        DMA_HandleTypeDef *d=i==2 ? h->hdmatx : h->hdmarx;
+        /* A late vector after Stop/reset must not keep an idle owner in IRQ. */
+        d->Instance->CCR=DMA_CCR_TCIE|DMA_CCR_TEIE|DMA_CCR_HTIE;
+        d->DmaBaseAddress->ISR|=15UL<<d->ChannelIndex;
+        host_primask=1;SpiPort_DMAIRQ(d);assert(host_primask==1);host_primask=0;
+        assert(!errors[i] && !(d->DmaBaseAddress->ISR&(15UL<<d->ChannelIndex)));
+        assert(!(d->Instance->CCR&(DMA_CCR_TEIE|DMA_CCR_TCIE|DMA_CCR_HTIE)));
+        check_other_channels();
+    }
     for(unsigned i=0;i<3;++i) for(unsigned which=0;which<(i==2 ? 1U : 2U);++which) {
         reset();SPI_HandleTypeDef *h=ports+i;
         assert((i==2 ? SpiPort_WriteDMA(h,tx,3) : SpiPort_ExchangeDMA(h,tx,rx,3))==HAL_OK);

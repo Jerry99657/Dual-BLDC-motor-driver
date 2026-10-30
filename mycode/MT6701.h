@@ -27,8 +27,7 @@ void MT6701_Service(void);
 void MT6701_MainService(void);
 uint8_t MT6701_IsContinuous(void);
 uint8_t MT6701_IsHealthy(void);
-/* Detection-only all-zero gap near raw zero, <=50 ADC cycles / 5 ms: retain the last verified
- * angle, never refresh it or relax the normal 3-cycle FOC health threshold. */
+/* Legacy detector hook: zero is now accepted by the normal frame validator. */
 uint8_t MT6701_HasNearZeroGap(void);
 uint16_t MT6701_GetRawAngle(void);
 uint8_t MT6701_GetStatus(void);
@@ -42,29 +41,35 @@ bool MT6701_GetTimedAngle(unsigned axis,float *angle,uint32_t *cycles);
 
 typedef enum {
     MT6701_ERROR_NONE = 0,
-    MT6701_ERROR_FRAME, /* All-zero frame, ambiguous with angle=0/status=0. */
+    MT6701_ERROR_FRAME, /* All-zero frame rejected for an implausible zero jump. */
     MT6701_ERROR_CRC,
     MT6701_ERROR_FIELD,
     MT6701_ERROR_TRACK,
     MT6701_ERROR_SPI,
     MT6701_ERROR_ONES, /* All-one frame; also included in frame_errors. */
-    MT6701_ERROR_TIMEOUT /* M1 DMA timeout; counted in spi_errors. */
+    MT6701_ERROR_TIMEOUT, /* DMA timeout; counted in spi_errors. */
+    MT6701_ERROR_DMA /* Actual DMA TE/partial completion, not a sample timeout. */
 } MT6701Error;
 
 typedef struct {
     uint32_t errors, crc_errors, field_errors, track_errors, spi_errors, frame_errors;
     uint16_t age_cycles, max_age_cycles;
-    /* Most recent all-zero episode, frozen until the next episode starts.
-     * Count is zero observations before the first subsequent valid frame;
+    /* Most recent all-zero episode, including accepted legitimate zeros.
+     * Count is zero observations before the next valid non-all-zero frame;
      * intervening CRC/status faults do not resolve the episode. UINT16_MAX
      * zero_after means unresolved; zero_age is pre-event cycle age, raised to
      * at least four if wall-clock freshness expired despite a paused clock. */
     uint16_t zero_before, zero_after, zero_count, zero_age;
     uint32_t zero_started_at, zero_ended_at; /* HAL milliseconds, unsigned wrap. */
     uint8_t status;
+    uint8_t health, wall_ms, failures; /* Coherent health flags / saturated age / streak. */
     MT6701Error last_error;
 } MT6701Diagnostics;
-/* Cumulative since reset; constant-level frames are counted before CRC/status.
+enum { MT6701_HEALTH_MISSING=1, MT6701_HEALTH_RECOVER=2, MT6701_HEALTH_STOPPED=4,
+       MT6701_HEALTH_AGE=8, MT6701_HEALTH_WALL=16 };
+/* Packed flags[7:0], wall-clock age ms[15:8], failure streak[23:16]. */
+uint32_t MT6701_GetHealth(unsigned axis);
+/* Cumulative since reset; accepted zeros only update the zero episode log.
  * Last error persists after good frames; CRC-invalid status bits are never
  * classified as magnetic errors. max_age starts after the first valid frame. */
 void MT6701_GetDiagnostics(MT6701Diagnostics *out);
