@@ -3,6 +3,7 @@
 #include <stdint.h>
 #include <stdarg.h>
 
+/* Foreground text formatting is cold relative to the motor loops. */
 typedef struct { char *buffer; size_t capacity,length; } TextWriter;
 __attribute__((noinline,noclone)) static void put_char(TextWriter *out,char c)
 {
@@ -23,8 +24,7 @@ static unsigned number_digits(char *digits,uint32_t value,unsigned base,unsigned
     while(value || count<minimum);
     return count;
 }
-__attribute__((noinline))
-int UiText_Fixed(char *buffer,size_t capacity,int32_t value,unsigned places,const char *unit)
+__attribute__((noinline,cold)) int UiText_Fixed(char *buffer,size_t capacity,int32_t value,unsigned places,const char *unit)
 {
     TextWriter out={buffer,capacity,0};
     uint32_t magnitude=value<0 ? 0U-(uint32_t)value : (uint32_t)value;
@@ -42,8 +42,7 @@ int UiText_Fixed(char *buffer,size_t capacity,int32_t value,unsigned places,cons
     }
     return finish(&out,(int)out.length);
 }
-__attribute__((noinline,noclone))
-int UiText_Format(char *buffer,size_t capacity,const char *format,...)
+__attribute__((noinline,noclone,cold)) int UiText_Format(char *buffer,size_t capacity,const char *format,...)
 {
     TextWriter out={buffer,capacity,0};
     va_list args;

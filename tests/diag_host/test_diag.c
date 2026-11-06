@@ -225,7 +225,52 @@ static void outer_monitor(void) {
  puts("PASS: outer execution/gap/stall monitoring: 393us normal, 2799us immediate trip, three consecutive misses, isolated recovery, no-callback ADC watchdog, both axes, wrap, idle/align exclusion, restart, Clear gate and PRIMASK");
 }
 #endif
+static void formatter_trace(void)
+{
+ const float numbers[]={0.0f,-0.0f,12.345f,-12.345f,1999999.0f,-1999999.0f,
+  2000001.0f,-2000001.0f,NAN,INFINITY,-INFINITY};
+ for(unsigned fixture=0;fixture<65;++fixture) {
+  uint32_t bits=fixture*0x9e3779b9U;
+  retained.fault=(BoardDiagFault){.source=fixture%7U,.axis=fixture%2U+1U,
+   .at=bits,.sequence=~bits,.cycles=bits>>2U,.bus=numbers[fixture%11U],
+   .reference=numbers[(fixture+1U)%11U],.work=fixture%7U};
+  strcpy(retained.fault.reason,"ENCODER1 LOST");
+  uint32_t registers[sizeof(BoardDiagCrash)/sizeof(uint32_t)];
+  for(unsigned i=0;i<sizeof(registers)/sizeof(registers[0]);++i) registers[i]=bits+i;
+  memcpy(&retained.crash,registers,sizeof(registers));
+  uint32_t times[sizeof(BoardDiagTiming)/sizeof(uint32_t)];
+  for(unsigned i=0;i<sizeof(times)/sizeof(times[0]);++i) times[i]=bits+i;
+  memcpy(&timing,times,sizeof(times));
+  stop=(MotorGlobalStopRecord){.source=fixture%6U,.at=~bits,.stage=bits,
+   .key=fixture%4U,.now=(fixture+1U)%4U};
+  for(unsigned axis=0;axis<2;++axis) {
+   retained.fault.motion[axis]=(BoardDiagMotion){.mode=fixture%4U,.at=bits+1U,
+    .target_speed=numbers[(fixture+axis+2U)%11U],.speed=numbers[(fixture+axis+3U)%11U],
+    .target_position=numbers[(fixture+axis+4U)%11U],.position=numbers[(fixture+axis+5U)%11U]};
+   retained.fault.enc_errors[axis]=bits+axis;
+   retained.fault.enc_health[axis]=~bits;
+   retained.fault.enc_age[axis]=(uint16_t)bits;
+   retained.fault.enc_status[axis]=(uint8_t)bits;
+   retained.fault.enc_error[axis]=MT6701_ERROR_FIELD;
+   retained.fault.drive[axis]=fixture%3U;
+   retained.fault.model[axis]=fixture%MOTOR_PROFILE_COUNT;
+   for(unsigned phase=0;phase<3;++phase) {
+    retained.fault.current[axis][phase]=numbers[(fixture+axis+phase)%11U];
+    retained.fault.raw[axis][phase]=(uint16_t)(bits+phase);
+   }
+   for(unsigned row=0;row<BOARD_DIAG_ROWS;++row) {
+    struct { char before[4],value[32],after[4]; } guarded;
+    memset(&guarded,0x55,sizeof(guarded));
+    const char *name=BoardDiag_Row(axis,row,guarded.value);
+    assert(name && memchr(guarded.value,0,32));
+    assert(!memcmp(guarded.before,"UUUU",4) && !memcmp(guarded.after,"UUUU",4));
+    printf("%u/%u/%u %s=%s\n",fixture,axis,row,name,guarded.value);
+   }
+  }
+ }
+}
 int main(int argc,char **argv) {
+ if(argc>1 && !strcmp(argv[1],"formatter")) { formatter_trace();return 0; }
  if(argc>1 && !strcmp(argv[1],"outer-trip")) { outer_trip();return 0; }
  retention();loader_debug_retention();stop_rows();timing_test();
 #if BOARD_DIAG_ROWS>=31U

@@ -9,6 +9,7 @@ import re
 parser=argparse.ArgumentParser(description="UI/storage/display regressions and optional diagnostic-query baseline comparison")
 parser.add_argument("--query-baseline",type=Path,help="Previous ui_app.c to compile against the same deterministic host fixture")
 parser.add_argument("--formatter-baseline",type=Path,help="Previous ui_app.c; compare all diagnostic rows byte for byte")
+parser.add_argument("--view-baseline",type=Path,help="Previous ui_app.c; compare custom-page drawing, frame streams and interaction regression")
 args=parser.parse_args()
 repo = Path(__file__).resolve().parents[2]
 output = repo / "build/ui-validation"
@@ -73,6 +74,41 @@ if args.formatter_baseline:
         traces.append(re.sub(rb'UI-R[0-9]+-[A-Z0-9]+',b'UI-FW',data))
     assert traces[0]==traces[1],"Diagnostic formatter changed an existing row"
     print(f'PASS: {len(traces[0].splitlines())} diagnostic rows match baseline exactly (firmware label normalized)')
+
+if args.view_baseline:
+    comparison=output/'view-comparison'
+    comparison.mkdir(exist_ok=True)
+    previous_source=args.view_baseline.resolve()
+    previous=previous_source.read_text(encoding='utf-8')
+    current=(repo/'mycode/ui_app.c').read_text(encoding='utf-8')
+    firmware=re.search(r'X\(text_firmware,"([^"]+)"\)',current).group(1)
+    previous=re.sub(r'X\(text_firmware,"[^"]+"\)',lambda m:'X(text_firmware,"'+firmware+'")',previous)
+    literals=lambda source:source.split('#define UI_STRINGS(X)',1)[1].split('typedef struct',1)[0]
+    assert literals(previous)==literals(current),'View comparison requires identical UI literals after firmware normalization'
+    for name in ('ui_icons.h','ui_labels.h','ui_fonts.c','ui_fonts.h'):
+        assert (previous_source.parent/name).read_bytes()==(repo/'mycode'/name).read_bytes(),f'View comparison resource changed: {name}'
+    # Compare both renderers with the same firmware glyph widths and pixels.
+    resources=(repo/'mycode/ui_resources_packed.h').as_posix()
+    previous=previous.replace('#include "ui_resources_packed.h"',f'#include "{resources}"')
+    saved=output/'view-baseline-ui.c';saved.write_text(previous,encoding='utf-8')
+    baseline_command=command.copy()
+    baseline_command[baseline_command.index(str(repo/"mycode/ui_app.c"))]=str(saved)
+    baseline_command[-1]=str(output/'view_baseline.exe')
+    subprocess.run(baseline_command,cwd=repo,check=True)
+    normalize=lambda text:re.sub(rb'UI-R[0-9]+-[A-Z0-9]+',b'UI-FW',text)
+    traces=[];images=[];logs=[]
+    for name,exe in [('after',str(output/'test_ui.exe')),('before',baseline_command[-1])]:
+        trace=comparison/(name+'-draw.txt')
+        logs.append(normalize(subprocess.check_output([exe],cwd=repo,env=dict(os.environ,UI_DRAW_TRACE=str(trace)))))
+        traces.append(normalize(trace.read_bytes()))
+        images.append({p.name:p.read_bytes() for p in output.iterdir() if p.suffix in ('.pgm','.frames')})
+    assert logs[0]==logs[1],'UI interaction/refresh regression output changed'
+    assert traces[0]==traces[1],'Text drawing coordinates/content changed'
+    assert images[0].keys()==images[1].keys(),'UI snapshot set changed'
+    for name,data in images[0].items():
+        assert data==images[1][name],f'UI framebuffer changed: {name}'
+        (output/name).write_bytes(data)
+    print(f'PASS: {len(images[0])} UI images/frame streams and {len(traces[0].splitlines())} text draws match baseline; interaction/refresh regression matches; both use the current firmware label')
 
 # Exercise the real storage state machine against an asynchronous NOR model.
 subprocess.run([shutil.which("gcc") or "gcc", "-std=c11", "-Wall", "-Wextra", "-Werror", "-O1", "-Itests/ui_host", "-Imycode", "mycode/app_storage.c", "tests/ui_host/test_storage.c", "-o", str(output / "test_storage.exe")], cwd=repo, check=True)

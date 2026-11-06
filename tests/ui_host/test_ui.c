@@ -69,6 +69,7 @@ static const char *unready_status = "FRAME TIMEOUT";
 static unsigned submissions, frame_changes;
 static uint8_t displayed[OLED_BUFFER_SIZE];
 static FILE *record_file;
+static FILE *draw_trace;
 static uint32_t last_hash;
 static unsigned transfer_delay = 30;
 static bool fail_next_frame;
@@ -383,6 +384,7 @@ static struct { char text[80]; int x,y,width; } probe[128];
 static unsigned probe_count;
 int16_t __real_OLED_DrawUTF8(int16_t x,int16_t y,const char *text);
 int16_t __wrap_OLED_DrawUTF8(int16_t x,int16_t y,const char *text) {
+    if(draw_trace) fprintf(draw_trace,"%d,%d,%s\n",(int)x,(int)y,text);
     if(probe_enabled && probe_count<128) {
         unsigned n=probe_count++;
         snprintf(probe[n].text,sizeof(probe[n].text),"%s",text);
@@ -1413,7 +1415,31 @@ static void check_tx_format(void) {
     Telemetry_SetNative(false);
     puts("PASS: R101 System TX Format apply/readback, UART/USB-owned state refresh, no target changes, UI reconstruction retains RAM selection and no storage/save changes");
 }
+static void check_step_navigation_batches(void) {
+    const uint16_t counts[]={0,1,2,3,4,17,1000,65534,65535};
+    for(unsigned start=0;start<3;++start) for(unsigned up=0;up<2;++up)
+    for(unsigned n=0;n<sizeof(counts)/sizeof(counts[0]);++n) {
+        reset();press(KK_UI_KEY_RIGHT);press(KK_UI_KEY_OK);settle();
+        select_setting("Run Steps");press(KK_UI_KEY_OK);settle();
+        KK_UI_CustomOnInput(UI_PAGE_RUN_STEPS,(KK_UI_InputEvent){KK_UI_INPUT_DOWN,KK_UI_INPUT_ENCODER,(uint16_t)start});
+        KK_UI_CustomOnInput(UI_PAGE_RUN_STEPS,(KK_UI_InputEvent){up ? KK_UI_INPUT_UP : KK_UI_INPUT_DOWN,KK_UI_INPUT_REPEAT,counts[n]});
+        press(KK_UI_KEY_RIGHT);press(KK_UI_KEY_OK);settle();
+        unsigned expected=start;
+        /* Independent navigation oracle: consume each physical detent. */
+        for(unsigned i=0;i<counts[n];++i) {
+            if(up) expected=expected ? expected-1U : 2U;
+            else expected=expected==2U ? 0U : expected+1U;
+        }
+        assert(settings.torque_step_x100==(expected==0 ? 6 : 5));
+        assert(settings.speed_step_x10==(expected==1 ? 6 : 5));
+        assert(settings.position_step_x100==(expected==2 ? 6 : 5));
+    }
+    puts("PASS: Run Steps batched up/down selects and commits the correct independent mode, including zero and uint16 limits");
+}
+
 int main(int argc,char **argv) {
+    const char *trace_path=getenv("UI_DRAW_TRACE");
+    if(trace_path) { draw_trace=fopen(trace_path,"wb");assert(draw_trace); }
     if(argc>1 && !strcmp(argv[1],"settings")) { check_settings_service_ui();check_setting_routes();check_tx_format();return 0; }
     if(argc>1 && !strcmp(argv[1],"align")) { check_run_alignment();return 0; }
     if(argc>1 && !strcmp(argv[1],"metrics")) { query_metrics();return 0; }
@@ -2214,7 +2240,7 @@ int main(int argc,char **argv) {
     check_r76();
     check_r77();
     check_framework_ui();
-    check_app_bridge();check_custom_motors();
+    check_app_bridge();check_custom_motors();check_step_navigation_batches();
     puts("PASS: R54 applied Work marker, axis-qualified settings, HSO forced ON with retained encoder preference, Run feedback/bus/stages/actions/ranges, idle focus persistence and durable save states");
     puts("PASS: System/work routes, independent M1/M2 confirmed targets, KEY1 excluded from UI routing, long L/R view-only selection and KEY2 group stop");
     printf("PASS: GPIO, axes, bounce, repeat, Back/cancel, run modes, speed range, stop, fault, position origin, wrap, animations, async DMA (%u submissions)\n",submissions);

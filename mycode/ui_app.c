@@ -130,7 +130,7 @@
     X(text_keyrpt,"KeyRpt") \
     X(text_disperr,"DispErr") \
     X(text_fw,"FW") \
-    X(text_firmware,"UI-R119-OUT") \
+    X(text_firmware,"UI-R122-SIZ") \
     X(text_clear_diag,"Clear diag") \
     X(text_mcu,"MCU") \
     X(text_stm32g431,"STM32G431") \
@@ -330,7 +330,7 @@ _Static_assert(sizeof(ui_resources)==UI_RESOURCE_BYTES,"Regenerate the packed UI
 
 /* Trusted, generated Flash data expands once per UI reset, before KK_UI_Init.
  * Back references may overlap; all storage and final pointers are static. */
-__attribute__((noinline,noclone)) static void init_ui_resources(void)
+static void init_ui_resources(void)
 {
     const uint8_t *source=ui_resources_packed;
     uint8_t *out=(uint8_t *)&ui_resources,*end=out+sizeof(ui_resources);
@@ -547,7 +547,8 @@ typedef struct {
     char scratch[32];
 } TextQuery;
 static TextQuery *text_query;
-static MotorAxis text_axis(void) { return text_query ? text_query->axis : s_view_axis; }
+__attribute__((noinline,noclone)) static MotorAxis text_axis(void)
+{ return text_query ? text_query->axis : s_view_axis; }
 __attribute__((noinline)) static char *text_destination(unsigned field)
 {
     if (!text_query) return (char *)&texts+field;
@@ -1246,7 +1247,7 @@ __attribute__((noinline,noclone)) static const char *info_pointer(uint16_t refer
 }
 static void init_menu_items(void);
 static void init_routes(void);
-__attribute__((noinline,noclone)) static void init_info_rows(void)
+static void init_info_rows(void)
 {
     for (unsigned i=0;i<INFO_ROW_COUNT;++i) {
         const uint8_t *b=info_refs[i].bytes;
@@ -1355,7 +1356,7 @@ static KK_UI_MenuItem menu_items[MENU_ITEM_COUNT];
 #undef INFO_LITERAL
 #undef INFO_AXIS
 #undef INFO_WORK
-__attribute__((noinline,noclone)) static void init_menu_items(void)
+static void init_menu_items(void)
 {
     for (unsigned i=0;i<MENU_ITEM_COUNT;++i) {
         const uint8_t *b=menu_refs[i].bytes;
@@ -1461,6 +1462,12 @@ static void clear_run_stop(void)
     strcpy(texts.stop_errors, "--");
 }
 
+/* Clear the current draft view and both cached axis views together. */
+__attribute__((noinline,noclone)) static void clear_run_flags(void)
+{
+    s_run_active=views[0].run_active=views[1].run_active=false;
+}
+
 /* 模式和目标一起提交，防止 1 kHz 外环在两次写入之间使用旧目标。 */
 static void stop_run(void)
 {
@@ -1553,7 +1560,7 @@ static void sync_from_storage(void)
 
 /* Boot and Defaults publish the same accepted axis options. Saved targets
  * seed stopped drafts only, never an automatic output request. */
-__attribute__((noinline,noclone)) static void reload_axis_views(void)
+static void reload_axis_views(void)
 {
     for (unsigned a=0;a<2;++a) {
         s_view_axis=(MotorAxis)a;
@@ -1649,7 +1656,7 @@ static void service_run_lr(uint32_t now)
 
 /* ---------- 公共接口 ---------- */
 /* Reset and Run entry seed the same stopped drafts. No command is applied. */
-__attribute__((noinline,noclone)) static void seed_run_drafts(void)
+static void seed_run_drafts(void)
 {
     s_run_throttle_pct=s_throttle_pct;
     s_run_speed_x10=s_speed_x10;
@@ -1709,7 +1716,7 @@ void ui_app_update(uint32_t now_ms)
     bool global_stop=MotorSampling_IsGlobalStopped();
     if (global_stop) {
         bool notify=!s_global_stop_seen || s_run_active || views[0].run_active || views[1].run_active;
-        s_run_active=views[0].run_active=views[1].run_active=false;
+        clear_run_flags();
         if (notify) {
             s_run_lr_key=0U;
             strcpy(texts.run_stop,ui_strings.text_global_stop);
@@ -1831,7 +1838,7 @@ static void show_settings_result(unsigned key,bool ok)
         s_pending_toast=ok ? ui_strings.text_ibus_limit_applied : ui_strings.text_stop_m1_check_ibus;
         break;
     case APP_ACTION_CLEAR_IBUS:
-        if (MotorControl_IsCoupled()) s_run_active=views[0].run_active=views[1].run_active=false;
+        if (MotorControl_IsCoupled()) clear_run_flags();
         else if (s_view_axis==MOTOR_AXIS_1) s_run_active=false;
         else views[0].run_active=false;
         if (ok && (s_view_axis==MOTOR_AXIS_1 || MotorControl_IsCoupled())) clear_run_stop();
@@ -2103,7 +2110,7 @@ void KK_UI_CustomOnLeave(KK_UI_PageId page)
         for (unsigned a=0;a<2;++a)
             if (MotorControl_GetInput((MotorAxis)a)==MOTOR_INPUT_LOCAL) MotorControl_Stop((MotorAxis)a);
         __set_PRIMASK(mask);
-        s_run_active=views[0].run_active=views[1].run_active=false;
+        clear_run_flags();
     }
 }
 
@@ -2151,11 +2158,12 @@ void KK_UI_CustomOnInput(KK_UI_PageId page, KK_UI_InputEvent event)
             (void)KK_UI_CustomFinish(EVT_RUN_STEPS_CHANGED);
             return;
         case KK_UI_INPUT_UP:
-            s_step_selected = (uint8_t)((s_step_selected + 2U * (event.steps % 3U)) % 3U);
+        case KK_UI_INPUT_DOWN: {
+            unsigned steps=event.steps%3U;
+            if (event.action==KK_UI_INPUT_UP) steps*=2U;
+            s_step_selected=(uint8_t)((s_step_selected+steps)%3U);
             break;
-        case KK_UI_INPUT_DOWN:
-            s_step_selected = (uint8_t)((s_step_selected + event.steps) % 3U);
-            break;
+        }
         case KK_UI_INPUT_LEFT:
         case KK_UI_INPUT_RIGHT: {
             int32_t delta = (int32_t)event.steps * (event.action == KK_UI_INPUT_LEFT ? -1 : 1);
@@ -2172,7 +2180,7 @@ void KK_UI_CustomOnInput(KK_UI_PageId page, KK_UI_InputEvent event)
         if ((s_view_axis==MOTOR_AXIS_1 && JerryFOC_hasHSOFault())) (void)JerryFOC_useHSO(0U);
         if (s_run_active || views[1U-s_view_axis].run_active || !ui_state()->aligning)
             MotorControl_StopAll();
-        s_run_active=views[0].run_active=views[1].run_active=false;
+        clear_run_flags();
         stop_run(); /* 在退出动画开始前停止，不等待 OnLeave。 */
         (void)KK_UI_CustomRequestClose();
         return;
@@ -2182,7 +2190,7 @@ void KK_UI_CustomOnInput(KK_UI_PageId page, KK_UI_InputEvent event)
      * Keep held-key, hardware-trip and stationary gates in the controller. */
     if (event.action==KK_UI_INPUT_OK && MotorControl_IsHandFollow() && MotorControl_IsGroupActive()) {
         MotorControl_StopAll();
-        s_run_active=views[0].run_active=views[1].run_active=false;
+        clear_run_flags();
         KK_UI_Invalidate();return;
     }
     if (event.action==KK_UI_INPUT_OK && !s_run_active) {
@@ -2259,14 +2267,18 @@ void KK_UI_CustomOnInput(KK_UI_PageId page, KK_UI_InputEvent event)
     }
     if (event.action != KK_UI_INPUT_UP && event.action != KK_UI_INPUT_DOWN) return;
     /* PRESS / REPEAT 共用同一条加减路径，三种模式均按当前步长修改草稿。 */
-    int32_t step = (throttle_mode(s_run_mode) ? 1 : s_run_steps[s_run_mode]) * (int32_t)event.steps;
+    bool throttle=throttle_mode(s_run_mode);
+    int32_t step = (throttle ? 1 : s_run_steps[s_run_mode]) * (int32_t)event.steps;
     if (event.action == KK_UI_INPUT_DOWN) step = -step;
-    int32_t limit = s_run_mode == JERRYFOC_MODE_VELOCITY ? s_speed_limit * 10 :
-                    s_run_mode == JERRYFOC_MODE_POSITION ? 314 :
-                    to_x100(MotorParams_GetAxis(s_view_axis)->vel_limit);
-    if (s_run_mode == JERRYFOC_MODE_TORQUE && s_current_loop)
-        limit = to_x100(MotorParams_GetAxis(s_view_axis)->rated_current);
-    if (throttle_mode(s_run_mode)) limit=100;
+    int32_t limit;
+    if (throttle) limit=100;
+    else if (s_run_mode==JERRYFOC_MODE_VELOCITY) limit=s_speed_limit*10;
+    else if (s_run_mode==JERRYFOC_MODE_POSITION) limit=314;
+    else {
+        const MotorParams *motor=MotorParams_GetAxis(s_view_axis);
+        limit=to_x100(s_run_mode==JERRYFOC_MODE_TORQUE && s_current_loop ?
+                      motor->rated_current : motor->vel_limit);
+    }
     int32_t *draft = run_target(true);
     if (sensorless() && s_run_mode==JERRYFOC_MODE_VELOCITY) {
         int32_t next=*draft+step,min=hso_min_x10();
@@ -2280,7 +2292,7 @@ void KK_UI_CustomOnInput(KK_UI_PageId page, KK_UI_InputEvent event)
                 (void)KK_UI_ShowToast(ui_strings.text_stop_before_reverse,1200U);
             else *draft=next;
         }
-    } else *draft = clamp_i32(*draft + step, throttle_mode(s_run_mode) ? 0 : -limit, limit);
+    } else *draft = clamp_i32(*draft + step, throttle ? 0 : -limit, limit);
     KK_UI_Invalidate();
 }
 
@@ -2291,7 +2303,13 @@ bool KK_UI_CustomOnTick(KK_UI_PageId page, uint32_t now_ms)
     return true;
 }
 
-/* Custom pages share the same footer geometry and clip lifetime. */
+/* Custom pages share header/footer geometry and the footer ends clipping. */
+__attribute__((noinline,noclone)) static void draw_header(int16_t x,uint16_t width,const char *text)
+{
+    OLED_DrawUTF8((int16_t)(4+x),1,text);
+    OLED_DrawHLine(x,14,width);
+}
+
 __attribute__((noinline,noclone)) static void draw_footer(int16_t x,uint16_t width,const char *text)
 {
     OLED_DrawHLine(x,65,width);
@@ -2311,8 +2329,7 @@ void KK_UI_CustomOnDraw(KK_UI_PageId page, int16_t x_offset,
     OLED_SetDrawMode(OLED_DRAW_SET);
     if (page == UI_PAGE_DETECT) {
         OLED_SetFont(ui_font_body);
-        OLED_DrawUTF8((int16_t)(4+x_offset),1,ui_strings.text_m1_detect);
-        OLED_DrawHLine(x_offset,14,(uint16_t)W);
+        draw_header(x_offset,(uint16_t)W,ui_strings.text_m1_detect);
         UiText_Format(buf,sizeof(buf),ui_strings.fmt_i_test_ld_ma,(long)s_detect_ma);
         OLED_DrawUTF8((int16_t)(4+x_offset),17,buf);
         uint32_t detected=MotorDetect_Result();
@@ -2320,19 +2337,28 @@ void KK_UI_CustomOnDraw(KK_UI_PageId page, int16_t x_offset,
         if(detected) {
             s_detect_result=detected; s_detect_l=MotorDetect_Inductance(); s_detect_flux=MotorDetect_Flux();
         }
-        int p=(int8_t)s_detect_result;
-        fmt_fixed(v,sizeof(v),(int32_t)((s_detect_result>>8)&65535U)/10,100);
-        UiText_Format(buf,sizeof(buf),ui_strings.fmt_pp_u_s_r_s_ohm,(unsigned)abs(p),p<0 ? "-" : "+",v);
-        if(s_detect_page==1) UiText_Format(buf,sizeof(buf),ui_strings.fmt_ls_lu_uh,(unsigned long)s_detect_l);
-        if(s_detect_page==2) UiText_Format(buf,sizeof(buf),ui_strings.fmt_flux_lu_uwb,(unsigned long)s_detect_flux);
-        if(s_detect_page==3) {
-            fmt_fixed(v,sizeof(v),(int32_t)((float)s_detect_flux*(float)abs(p)*0.0128254983f+0.5f),100);
-            UiText_Format(buf,sizeof(buf),ui_strings.fmt_ke_s_v_krpm,v); /* Line-line RMS / mechanical krpm. */
-        }
-        if(s_detect_page && !(s_detect_page==1 ? s_detect_l : s_detect_flux)) strcpy(buf,ui_strings.text_no_data);
         if(s_detect_page>=4) {
             static const uint16_t actions[]={offsetof(UiStrings,text_apply_m1),offsetof(UiStrings,text_preset_m1),offsetof(UiStrings,text_apply_m2),offsetof(UiStrings,text_preset_m2),offsetof(UiStrings,text_save_custom1),offsetof(UiStrings,text_save_custom2),offsetof(UiStrings,text_save_custom3)};
             strcpy(buf,(const char *)&ui_strings+actions[s_detect_page-4]);
+        } else {
+            int p=(int8_t)s_detect_result;
+            switch (s_detect_page) {
+            case 0:
+                fmt_fixed(v,sizeof(v),(int32_t)((s_detect_result>>8)&65535U)/10,100);
+                UiText_Format(buf,sizeof(buf),ui_strings.fmt_pp_u_s_r_s_ohm,(unsigned)abs(p),p<0 ? "-" : "+",v);
+                break;
+            case 1:
+                UiText_Format(buf,sizeof(buf),ui_strings.fmt_ls_lu_uh,(unsigned long)s_detect_l);
+                break;
+            case 2:
+                UiText_Format(buf,sizeof(buf),ui_strings.fmt_flux_lu_uwb,(unsigned long)s_detect_flux);
+                break;
+            case 3:
+                fmt_fixed(v,sizeof(v),(int32_t)((float)s_detect_flux*(float)abs(p)*0.0128254983f+0.5f),100);
+                UiText_Format(buf,sizeof(buf),ui_strings.fmt_ke_s_v_krpm,v); /* Line-line RMS / mechanical krpm. */
+                break;
+            }
+            if(s_detect_page && !(s_detect_page==1 ? s_detect_l : s_detect_flux)) strcpy(buf,ui_strings.text_no_data);
         }
         OLED_DrawUTF8((int16_t)(4+x_offset),49,s_detect_result ? buf : ui_strings.text_no_data);
         draw_footer(x_offset,(uint16_t)W,MotorDetect_Active() ? ui_strings.text_ok_stop_k2_back :
@@ -2344,10 +2370,9 @@ void KK_UI_CustomOnDraw(KK_UI_PageId page, int16_t x_offset,
          * family line box, independently of which title glyphs were retained. */
         OLED_SetFontRefHeight(OLED_FONT_REF_TEXT);
         OLED_SetFont(ui_font_title);
-        OLED_DrawUTF8((int16_t)(4 + x_offset), 1, texts.steps);
+        draw_header(x_offset,(uint16_t)W,texts.steps);
         const char *save = ui_strings.text_ok_save;
         OLED_DrawUTF8((int16_t)(W - 4 - OLED_GetUTF8Width(save) + x_offset), 1, save);
-        OLED_DrawHLine(x_offset, 14, (uint16_t)W);
         OLED_SetFontRefHeight(OLED_FONT_REF_ALL);
         OLED_SetFont(ui_font_body);
         for (unsigned i = 0U; i < 3U; ++i) {
@@ -2375,8 +2400,7 @@ void KK_UI_CustomOnDraw(KK_UI_PageId page, int16_t x_offset,
         unsigned master=MotorControl_GetWork()==MOTOR_WORK_MASTER_M2 ? 2U : 1U;
         bool active=MotorControl_IsGroupActive();
         UiText_Format(buf,sizeof(buf),ui_strings.fmt_hand_m_u_m_u_enc,master,3U-master);
-        OLED_DrawUTF8((int16_t)(4+x_offset),1,buf);
-        OLED_DrawHLine(x_offset,14,(uint16_t)W);
+        draw_header(x_offset,(uint16_t)W,buf);
         OLED_DrawUTF8((int16_t)(4+x_offset),19,ui_strings.text_turn_master_by_hand);
         fmt_fixed(v,sizeof(v),to_x100(MotorControl_GroupError()),100);
         UiText_Format(buf,sizeof(buf),ui_strings.fmt_error_s_rad,v);
@@ -2393,14 +2417,16 @@ void KK_UI_CustomOnDraw(KK_UI_PageId page, int16_t x_offset,
     bool starting=hso && StHso_IsStarting();
     const char *mode=oil ? ui_strings.text_throttle : s_run_mode==JERRYFOC_MODE_TORQUE ? (s_current_loop ? ui_strings.text_iq_a : ui_strings.text_uq_v) : mode_name(s_run_mode);
     UiText_Format(buf,sizeof(buf),ui_strings.fmt_m_u_s_s,(unsigned)s_view_axis+1U,mode,six ? (esc_view() ? "ESC" : ui_strings.text_6step) : hso ? ui_strings.text_hso : "ENC");
-    OLED_DrawUTF8((int16_t)(4+x_offset),1,buf);
-    OLED_DrawHLine(x_offset,14,(uint16_t)W);
-    bool changed=run_target_changed();
+    draw_header(x_offset,(uint16_t)W,buf);
+    /* Drafts are main-loop owned and stay fixed throughout this draw. */
+    int32_t draft=*run_target(true);
+    int32_t confirmed=*run_target(false);
+    bool changed=draft!=confirmed;
     const char *state=changed ? (s_run_active ? ui_strings.text_run : ui_strings.text_edit) : (s_run_active ? "RUN" : ui_strings.text_stop);
     const char *unit=oil ? "%" : s_run_mode==JERRYFOC_MODE_VELOCITY ? ui_strings.text_rad_s :
         s_run_mode==JERRYFOC_MODE_POSITION ? "rad" : s_current_loop ? "A" : "V";
     int scale=run_scale(oil);
-    fmt_fixed(v,sizeof(v),*run_target(true),scale);
+    fmt_fixed(v,sizeof(v),draft,scale);
     int16_t unit_width=(int16_t)OLED_GetUTF8Width(unit);
     OLED_SetFont(ui_font_big);
     int16_t value_width=(int16_t)OLED_GetUTF8Width(v);
@@ -2423,9 +2449,9 @@ void KK_UI_CustomOnDraw(KK_UI_PageId page, int16_t x_offset,
             to_x100(motor_state.position-s_run_position_origin) : to_x10(motor_state.velocity);
         fmt_fixed(v,sizeof(v),actual,s_run_mode==JERRYFOC_MODE_POSITION ? 100 : 10);
         if (changed) {
-            char applied[16]; fmt_fixed(applied,sizeof(applied),*run_target(false),scale);
+            char applied[16]; fmt_fixed(applied,sizeof(applied),confirmed,scale);
             UiText_Format(buf,sizeof(buf),ui_strings.fmt_s_s_set_s,speed_tag,v,applied);
-        } else if (hso && *run_target(true)==0) UiText_Format(buf,sizeof(buf),ui_strings.fmt_act_s_0_coast,v);
+        } else if (hso && draft==0) UiText_Format(buf,sizeof(buf),ui_strings.fmt_act_s_0_coast,v);
         else if (six || s_run_mode!=JERRYFOC_MODE_TORQUE) {
             char aux[16]; fmt_run_aux(aux,actual);
             UiText_Format(buf,sizeof(buf),ui_strings.fmt_s_s_s,speed_tag,v,aux);
@@ -2463,7 +2489,7 @@ void KK_UI_CustomOnDraw(KK_UI_PageId page, int16_t x_offset,
             UiText_Format(buf,sizeof(buf),ui_strings.fmt_s_iq_s_a,state,v);
         }
         if (!MotorControl_IsCoupled() && s_run_mode!=JERRYFOC_MODE_TORQUE) {
-            fmt_run_aux(v,*run_target(true));
+            fmt_run_aux(v,draft);
         } else {
             char step[10]; fmt_fixed(step,sizeof(step),s_run_steps[s_run_mode],scale);
             UiText_Format(v,sizeof(v),ui_strings.fmt_step_s,step);
@@ -2474,7 +2500,7 @@ void KK_UI_CustomOnDraw(KK_UI_PageId page, int16_t x_offset,
         OLED_DrawUTF8(right,51,v);
     } else OLED_DrawUTF8((int16_t)(4+x_offset),51,state);
     const char *action=!s_run_active && (!motor_state.aligned || motor_state.aligning) ? ui_strings.text_align :
-        (hso || six) && *run_target(true)==0 ? ui_strings.text_stop_138 :
+        (hso || six) && draft==0 ? ui_strings.text_stop_138 :
         s_run_active ? (changed ? ui_strings.text_apply : ui_strings.text_stop_138) : ui_strings.text_start;
     UiText_Format(buf,sizeof(buf),independent ? ui_strings.fmt_ok_s_lr_hold_k2_back : ui_strings.fmt_ok_s_k2_back,action);
     draw_footer(x_offset,(uint16_t)W,buf);

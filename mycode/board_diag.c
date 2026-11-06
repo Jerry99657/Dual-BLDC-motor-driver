@@ -211,6 +211,8 @@ const char *BoardDiag_Row(unsigned axis,unsigned row,char value[32])
     bool valid=true;
     if (axis>1 || row>=BOARD_DIAG_ROWS) return NULL;
     const BoardDiagMotion *m=&f->motion[axis];
+    float pair_first,pair_second;
+    const char *pair_unit;
     if (row==30U) {
         UiText_Format(value,32,"%lu/%lu/%lu",(unsigned long)timing.outer_overruns,
             (unsigned long)timing.outer_gaps,(unsigned long)timing.outer_stalls);
@@ -251,14 +253,28 @@ const char *BoardDiag_Row(unsigned axis,unsigned row,char value[32])
         "6STEP";
         UiText_Format(value,32,"%u/%s/%u/%u",f->work,CompactText_At(drives,f->drive[axis]%3U),f->model[axis],m->mode); break;
     }
-    case 9: UiText_Format(value,32,"%ld/%ld mV",(long)milli(f->bus,&valid),(long)milli(f->reference,&valid)); break;
+    case 9:
+        pair_first=f->bus;
+        pair_second=f->reference;
+        pair_unit="mV";
+        goto format_milli_pair;
     case 10:
         if (m->mode==3U) UiText_Format(value,32,"%ld%%/%ld %s",(long)(milli(m->target_speed,&valid)/1000),(long)milli(m->speed,&valid),f->model[axis]==MOTOR_PROFILE_ESC ? "mHz" : "mrad/s");
-        else UiText_Format(value,32,"%ld/%ld mrad/s",(long)milli(m->target_speed,&valid),(long)milli(m->speed,&valid));
+        else {
+            pair_first=m->target_speed;
+            pair_second=m->speed;
+            pair_unit="mrad/s";
+            goto format_milli_pair;
+        }
         break;
     case 11:
         if (f->drive[axis]==MOTOR_DRIVE_SIXSTEP) strcpy(value,"--");
-        else UiText_Format(value,32,"%ld/%ld mrad",(long)milli(m->target_position,&valid),(long)milli(m->position,&valid));
+        else {
+            pair_first=m->target_position;
+            pair_second=m->position;
+            pair_unit="mrad";
+            goto format_milli_pair;
+        }
         break;
     case 12: UiText_Format(value,32,"%ld/%ld/%ld mA",(long)milli(f->current[axis][0],&valid),(long)milli(f->current[axis][1],&valid),(long)milli(f->current[axis][2],&valid)); break;
     case 13: UiText_Format(value,32,"%u/%u/%u",f->raw[axis][0],f->raw[axis][1],f->raw[axis][2]); break;
@@ -269,11 +285,17 @@ const char *BoardDiag_Row(unsigned axis,unsigned row,char value[32])
     default: {
         static const uint8_t regs[]={offsetof(BoardDiagCrash,pc),offsetof(BoardDiagCrash,lr),offsetof(BoardDiagCrash,sp),offsetof(BoardDiagCrash,cfsr),offsetof(BoardDiagCrash,hfsr),offsetof(BoardDiagCrash,bfar),offsetof(BoardDiagCrash,xpsr),offsetof(BoardDiagCrash,exc_return)};
         uint32_t reg;memcpy(&reg,(const char *)c+regs[row-18U],sizeof(reg));
-        UiText_Format(value,32,"%08lX",(unsigned long)reg);
         if (row==23U) UiText_Format(value,32,"%08lX/%08lX",(unsigned long)c->bfar,(unsigned long)c->mmfar);
+        else UiText_Format(value,32,"%08lX",(unsigned long)reg);
         break;
     }
     }
+    goto formatted;
+format_milli_pair:
+    /* Share conversion and varargs setup for the three signed pair rows. */
+    UiText_Format(value,32,"%ld/%ld %s",(long)milli(pair_first,&valid),
+                  (long)milli(pair_second,&valid),pair_unit);
+formatted:
     if (!valid) strcpy(value,"INVALID");
     return CompactText_At(names,row);
 }

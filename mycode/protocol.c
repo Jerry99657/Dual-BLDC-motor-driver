@@ -166,28 +166,35 @@ enum { CONFIG_WORK,CONFIG_MOTOR1,CONFIG_MOTOR2,CONFIG_FEEDBACK,
 _Static_assert(CMD_THROTTLE==CMD_SPEED+3,"Contiguous scalar motion commands");
 /* One source for names and lengths; no per-name NUL/padding in Flash. */
 #define COMMAND_PREFIXES(X) \
-    X("Work:",5) X("Motor1:",7) X("Motor2:",7) X("Feedback:",9) \
-    X("Gear:",5) X("Align:",6) X("Focus:",6) X("Speed:",6) \
-    X("Angle:",6) X("Torque:",7) X("Throttle:",9) X("OpenLoop:",9) \
-    X("HSO:",4) X("Stream:",7) X("App:",4) X("GetRow:",7) X("Format:",7)
-#define PREFIX_NAME(name,length) name
-static const char command_names[]=COMMAND_PREFIXES(PREFIX_NAME);
-#undef PREFIX_NAME
-#define PREFIX_LENGTH(name,length) length,
-static const uint8_t command_lengths[]= { COMMAND_PREFIXES(PREFIX_LENGTH) };
-#undef PREFIX_LENGTH
-#define PREFIX_CHECK(name,length) _Static_assert(sizeof(name)-1==length,"Command prefix length");
+    X(work,"Work:",5) X(motor1,"Motor1:",7) X(motor2,"Motor2:",7) X(feedback,"Feedback:",9) \
+    X(gear,"Gear:",5) X(align,"Align:",6) X(focus,"Focus:",6) X(speed,"Speed:",6) \
+    X(angle,"Angle:",6) X(torque,"Torque:",7) X(throttle,"Throttle:",9) X(open,"OpenLoop:",9) \
+    X(hso,"HSO:",4) X(stream,"Stream:",7) X(app,"App:",4) X(row,"GetRow:",7) X(format,"Format:",7)
+/* Each byte-sized length directly precedes its unterminated prefix. */
+#define PREFIX_FIELD(id,name,size) struct { uint8_t length; char text[size] __attribute__((nonstring)); } id;
+static const struct { COMMAND_PREFIXES(PREFIX_FIELD) } command_prefixes={
+#undef PREFIX_FIELD
+#define PREFIX_VALUE(id,name,size) {size,name},
+    COMMAND_PREFIXES(PREFIX_VALUE)
+#undef PREFIX_VALUE
+};
+#define PREFIX_CHECK(id,name,size) _Static_assert(sizeof(name)-1==size,"Command prefix length");
 COMMAND_PREFIXES(PREFIX_CHECK)
 #undef PREFIX_CHECK
+#define PREFIX_SIZE(id,name,size) +1+size
+_Static_assert(sizeof(command_prefixes)==0 COMMAND_PREFIXES(PREFIX_SIZE),"Command descriptor padding");
+#undef PREFIX_SIZE
+#define PREFIX_COUNT(id,name,size) +1
+_Static_assert(CMD_COUNT==0 COMMAND_PREFIXES(PREFIX_COUNT),"Command order/count");
+#undef PREFIX_COUNT
 #undef COMMAND_PREFIXES
-_Static_assert(sizeof(command_lengths)==CMD_COUNT,"Command order/count");
 static unsigned command_kind(const char *s,const char **argument)
 {
-    const char *name=command_names;
+    const uint8_t *entry=(const uint8_t *)&command_prefixes;
     for(unsigned i=0;i<CMD_COUNT;++i) {
-        unsigned length=command_lengths[i];
-        if(!strncmp(s,name,length)) { *argument=s+length; return i; }
-        name+=length;
+        unsigned length=*entry++;
+        if(!strncmp(s,(const char *)entry,length)) { *argument=s+length; return i; }
+        entry+=length;
     }
     return CMD_COUNT;
 }
@@ -321,14 +328,19 @@ __attribute__((noinline,noclone)) static int8_t handle_line(char *line,MotorInpu
     }
     if (kind==CMD_APP || kind==CMD_ROW) {
         float v[3];
+        int32_t integers[3];
         if (explicit_axis || !parse_hso_values(argument,v,3)) return -2;
-        for (unsigned i=0;i<3;++i) if (v[i]<-100000 || v[i]>100000 || v[i]!=(float)(int32_t)v[i]) return -2;
+        for (unsigned i=0;i<3;++i) {
+            if (v[i]<-100000 || v[i]>100000) return -2;
+            integers[i]=(int32_t)v[i];
+            if (v[i]!=(float)integers[i]) return -2;
+        }
         if (kind==CMD_APP) {
             if(!Protocol_RequestCurrent()) return -4;
-            return App_Control((unsigned)(int32_t)v[0],(unsigned)(int32_t)v[1],(int32_t)v[2]);
+            return App_Control((unsigned)integers[0],(unsigned)integers[1],integers[2]);
         }
-        if (v[0]<1 || v[0]>2 || v[1]<0 || v[1]>7 || v[2]<0 || v[2]>255) return -2;
-        for (unsigned i=0;i<3;++i) reply_row[i]=(uint8_t)v[i];
+        if ((unsigned)integers[0]-1U>=2U || (unsigned)integers[1]>7U || (unsigned)integers[2]>255U) return -2;
+        for (unsigned i=0;i<3;++i) reply_row[i]=(uint8_t)integers[i];
         reply_kind=33; return 1;
     }
     if (kind<CONFIG_COUNT) {
@@ -554,7 +566,7 @@ static void telemetry_reply(void)
             TelemetryReply *r=&telemetry_packet.payload.reply;
             _Static_assert(sizeof(TelemetryReply)==92 && offsetof(AppSettings,calibration)-offsetof(AppSettings,speed_x10)==84,"RPC settings layout");
             r->id=reply_id; r->result=reply_result; r->source=reply_source;
-            r->schema=2; r->firmware=119; r->save=(uint8_t)App_SaveState(); r->focus=(uint8_t)MotorControl_GetFocus();
+            r->schema=2; r->firmware=122; r->save=(uint8_t)App_SaveState(); r->focus=(uint8_t)MotorControl_GetFocus();
             memcpy(r->settings,&AppStorage_Get()->speed_x10,sizeof(r->settings));
             r->settings[(offsetof(AppSettings,control_config)-offsetof(AppSettings,speed_x10))/4U]=
                 (AppStorage_Get()->control_config & ~(7UL<<28)) | (MotorParams_CustomMask()<<28);

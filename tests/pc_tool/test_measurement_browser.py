@@ -31,6 +31,7 @@ with sync_playwright() as p:
         errors=[]
         page.on('pageerror',lambda e:errors.append(str(e)))
         page.goto((ROOT/'pc_tool/index.html').as_uri())
+        assert page.locator('#measurePreset').input_value()=='auto'
         page.evaluate("()=>{window.measureCommands=[];window.send=async command=>{measureCommands.push(command)}}")
         page.evaluate(SEED)
         page.click('#measureAnalyze')
@@ -57,6 +58,61 @@ with sync_playwright() as p:
         page.select_option('#measureReference','m1.target_speed|rad/s');page.select_option('#measureFeedback','vbus|V')
         page.click('#measureAnalyze');page.wait_for_function("$('measureState').textContent.includes('单位不一致')")
         assert page.evaluate('measurementCurrent.meta.source')=='暂停快照'
+        # HSO capture reproduces the reported three visible curves, while the
+        # command target exists only in the live cache and is absent on pause.
+        page.evaluate("""()=>{
+         replaying=false;clear();lastStatus={work:'Single M1',drive:'HSO',mode:['Speed','Speed'],flags:[255,0]};
+         setPlotCount(1);plots[0].selected.clear();
+         for(let i=0;i<=500;i++){
+          const control=25.1+.02*Math.sin(2*Math.PI*i*.01);
+          add({kind:4,epoch:12,ms:i*10,values:[['m1.target_speed','rad/s',50],
+           ['hso.reference_speed','rad/s',25],['hso.control_speed','rad/s',control],
+           ['hso.observer_speed','rad/s',control+.05]]});
+         }
+         for(const name of ['reference','control','observer'])plots[0].selected.add('hso.'+name+'_speed|rad/s');
+         $('measurePreset').value='auto';$('measureMode').value='tracking';
+         $('measureStart').value='0';$('measureEnd').value='5';renderSignals();draw();
+        }""")
+        assert page.locator('#measureReference').input_value()=='hso.reference_speed|rad/s'
+        assert page.locator('#measureFeedback').input_value()=='hso.control_speed|rad/s'
+        page.click('#measureAnalyze');page.wait_for_function("measurementCurrent?.meta.preset==='hsoReference'&&!measurementBusy")
+        assert abs(page.evaluate('measurementCurrent.result.tracking.bias')-.1)<1e-10
+        # Explicit command-target analysis keeps its distinct physical meaning.
+        page.select_option('#measurePreset','hso')
+        page.click('#measureAnalyze');page.wait_for_function("measurementCurrent?.meta.preset==='hso'&&!measurementBusy")
+        assert page.evaluate('measurementCurrent.meta.rawReference')=='m1.target_speed|rad/s'
+        assert abs(page.evaluate('measurementCurrent.result.tracking.bias')+24.9)<1e-10
+        page.evaluate('freezePlot()')
+        page.click('#measureAnalyze');page.wait_for_function("$('measureState').textContent.includes('缺少参考 m1.target_speed|rad/s')")
+        assert '暂停快照' in page.locator('#measureState').inner_text()
+        page.select_option('#measurePreset','auto')
+        assert page.locator('#measureReference').input_value()=='hso.reference_speed|rad/s'
+        page.evaluate("for(let i=501;i<=600;i++)add({kind:4,epoch:12,ms:i*10,values:[['hso.reference_speed','rad/s',99],['hso.control_speed','rad/s',0]]})")
+        page.click('#measureAnalyze');page.wait_for_function("measurementCurrent?.meta.preset==='hsoReference'&&measurementCurrent.meta.source==='暂停快照'&&!measurementBusy")
+        assert abs(page.evaluate('measurementCurrent.result.tracking.bias')-.1)<1e-10
+        page.select_option('#measurePreset','hsoObserver')
+        page.click('#measureAnalyze');page.wait_for_function("measurementCurrent?.meta.preset==='hsoObserver'&&!measurementBusy")
+        assert abs(page.evaluate('measurementCurrent.result.tracking.bias')-.05)<1e-10
+        page.locator('#measurePanel').screenshot(path=OUT/'measurement-hso.png')
+        page.set_viewport_size({'width':390,'height':844})
+        assert page.evaluate('document.documentElement.scrollWidth<=innerWidth+1'),'HSO measurement horizontal overflow'
+        page.set_viewport_size({'width':1440,'height':1100})
+        # Live missing-channel feedback must name the channel and live source.
+        page.evaluate('plots[0].resume()');page.select_option('#measurePreset','speed1')
+        page.click('#measureAnalyze');page.wait_for_function("$('measureState').textContent.includes('缺少反馈 m1.feedback_speed|rad/s')")
+        assert '当前缓存' in page.locator('#measureState').inner_text()
+        assert '继续此图' not in page.locator('#measureState').inner_text()
+        # Custom selections and independent canvas binding survive refreshes.
+        page.select_option('#measurePreset','custom')
+        page.select_option('#measureReference','hso.reference_speed|rad/s')
+        page.select_option('#measureFeedback','hso.observer_speed|rad/s')
+        page.evaluate('renderSignals()')
+        assert page.locator('#measureFeedback').input_value()=='hso.observer_speed|rad/s'
+        page.evaluate("setPlotCount(2);plots[1].selected.clear();plots[1].selected.add('hso.control_speed|rad/s');plots[1].selected.add('hso.observer_speed|rad/s')")
+        page.select_option('#measurePreset','auto');page.evaluate('activatePlot(1)')
+        assert page.locator('#measureReference').input_value()=='hso.control_speed|rad/s'
+        page.evaluate('activatePlot(0);setPlotCount(1)')
+        assert page.locator('#measureReference').input_value()=='hso.reference_speed|rad/s'
         # Import real console CSV with status metadata and no use of online config.
         text=io.StringIO();writer=csv.writer(text);writer.writerow(['host_time','board_ms','sequence','epoch','packet_kind','field','unit','value'])
         status={'work':'Single M1','drive':'ENCODER','mode':['Speed','Speed'],'flags':[255,0]}
@@ -67,7 +123,7 @@ with sync_playwright() as p:
                 writer.writerow(['',i*10,i+1,7,1,name,'rad/s',value])
         page.set_input_files('#file',{'name':'response.csv','mimeType':'text/csv','buffer':text.getvalue().encode()})
         page.wait_for_function("taskProgress.csv?.status==='done'")
-        page.evaluate("$('measurePreset').value='speed1';refreshMeasurementChannels();$('measureStart').value='0';$('measureEnd').value='5'")
+        page.evaluate("$('measurePreset').value='speed1';$('measureMode').value='step';refreshMeasurementChannels();$('measureStart').value='0';$('measureEnd').value='5'")
         page.click('#measureAnalyze');page.wait_for_function("measurementCurrent.meta.source==='CSV 回放'&&!measurementBusy")
         assert page.evaluate("measurementCurrent.meta.configuration===null&&measurementCurrent.meta.context.work==='Single M1'")
         assert abs(page.evaluate('measurementCurrent.result.step.rise10to90')-.2*math.log(9))<.001
@@ -81,6 +137,9 @@ with sync_playwright() as p:
         }""")
         page.click('#measureAnalyze');page.wait_for_function("measurementCurrent?.result.sine?.valid&&!measurementBusy")
         assert abs(page.evaluate('measurementCurrent.result.sine.gain')-.8)<1e-8
+        assert abs(page.evaluate('measurementCurrent.result.sine.equivalentLagSeconds')-.04)<1e-8
+        page.select_option('#measurePreset','auto')
+        page.click('#measureAnalyze');page.wait_for_function("measurementCurrent?.meta.preset==='follow1'&&!measurementBusy")
         assert abs(page.evaluate('measurementCurrent.result.sine.equivalentLagSeconds')-.04)<1e-8
         page.locator('#measurePanel').screenshot(path=OUT/'measurement-desktop.png')
         page.set_viewport_size({'width':390,'height':844})
@@ -114,5 +173,5 @@ with sync_playwright() as p:
         assert '取消' in page.locator('#measureState').inner_text()
         assert page.evaluate('measureCommands')==['Stop'],page.evaluate('measureCommands')
         assert not errors,errors
-        print('PASS: real Edge measurement controls, analytic step and Follow, immutable pause analysis, CSV metadata, JSON/CSV export, unit/config gates, 390px layout, bounded workspace, cancellation, live data and priority Stop during analysis; zero unsolicited commands')
+        print('PASS: real Edge measurement controls, analytic step and Follow, automatic plotted-channel pairing, distinct HSO target/reference/observer analysis, exact live/frozen missing-channel feedback, immutable pause analysis, CSV metadata, JSON/CSV export, unit/config gates, 390px layout, bounded workspace, cancellation, live data and priority Stop during analysis; zero unsolicited commands')
     finally:browser.close()

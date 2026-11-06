@@ -111,7 +111,9 @@ static bool settings_is_valid(const AppSettings *s)
                                  (uint32_t)offsetof(AppSettings, crc));
 }
 
-static bool settings_read(uint32_t addr, AppSettings *out)
+/* Mark only startup/load/default paths cold; service and bus timing keep
+ * their existing policy. CubeMX still owns the SPI/DMA initialization. */
+__attribute__((cold)) static bool settings_read(uint32_t addr, AppSettings *out)
 {
     if (!W25Q_Read(addr, (uint8_t *)out, sizeof(*out))) {
         return false;
@@ -199,7 +201,7 @@ static void log_scan(void)
     }
 }
 
-bool AppStorage_Init(void)
+__attribute__((cold)) bool AppStorage_Init(void)
 {
     s_store_state = STORE_IDLE;
     s_save_pending = false;
@@ -270,7 +272,7 @@ AppSettings *AppStorage_Get(void)
     return &s_settings;
 }
 
-void AppStorage_Load(void)
+__attribute__((cold)) void AppStorage_Load(void)
 {
     if (!s_ready) {
         settings_set_defaults();
@@ -324,7 +326,7 @@ bool AppStorage_Save(void)
     return true;
 }
 
-void AppStorage_ResetDefaults(void)
+__attribute__((cold)) void AppStorage_ResetDefaults(void)
 {
     uint32_t seq = s_settings.seq;
     settings_set_defaults();

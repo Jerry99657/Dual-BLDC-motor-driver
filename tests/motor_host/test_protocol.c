@@ -255,7 +255,7 @@ static void check_rpc(void) {
     telemetry_host_tick=100;assert(Telemetry_Select("Off"));
     command("@1:Get");Telemetry_Service();
     assert(inflight_len==106 && inflight[3]==32 && inflight[12]==1 && inflight[14]==1 && inflight[15]==PROTO_SRC_USB);
-    assert(inflight[16]==2 && inflight[17]==119);
+    assert(inflight[16]==2 && inflight[17]==122);
     assert(inflight[18]==APP_SAVE_PENDING); /* Dirty config must not claim an older save completed. */
     int32_t saved;memcpy(&saved,inflight+20,4);assert(saved==123);
     assert(fwrite(inflight,1,inflight_len,trace)==inflight_len);
@@ -292,10 +292,19 @@ static void check_rpc(void) {
     extern int32_t app_host_value;
     extern bool app_host_config_allowed;
     command("App:2,8,17");assert(Protocol_GetControlResult()==1 && app_host_axis==2 && app_host_key==8 && app_host_value==17);
-    const char *invalid_app[]={"App:1,2,2.5","App:1,2,NaN","App:1,2,1e10","App:1,2","App:1,2,3junk","GetRow:0,1,0","GetRow:1,8,0","GetRow:1,0,-1"};
+    const char *invalid_app[]={"App:1,2,2.5","App:1,2,NaN","App:1,2,1e10","App:1,2","App:1,2,3junk",
+        "App:1.5,2,0","App:1,2.5,0","App:100001,2,0","App:-100001,2,0","App:1,2,-100001",
+        "GetRow:0,1,0","GetRow:-1,0,0","GetRow:3,0,0","GetRow:1,8,0","GetRow:1,-1,0",
+        "GetRow:1,0,-1","GetRow:1,0,256","GetRow:1.5,0,0","GetRow:1,0,0.5"};
     for(unsigned i=0;i<sizeof(invalid_app)/sizeof(*invalid_app);++i) {
         command(invalid_app[i]);assert(Protocol_GetControlResult()==-2);
+        assert(app_host_axis==2 && app_host_key==8 && app_host_value==17);
     }
+    command("App:0x1p1,8e0,-0");
+    assert(Protocol_GetControlResult()==1 && app_host_axis==2 && app_host_key==8 && app_host_value==0);
+    command("App:-1,2,-1e5"); /* Numeric admission precedes the real app's axis policy. */
+    assert(Protocol_GetControlResult()==1 && app_host_axis==(unsigned)-1 && app_host_key==2 && app_host_value==-100000);
+    command("GetRow:0x1p1,7e0,255");assert(Protocol_GetControlResult()==1);
     app_host_config_allowed=false;command("Focus:M2");assert(Protocol_GetControlResult()==-3);app_host_config_allowed=true;
     command("@21:GetRow:2,4,0");Telemetry_Service();
     assert(inflight_len==78 && inflight[3]==33 && inflight[12]==21 && inflight[14]==1 && inflight[15]==PROTO_SRC_USB);

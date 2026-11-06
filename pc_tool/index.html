@@ -323,7 +323,7 @@ html[data-theme=dark]{--ui-select-arrow:url("data:image/svg+xml,%3Csvg xmlns='ht
 <p class="muted">选择一段真实缓存、暂停快照或 CSV 数据，量化误差、阶跃响应与往复幅相。分析不发送运动指令，不改变曲线实时更新。</p>
 <div class="measure-grid">
 <label>测量名称<input id="measureName" maxlength="80" placeholder="例如 4015 / Curr Loop ON / 4 Hz"></label>
-<label>通道预设<select id="measurePreset"><option value="speed1">M1 速度</option><option value="speed2">M2 速度</option><option value="position1">M1 位置</option><option value="position2">M2 位置</option><option value="follow1">M2 主机 → M1 从机</option><option value="follow2">M1 主机 → M2 从机</option><option value="hso">M1 HSO 速度</option><option value="six">M1 六步 Speed</option><option value="custom">自选同单位通道</option></select></label>
+<label>通道预设<select id="measurePreset"><option value="auto">自动匹配当前画布</option><option value="speed1">M1 速度</option><option value="speed2">M2 速度</option><option value="position1">M1 位置</option><option value="position2">M2 位置</option><option value="follow1">M2 主机 → M1 从机</option><option value="follow2">M1 主机 → M2 从机</option><option value="hso">HSO 目标→控制速度</option><option value="hsoReference">HSO 内部参考→控制速度</option><option value="hsoObserver">HSO 控制→观测速度</option><option value="six">M1 六步 Speed</option><option value="custom">自选同单位通道</option></select></label>
 <label>参考通道<select id="measureReference" aria-label="测量参考通道"></select></label>
 <label>反馈通道<select id="measureFeedback" aria-label="测量反馈通道"></select></label>
 <label>分析方式<select id="measureMode"><option value="tracking">跟踪误差统计</option><option value="step">单次阶跃响应</option><option value="sine">指定频率往复幅相</option></select></label>
@@ -600,7 +600,8 @@ function freezePlotGroup(targets){
  if(memory.totalBytes+extra>CACHE_MEMORY_BYTES){setText($('error'),'暂停所需快照超过共享的 128 MiB 采样缓冲预算。请缩短缓存时长或继续其他暂停画布后重试；已有快照保持不变。');log('暂停未执行：采样缓冲预算不足');return false}
  try{for(const plan of plans)plan.store=copyPlotSamples(plan.view,0,plan.view.length)}catch(error){setText($('error'),'无法分配暂停快照，现有画布保持原状态：'+error.message);return false}
  for(const {plot,end,entries}of prepared){const map=new Map();for(const {id,s,plan,from,to}of entries)map.set(id,{...s,points:new PlotSampleView(plan.store,from-plan.from,to-plan.from),captureSource:plan.source,captureRevision:cacheRevision,captureFrom:plan.from,captureTo:plan.to});plot.installSnapshot(map,end)}
- for(const {plot}of prepared)plot.draw();return true;
+ for(const {plot}of prepared)plot.draw();
+ refreshMeasurementChannels();return true;
 }
 function trimFrozenCache(plot){
  for(const entry of plot.view.frozen.values()){
@@ -789,6 +790,7 @@ function resetPlotData(){cancelGesture();sourceCache=null;plotView.span=plotView
 function resumePlot(){
  cancelGesture();sourceCache=null;plotView.end=null;plotView.frozen=null;plotView.origin=null;valuesAt=-Infinity;
  paused=false;$('pause').textContent='暂停绘图';draw();
+ if(index===activePlotIndex)refreshMeasurementChannels();
 }
 function followPlot(reset=false){
  if(reset){plotView.span=plotView.cacheSeconds;plotView.y.clear();$('window').value=String(plotView.cacheSeconds);cacheValidity(true)}
@@ -1236,19 +1238,55 @@ function measurementObserve(frame){
  const context={work:source.work,drive:source.drive,mode:source.mode,currentLoop:source.flags?.map(f=>!!(f&16))},signature=JSON.stringify(context);
  if(measurementContexts.at(-1)?.signature!==signature){measurementContexts.push({at:time,signature,context});if(measurementContexts.length>512)measurementContexts.shift()}
 }
+const MEASUREMENT_PRESETS={
+ speed1:{label:'M1 速度',pair:['m1.target_speed|rad/s','m1.feedback_speed|rad/s']},
+ speed2:{label:'M2 速度',pair:['m2.target_speed|rad/s','m2.feedback_speed|rad/s']},
+ position1:{label:'M1 位置',pair:['m1.target_position|rad','m1.position|rad']},
+ position2:{label:'M2 位置',pair:['m2.target_position|rad','m2.position|rad']},
+ hso:{label:'HSO 目标→控制速度',pair:['m1.target_speed|rad/s','hso.control_speed|rad/s']},
+ hsoReference:{label:'HSO 内部参考→控制速度',pair:['hso.reference_speed|rad/s','hso.control_speed|rad/s']},
+ hsoObserver:{label:'HSO 控制→观测速度',pair:['hso.control_speed|rad/s','hso.observer_speed|rad/s']},
+ six:{label:'M1 六步 Speed',pair:['six.target|rad/s','six.estimated_speed|rad/s']},
+ follow1:{label:'M2 主机 → M1 从机',pair:['group.error|rad','m1.position|rad'],derive:'follow'},
+ follow2:{label:'M1 主机 → M2 从机',pair:['group.error|rad','m2.position|rad'],derive:'follow'}
+};
 function measurementPreset(){
- const name=$('measurePreset').value;
- const pairs={speed1:['m1.target_speed|rad/s','m1.feedback_speed|rad/s'],speed2:['m2.target_speed|rad/s','m2.feedback_speed|rad/s'],position1:['m1.target_position|rad','m1.position|rad'],position2:['m2.target_position|rad','m2.position|rad'],hso:['m1.target_speed|rad/s','hso.control_speed|rad/s'],six:['six.target|rad/s','six.estimated_speed|rad/s'],follow1:['group.error|rad','m1.position|rad'],follow2:['group.error|rad','m2.position|rad']};
- return {name,pair:pairs[name],derive:name.startsWith('follow')?'follow':null};
+ const requested=$('measurePreset').value;
+ if(requested!=='auto')return {name:requested,...MEASUREMENT_PRESETS[requested]};
+ const plot=activePlot(),source=plot?.source()||series;
+ const context=measurementContexts.filter(c=>c.at<=(plot?.end()??latestTime)).at(-1)?.context;
+ const candidates=['hso','hsoReference','hsoObserver','six','speed1','speed2','position1','position2'];
+ if(context?.work==='Master M1')candidates.unshift('follow2');
+ if(context?.work==='Master M2')candidates.unshift('follow1');
+ const available=name=>MEASUREMENT_PRESETS[name].pair.every(id=>source.get(id)?.points.length);
+ const shown=name=>available(name)&&MEASUREMENT_PRESETS[name].pair.every(id=>plot?.selected.has(id));
+ const name=candidates.find(shown)||candidates.find(available);
+ return {name:name||'auto',automatic:true,...MEASUREMENT_PRESETS[name]};
 }
 function refreshMeasurementChannels(){
- const preset=measurementPreset(),source=activePlot()?.source()||series,ids=[...source.keys()];
+ const preset=measurementPreset(),plot=activePlot(),source=plot?.source()||series,ids=[...source.keys()];
+ const automatic=$('measurePreset').value==='auto';
  for(const [index,id]of ['measureReference','measureFeedback'].entries()){
-  const desired=preset.pair?.[index]||$(id).value,values=[...new Set([...ids,...(desired?[desired]:[])])];
-  selectChoices(id,values,Object.fromEntries(values.map(key=>[key,key+(source.has(key)?'':' · 当前图无采样')])),desired);
-  $(id).disabled=!!preset.pair;
+  const desired=preset.pair?.[index]||(automatic?'':$(id).value);
+  const values=[...new Set([...ids,...(desired?[desired]:[])])];
+  if(automatic&&!preset.pair)values.unshift('');
+  const labels=Object.fromEntries(values.map(key=>[key,key+(source.get(key)?.points.length?'':' · 当前数据源无采样')]));
+  labels['']='等待可配对通道';
+  selectChoices(id,values,labels,desired);
+  $(id).disabled=automatic||!!preset.pair;
  }
- setText($('measureRecipe'),preset.derive?'主从参考 = 从轴实际位置 − 板端 group.error；误差符号为反馈 − 参考。请选对从轴。':'参考和反馈须同单位；误差 = 反馈 − 参考。分析只读采样，不发送运动指令。');
+ const sourceName=plot?.view.frozen?'暂停快照':'当前缓存';
+ if(automatic&&!preset.pair){
+  setText($('measureRecipe'),sourceName+'中没有可自动配对的通道，请选择预设或自选参考、反馈通道。');
+  return;
+ }
+ let explanation='误差 = 反馈 − 参考。';
+ if(preset.derive)explanation='主从参考 = 从轴实际位置 − 板端 group.error。';
+ if(preset.name==='hsoReference')explanation='使用 HSO 启动／过渡处理后的内部参考速度，统计内部速度跟踪误差。';
+ if(preset.name==='hsoObserver')explanation='比较 HSO 控制速度与观测速度的差异。';
+ const label=(preset.automatic?'自动匹配 · ':'')+(preset.label||'自选通道');
+ setText($('measureRecipe'),'画布 '+((plot?.index??0)+1)+' · '+sourceName+' · '+label+'。'+explanation+
+  '参考 '+$('measureReference').value+' → 反馈 '+$('measureFeedback').value+'。');
 }
 function measurementUseView(){
  const p=activePlot();if(!p)throw Error('请先选择画布');
@@ -1271,6 +1309,7 @@ function measurementExtrema(source,id,start,end){
 }
 async function measureControlResponse(){
  if(measurementBusy)throw Error('上一项分析正在结束，请稍后再试');
+ refreshMeasurementChannels();
  if(!$('measureStart').value.trim()&&!$('measureEnd').value.trim())measurementUseView();
  const number=id=>{const text=$(id).value.trim();if(!text||!Number.isFinite(Number(text)))throw Error('请填写有效的 '+$(id).getAttribute?.('aria-label'));return Number(text)};
  const options={start:number('measureStart'),end:number('measureEnd'),maxGap:number('measureMaxGap'),mode:$('measureMode').value,bandPct:number('measureBand'),absBand:number('measureAbsBand'),hold:number('measureHold'),frequency:number('measureFrequency')};
@@ -1278,7 +1317,14 @@ async function measureControlResponse(){
  if(measurementTimeFault)throw Error('当前数据有非单调板端时间，请清空采样或重新载入单一数据段');
  const plot=activePlot(),source=plot.source(),recipe=measurementPreset();
  const refId=$('measureReference').value,feedbackId=$('measureFeedback').value,ref=source.get(refId),fb=source.get(feedbackId);
- if(!ref||!fb)throw Error('当前画布数据源缺少参考／反馈；冻结画布需在暂停前加入这两个通道');
+ if(recipe.name==='auto')throw Error('当前画布没有可自动配对的通道，请选择预设或自选参考、反馈通道');
+ const missing=[['参考',refId,ref],['反馈',feedbackId,fb]].filter(([,id,entry])=>!id||!entry?.points.length);
+ if(missing.length){
+  const sourceName=plot.view.frozen?'暂停快照':'当前缓存';
+  const details=missing.map(([role,id])=>role+' '+(id||'（未选择）')).join('、');
+  const action=plot.view.frozen?'点击“继续此图”，加入所需通道后再暂停，或选择快照已有通道。':'请选择已有通道，或采集包含所需通道的数据组。';
+  throw Error('画布 '+(plot.index+1)+' 的'+sourceName+'缺少'+details+'。'+action);
+ }
  if(refId===feedbackId)throw Error('参考与反馈不能是同一通道');
  if(ref.unit!==fb.unit)throw Error('参考与反馈单位不一致，不能直接计算控制误差');
  options.unit=fb.unit;options.derive=recipe.derive;
@@ -1295,7 +1341,7 @@ async function measureControlResponse(){
  try{
   const reference=measurementCopy(ref.points,options.start,options.end),feedback=measurementCopy(fb.points,options.start,options.end);
   const axis=/^m([12])\./.exec(feedbackId)?.[1]||'1',iq=measurementExtrema(source,'m'+axis+'.iq|A',options.start,options.end),bus=measurementExtrema(source,'vbus|V',options.start,options.end);
-  const meta={name:$('measureName').value.trim().slice(0,80)||'测量 '+new Date().toLocaleTimeString(),at:new Date().toISOString(),source:replaying?'CSV 回放':demo?'离线演示（模拟）':plot.view.frozen?'暂停快照':connected&&outputFormat==='Native'?'Native 实时缓存':connected?'旧 Native 缓存（当前非 Native）':'断线保留缓存',plot:plot.index+1,epoch,lastKind,reference:recipe.derive?'从轴位置 − group.error':refId,rawReference:refId,feedback:feedbackId,context:contexts[0]?.context||null,electrical:{peakIqA:iq?Math.max(Math.abs(iq.min),Math.abs(iq.max)):null,busMinV:bus?.min??null,busMaxV:bus?.max??null},
+  const meta={name:$('measureName').value.trim().slice(0,80)||'测量 '+new Date().toLocaleTimeString(),at:new Date().toISOString(),source:replaying?'CSV 回放':demo?'离线演示（模拟）':plot.view.frozen?'暂停快照':connected&&outputFormat==='Native'?'Native 实时缓存':connected?'旧 Native 缓存（当前非 Native）':'断线保留缓存',plot:plot.index+1,epoch,lastKind,preset:recipe.name,reference:recipe.derive?'从轴位置 − group.error':refId,rawReference:refId,feedback:feedbackId,context:contexts[0]?.context||null,electrical:{peakIqA:iq?Math.max(Math.abs(iq.min),Math.abs(iq.max)):null,busMinV:bus?.min??null,busMaxV:bus?.max??null},
    configuration:replaying?null:boardConfig?JSON.parse(JSON.stringify(boardConfig)):null,configurationNote:'配置仅为分析时最近读回值，不保证代表整个测量区间；CSV 不借用在线板端配置。'};
   const check=async()=>{await new Promise(resolve=>setTimeout(resolve,0));if(job!==measurementJob||version!==measurementDataVersion)throw Error('分析已取消或数据已换段，旧结果保留')};
   const result=await responseAnalyze(reference,feedback,options,check);await check();
@@ -1351,9 +1397,10 @@ function measurementExport(csv=false){
  download('foc-measurement-'+Date.now()+'.csv','\ufeff'+[header,...rows].map(row=>row.map(quote).join(',')).join('\r\n'),'text/csv;charset=utf-8');
 }
 function initMeasurement(){
- $('measurePreset').value='speed1';$('measureMode').value='tracking';
+ $('measurePreset').value='auto';$('measureMode').value='tracking';
  for(const [id,value]of [['measureBand','2'],['measureAbsBand','0'],['measureHold','.2'],['measureMaxGap','.1'],['measureFrequency','4']])$(id).value=value;
  $('measurePreset').onchange=refreshMeasurementChannels;
+ $('measureReference').onchange=$('measureFeedback').onchange=refreshMeasurementChannels;
  $('measureUseView').onclick=()=>act(async()=>measurementUseView());
  $('measureAnalyze').onclick=()=>act(async()=>{try{await measureControlResponse()}catch(error){setText($('measureState'),'分析未完成：'+error.message+(measurementCurrent?'；下方保留上一份结果。':''));throw error}});
  $('measureCancel').onclick=()=>{measurementJob++;setText($('measureState'),'已请求取消分析；采样与曲线继续。')};
@@ -1447,7 +1494,7 @@ function recordFrame(f){if(!recording)return;const stamp=new Date().toISOString(
 }
 let txRecord=Promise.resolve(),recordQueuedBytes=0,recordEpoch=0,seenParserEpoch=0;
 async function toggleRecord(){if(recordOpening)return;recordOpening=true;try{if(recording||recordWriter||recordChunks.length){recording=false;await txRecord;if(recordWriter){const sink=recordWriter;try{await sink.close()}finally{recordWriter=null}}else download('motor-'+Date.now()+'.csv',recordChunks.join(''),'text/csv;charset=utf-8');recordChunks=[];recordBytes=0;return}const header='\ufeffhost_time,board_ms,sequence,epoch,packet_kind,field,unit,value\r\n';if(typeof showSaveFilePicker==='function'){const handle=await showSaveFilePicker({suggestedName:'motor-'+Date.now()+'.csv',types:[{description:'CSV',accept:{'text/csv':['.csv']}}]});recordWriter=await handle.createWritable();await recordWriter.write(header);recordPath=handle.name}else{recordChunks=[header];recordBytes=header.length;recordPath='浏览器内存 · 16 MiB 自动导出'}recording=true}finally{recordOpening=false}}
-function consume(f){received++;lastRx=performance.now();if(f.epoch!==lastEpoch){lastEpoch=f.epoch;failPending('板端已重启，命令结果未知；请重新读取');boardConfig=null;renderConfig();log('检测到板端重启');}try{recordFrame(f)}catch(e){recording=false;$('error').textContent='记录失败：'+e.message}if(f.kind===33){consumeRow(f);return}if(f.kind===16)status(decodeStatus(f));else if(f.kind===32){const r=decodeReply(f);if(!pending.has(r.id))return;const p=pending.get(r.id);pending.delete(r.id);clearTimeout(p.timer);if(!((r.schema===1&&r.firmware===87)||(r.schema===2&&r.firmware>=88&&r.firmware<=119))){p.reject(Error('配置协议不匹配'));return}if((p.command.startsWith('GetRow:')&&r.result===1)||(boardConfig&&r.source!==boardConfig.source)){p.reject(Error('回执类型／来源不匹配'));return}r.read_at=new Date().toISOString();if(p.command==='Get'&&r.result===1){setOutputFormat('Native');formatProbe.reset()}const previous=boardConfig;boardConfig=r;renderConfig();controlReply(p.command,r,previous);if(r.result===1)p.resolve(r);else p.reject(Error('板端拒绝 #'+r.id+'：'+({[-1]:'当前状态不允许／检查轴与停机条件',[-2]:'参数或命令格式错误',[-3]:'忙／来源冲突',[-4]:'请求取消／过期，请重新确认状态'}[r.result]||r.result)));}else if(!replaying){f.values=channels(f);if(f.values.length)add(f)}}
+function consume(f){received++;lastRx=performance.now();if(f.epoch!==lastEpoch){lastEpoch=f.epoch;failPending('板端已重启，命令结果未知；请重新读取');boardConfig=null;renderConfig();log('检测到板端重启');}try{recordFrame(f)}catch(e){recording=false;$('error').textContent='记录失败：'+e.message}if(f.kind===33){consumeRow(f);return}if(f.kind===16)status(decodeStatus(f));else if(f.kind===32){const r=decodeReply(f);if(!pending.has(r.id))return;const p=pending.get(r.id);pending.delete(r.id);clearTimeout(p.timer);if(!((r.schema===1&&r.firmware===87)||(r.schema===2&&r.firmware>=88&&r.firmware<=122))){p.reject(Error('配置协议不匹配'));return}if((p.command.startsWith('GetRow:')&&r.result===1)||(boardConfig&&r.source!==boardConfig.source)){p.reject(Error('回执类型／来源不匹配'));return}r.read_at=new Date().toISOString();if(p.command==='Get'&&r.result===1){setOutputFormat('Native');formatProbe.reset()}const previous=boardConfig;boardConfig=r;renderConfig();controlReply(p.command,r,previous);if(r.result===1)p.resolve(r);else p.reject(Error('板端拒绝 #'+r.id+'：'+({[-1]:'当前状态不允许／检查轴与停机条件',[-2]:'参数或命令格式错误',[-3]:'忙／来源冲突',[-4]:'请求取消／过期，请重新确认状态'}[r.result]||r.result)));}else if(!replaying){f.values=channels(f);if(f.values.length)add(f)}}
 async function connect(){if(demo)throw Error('请先退出离线演示');if(connecting||port||connected||closing)throw Error('请先断开当前连接');if(!globalThis.isSecureContext||!navigator.serial)throw Error('请用支持 Web Serial 的桌面 Chrome／Edge 打开此文件');connecting=true;const token=++sessionToken;let selectedPort;try{selectedPort=await navigator.serial.requestPort();await selectedPort.open({baudRate:115200,dataBits:8,stopBits:1,parity:'none',flowControl:'none',bufferSize:8192});}finally{connecting=false}if(token!==sessionToken){await selectedPort.close();return}port=selectedPort;connected=true;parser=new WireParser();received=0;lastRx=0;seenParserEpoch=0;lastEpoch=++recordEpoch;boardConfig=null;lastStatus={};status(lastStatus);cancelCsvLoad();clear();replaying=false;$('replay').textContent='';writer=port.writable.getWriter();reader=port.readable.getReader();readTask=(async()=>{try{while(connected){const r=await reader.read();if(r.done)break;const frames=parser.feed(r.value);if(frames.length)formatProbe.reset();else if((outputFormat==='Native'||outputFormat==='JustFloat')&&formatProbe.feed(r.value)){noticeJustFloat()}for(const frame of frames){if(frame.epoch!==seenParserEpoch){seenParserEpoch=frame.epoch;++recordEpoch}frame.epoch=recordEpoch;consume(frame)}}}catch(e){if(!closing)$('error').textContent='通信中断：'+e.message}finally{reader.releaseLock();reader=null;connected=false;boardConfig=null;setOutputFormat('Unknown');formatProbe.reset();renderConfig();failPending('连接已断开，命令结果未知');}})();log('已连接，先切换 Native 再查询配置，不自动运行');await selectOutputFormat('Native')}
 async function disconnect(){if(closing)return;++sessionToken;closing=true;connected=false;failPending('连接已断开，命令结果未知');try{if(reader)await reader.cancel();if(readTask)await readTask;if(writer){await writer.abort().catch(()=>{});await txChain.catch(()=>{});writer.releaseLock();writer=null}if(port){await port.close();port=null}}finally{closing=false;boardConfig=null;renderConfig();log('已断开通信')}}
 async function transmit(text){if(!connected||!writer)throw Error('尚未连接串口');const bytes=new TextEncoder().encode(text+'\n'),sink=writer;const job=txChain.catch(()=>{}).then(()=>{if(sink!==writer||!connected)throw Error('连接已改变');return sink.write(bytes)});txChain=job;return job}
@@ -1681,13 +1728,13 @@ const EDITORS=[
  [5,'ibusLimit','M1 IBUS 阈值','A',.5,4,.1]
 ];
 let batchEpoch=0;
-function requireExtensions(){if(!boardConfig||boardConfig.schema!==2||(boardConfig.firmware<88||boardConfig.firmware>119))throw Error('此操作需要 UI-R88-PC；请升级固件后重新读取设置')}
+function requireExtensions(){if(!boardConfig||boardConfig.schema!==2||(boardConfig.firmware<88||boardConfig.firmware>122))throw Error('此操作需要 UI-R88-PC；请升级固件后重新读取设置')}
 function axisOptions(r,a){const s=r.settings,p=a?'axis2_':'',f=(a?s.axis2_flags:s.flags)>>>0;return {posSpeed:((f>>>8)&63)|(((f>>>25)&15)<<6)||30,speedLimit:(f>>>14)&1023||100,currentLoop:f&1,speedStep:s[p+'speed_step_x10']/10,torqueStep:s[p+'torque_step_x100']/100,positionStep:s[p+'position_step_x100']/100}}
 function editableConfig(r){const s=r.settings;return {work:r.work,profiles:r.profiles.slice(),drive:r.drive,esc:!!(s.control_config&32768),focus:r.focus,axes:[axisOptions(r,0),axisOptions(r,1)],ledBrightness:s.led_brightness,ledEnable:(s.flags>>>1)&1,gearRatio:s.gear_ratio_x100/100,gearOffset:s.gear_offset_x100/100,ibusLimit:(((s.control_config>>>8)&63)||30)/10}}
 function editorScope(k){return k===1||k===2||k===6||k>=8}
 for(const [key,id,title,unit,min,max,step]of EDITORS){const label=document.createElement('label'),input=document.createElement('input');label.className='row';label.append(document.createTextNode(title+' '));input.id=id;input.type=(key===6||key===7)?'checkbox':'number';input.min=min;input.max=max;input.step=step;input.setAttribute?.('aria-label',title);label.append(input,document.createTextNode(' '+unit));$(editorScope(key)?'axisEditors':'globalEditors').append(label)}
 function refreshSettingsCapabilities(){
- const r=boardConfig,a=Number($('settingsAxis').value||1)-1,enabled=r?.schema===2&&r?.firmware>=88&&r?.firmware<=119;
+ const r=boardConfig,a=Number($('settingsAxis').value||1)-1,enabled=r?.schema===2&&r?.firmware>=88&&r?.firmware<=122;
  for(const id of ['pauseMotors','applySettings','saveSettings','clearIbus','resetSettings','startDetect','saveDetect','readDiag','importConfig','applyDetection','restoreMotorPreset','readMotorParams'])$(id).disabled=!enabled;
  for(const id of ['applyDetection','restoreMotorPreset','readMotorParams'])$(id).disabled=!(enabled&&r.firmware>=104);
  $('saveCustom').disabled=!(enabled&&r.firmware>=105);
