@@ -107,7 +107,16 @@ def audit(root):
             'Init.CRCCalculation': 'SPI_CRCCALCULATION_DISABLE',
         }.items():
             check(lambda p=port, f=field, e=expected: require(spi, f'hspi{p}.{f}', e))
-        check(lambda p=port: function(irq, f'SPI{p}_IRQHandler'))
+        def spi_vector(p=port):
+            body=function(irq,f'SPI{p}_IRQHandler')
+            generated=r'HAL_SPI_IRQHandler\s*\(\s*&hspi'+str(p)+r'\s*\)\s*;'
+            legacy=r'\s*SpiPort_IRQHandler\s*\(\s*&hspi'+str(p)+r'\s*\)\s*;\s*return\s*;\s*'+generated+r'\s*'
+            # Existing R91 SPI USER CODE delegates explicitly, before the
+            # generated fallback. DMA/EXTI use the separate routing header.
+            routed=re.fullmatch(legacy,body) or ('return;' not in body and re.search(generated,body))
+            if not routed:
+                raise ConfigError(f'SPI{p}: preserve the generated SPI IRQ dispatch; LCD FIFO-tail completion also requires SPI3 global IRQ')
+        check(spi_vector)
     for field, expected in {'CLKPolarity': 'SPI_POLARITY_LOW', 'FirstBit': 'SPI_FIRSTBIT_MSB',
                             'NSSPMode': 'SPI_NSS_PULSE_DISABLE'}.items():
         check(lambda f=field, e=expected: require(spi, 'hspi2.Init.' + f, e))
@@ -126,8 +135,12 @@ def audit(root):
         if not supported:
             errors.append(f'SPI{port} MISO: configure Pull-up in CubeMX and regenerate; SSI zero/open-wire validation requires a defined idle input')
 
-    sources = '\n'.join(read('Core/Src/' + name) for name in ('spi.c', 'adc.c', 'tim.c'))
+    sources = '\n'.join(read('Core/Src/' + p.name) for p in (root/'Core/Src').glob('*.c'))
     mappings = re.findall(r'\b(hdma_\w+)\.Instance\s*=\s*(DMA[12]_Channel[1-6])\s*;', sources)
+    supported_dma={'hdma_spi1_rx','hdma_spi1_tx','hdma_spi2_rx','hdma_spi2_tx',
+                   'hdma_spi3_tx','hdma_adc1','hdma_tim3_ch1'}
+    if {handle for handle,_ in mappings} != supported_dma:
+        errors.append('DMA runtime supports ADC1, SPI1/2/3 and TIM3 CC1; adapt user routing before adding/removing a DMA owner')
     used = {}
     for handle, instance in mappings:
         if instance in used:
@@ -233,7 +246,8 @@ def audit(root):
         'multimode.Mode': 'ADC_DUALMODE_INJECSIMULT',
         'sConfigInjected.ExternalTrigInjecConv': 'ADC_EXTERNALTRIGINJEC_T1_TRGO2',
         'sConfigInjected.ExternalTrigInjecConvEdge': 'ADC_EXTERNALTRIGINJECCONV_EDGE_RISING',
-        'hadc1.Init.NbrOfConversion': '2', 'hadc1.Init.ExternalTrigConv': 'ADC_EXTERNALTRIG_T6_TRGO',
+        'hadc1.Init.NbrOfConversion': '2', 'hadc1.Init.ScanConvMode': 'ADC_SCAN_ENABLE',
+        'hadc1.Init.ExternalTrigConv': 'ADC_EXTERNALTRIG_T6_TRGO',
         'hadc1.Init.ExternalTrigConvEdge': 'ADC_EXTERNALTRIGCONVEDGE_RISING',
         'hadc1.Init.DMAContinuousRequests': 'ENABLE',
     }.items():
@@ -249,6 +263,10 @@ def audit(root):
         'Mode': 'DMA_CIRCULAR',
     }.items():
         check(lambda f=field, e=expected: require(adc, 'hdma_adc1.Init.' + f, e))
+    if not re.search(r'__HAL_LINKDMA\s*\(\s*adcHandle\s*,\s*DMA_Handle\s*,\s*hdma_adc1\s*\)', adc):
+        errors.append('ADC1 regular DMA: keep the generated parent/handle link; runtime follows this route')
+    if re.search(r'HAL_DMAEx_ConfigMux(?:Sync|RequestGenerator)\s*\(\s*&hdma_adc1', adc):
+        errors.append('ADC1 regular DMA: DMAMUX sync/request-generator requires runtime adaptation before enabling it')
     if 'HAL_ADC_AnalogWDGConfig' in adc:
         errors.append('ADC watchdog interrupt requires extending the application ADC IRQ dispatcher')
 

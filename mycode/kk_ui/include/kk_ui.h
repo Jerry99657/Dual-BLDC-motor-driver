@@ -48,7 +48,8 @@ enum {
 };
 
 typedef struct {
-    uint8_t keys;
+    uint8_t keys; /* Current active levels, for held-key/transition guards. */
+    uint8_t key_event; /* Zero, or KK_UI_KEY_EVENT(action, source). */
     int16_t encoder_delta; /* Positive is Down; negative is Up. */
 } KK_UI_Input;
 
@@ -64,8 +65,14 @@ typedef enum {
 typedef enum {
     KK_UI_INPUT_PRESS = 0,
     KK_UI_INPUT_REPEAT,
-    KK_UI_INPUT_ENCODER
+    KK_UI_INPUT_ENCODER,
+    KK_UI_INPUT_RELEASE,
+    KK_UI_INPUT_LONG
 } KK_UI_InputSource;
+
+/* Input hardware owns debounce/repeat. One normalized event per update;
+ * key_event occupies the former padding byte, preserving sizeof(Input). */
+#define KK_UI_KEY_EVENT(action,source) ((uint8_t)(1U+(unsigned)(action)+8U*(unsigned)(source)))
 
 typedef struct {
     KK_UI_InputAction action;
@@ -195,12 +202,16 @@ typedef struct {
 
 KK_UI_Status KK_UI_Init(const KK_UI_App *app);
 KK_UI_Status KK_UI_Update(uint32_t now_ms, KK_UI_Input input);
+/* Input port acknowledges a queued frame here, after transfer checks and
+ * before routing it. Rendering failure after routing cannot replay a key. */
+void KK_UI_InputAccepted(void);
 /* Query the current integer editor draft without changing editor state. */
 bool KK_UI_GetIntEditorDraft(uint16_t binding_index, int32_t *out_value);
 /* True only when display work is settled and a control command may be sent. */
 bool KK_UI_IsDisplayIdle(void);
 /* Project addition: page currently shown (target page while a transition runs). */
 KK_UI_PageId KK_UI_GetCurrentPage(void);
+bool KK_UI_IsTransitioning(void);
 /* Project addition: navigate from application code (not from a KK_UI callback). */
 KK_UI_Status KK_UI_GoTo(KK_UI_PageId page, uint32_t now_ms);
 void KK_UI_Invalidate(void);

@@ -2,9 +2,27 @@
 
 基于 **STM32G431VBT6** 的双电机控制工程，集成编码器 FOC、M1 独立 HSO 无感、M1 六步无感、双机同步／手动主从、参数辨识、LCD 操作界面和单文件 HTML 上位机。
 
-本文对应当前源码 **`UI-R122-SIZ`**，Native 配置回执的固件编号为 **122**。以 `FOC_two.ioc`、当前应用源码及实际构建产物为配置依据。`docs/` 保存了多轮实现和现场调试记录，其中的版本号、菜单位置、资源余量可能属于历史版本。
+本文对应当前源码 **`UI-R132-FMT`**，Native 配置回执的固件编号为 **132**。以 `FOC_two.ioc`、当前应用源码及实际构建产物为配置依据。`docs/` 保存了多轮实现和现场调试记录，其中的版本号、菜单位置、资源余量可能属于历史版本。
 
-> 芯片是 **STM32G431VBT6**，链接容量为 **128 KiB Flash、32 KiB RAM**。当前 Flash 剩余 **448 B**；新增功能前必须重新测量并释放空间。
+> 芯片是 **STM32G431VBT6**，链接容量为 **128 KiB Flash、32 KiB RAM**。当前 Flash 剩余 **736 B**；新增功能前必须重新测量并释放空间。
+
+R124 针对双机运行的外环超时精简 SPI DMA 重复启停和 FOC 重复计算，外环保护门限保持不变。实现与验证见 [双机实时预算修复](docs/Dual_outer_budget_R124.md)。
+
+R125 继续合并 SPI DMA 使能写入并复用同次调用的限幅结果，净回收 64 B Flash。见 [DMA 与限幅精简](docs/SPI_DMA_limits_R125.md)。
+
+R126 复用同次电流控制中的电机参数和实际调制母线值，并消除快速环准入阶段的重复就绪查询；最终输出保护保持独立检查。相较 R125 净回收 88 B Flash，RAM 中的调制代码增加 32 B。见 [控制链与准入检查精简](docs/FOC_context_R126.md)。
+
+R127 为双机独立／同速／同步位置 Run 的 OK、KEY2 增加 1 kHz 采样及短按保留，覆盖慢主循环、连续确认／停止和故障取消；另补 LCD FIFO 尾部收尾，减少分块刷新等待主循环。新增 624 B Flash、24 B RAM，控制保护阈值不变。见 [双机短按漏检修复](docs/Dual_run_keys_R127.md)。
+
+R128 审计上述 624 B 增量，合并按键状态处理并按 CubeMX 引脚配置一次读取同端口按键，保留 R127 的短按和 LCD 修复，净回收 72 B。相较 R126 仍净增加 552 B；本次没有恢复到修复前的体积。见 [按键修复的体积审计与精简](docs/Key_size_R128.md)。
+
+R129 将六个普通键统一到 TIM2 采样、消抖、识别和事件暂存，主循环领取后交给 KK_UI 路由；删除 Run 专用短按补偿、左右键轮询计时和 KK_UI 的重复物理键状态。KEY1 仍为 EXTI 全局停止。最终净回收 32 B Flash、48 B RAM，详见 [六键输入统一](docs/Key_pipeline_R129.md)。
+
+R130 合并设置 A/B 加载与选择，UI 重建使用已确认的 RAM 设置；删除 M2 型号切换的中间配置发布，并将油门更新与目标提交分开。相较 R129 净回收 144 B Flash，RAM 不变，旧版设置及 A/B 保存格式兼容，见 [设置加载与发布精简](docs/Config_dedupe_R130.md)。
+
+R131 统一本地菜单与串口的配置动作入口，复用确认值结构和限幅字段解码，按轴更新视图；启动、恢复默认及配置变更共用同步流程，保留未确认的速度／油门草稿。相较 R130 净回收 32 B Flash，RAM 不变，见 [配置入口与双轴视图整理](docs/Config_paths_R131.md)。
+
+R132 将编码器零码、HSO、六步的 9 个复合诊断字段接入已有的行描述，查询时先筛选字段，再计算对应内容；新增快照类型的编译期检查。相较 R131 净回收 104 B Flash，RAM 不变，24 次代表性查询的格式化调用由 174 次降至 116 次，见 [复合诊断行整理](docs/Diagnostic_rows_R132.md)。
 
 ## 目录
 
@@ -166,11 +184,14 @@ flowchart TD
     ADC --> FAST[10 kHz 采样校验、观测、电流控制与调制]
     ENC[MT6701 SPI / DMA] --> CACHE[带时间戳的编码器缓存]
     CACHE --> FAST
-    CACHE --> OUTER[TIM2 1 kHz 速度 / 位置 / 协调外环]
+    CACHE --> OUTER[速度 / 位置 / 协调外环]
+    TICK[TIM2 1 kHz] --> OUTER
     OUTER --> FAST
     HOST[USB / USART 文本接收] --> QUEUE[有界命令队列]
     QUEUE --> MAIN[主循环 Protocol / AppSettings / MotorControl]
-    LCD[KK_UI 与按键] --> MAIN
+    TICK --> KEYS[六键采样 / 识别 / 事件队列]
+    KEYS --> MAIN
+    LCD[KK_UI 页面与显示] --> MAIN
     MAIN --> OUTER
     MAIN --> SAVE[W25Q64 异步保存]
     MAIN --> TX[JustFloat / Native 遥测与回执]
@@ -192,7 +213,7 @@ flowchart TD
 | `mycode/app_settings.*`、`app_control.h` | 设置校验、发布、保存调度与应用层公共接口 |
 | `mycode/ui_app.*`、`ui_input.*`、`ui_text.*` | 产品菜单、Run／辨识页、远程页面同步、按键与文本格式化 |
 | `mycode/protocol.*`、`number_parse.*` | 两路命令、RPC、遥测格式与严格数值解析 |
-| `mycode/spi_port.*`、`uart_port.*`、`ws2812.*` | 用户运行时 LL 收发、恢复与状态灯 |
+| `mycode/adc_port.*`、`spi_port.*`、`uart_port.*`、`ws2812.*` | 用户运行时 ADC DMA、LL 收发、恢复与状态灯 |
 | `mycode/app_storage.*`、`w25q64.*` | 设置／日志、A/B 保存、SPI2 Flash 访问 |
 | `mycode/board_diag.*` | CPU／首次故障记录、实时统计、外环超期监督 |
 | `mycode/kk_ui/`、`kk_oled/` | UI 框架与绘图／显示驱动 |
@@ -238,18 +259,20 @@ build/Release/FOC_two.map
 
 ### 4.2 当前资源快照
 
-下表为 R122 当前工具链的链接结果，不是所有工具链通用的固定值：
+下表为 R132 当前工具链的链接结果，不是所有工具链通用的固定值：
 
 | 配置 | Flash 镜像占用 | Flash 剩余 | RAM 总分配 | RAM 区剩余 |
 | --- | ---: | ---: | ---: | ---: |
-| Debug | 130624 B | 448 B | 30920 B | 1848 B |
-| Release | 130624 B | 448 B | 30920 B | 1848 B |
+| Debug | 130336 B | 736 B | 30912 B | 1856 B |
+| Release | 130336 B | 736 B | 30912 B | 1856 B |
 
 R120 的诊断格式化与命令解析优化净回收 212 B，分阶段测量和回归见 [R120 体积优化](docs/Flash_cold_R120.md)。
 
 R121 继续优化 Run／Follow／Detect 绘制和输入，净回收 112 B，第 1～3 项累计回收 324 B。画面及交互对照见 [R121 UI 体积优化](docs/UI_size_R121.md)。
 
 R122 调整低频用户函数的编译属性，净回收 112 B，第 1～4 项累计回收 436 B。保留的属性、撤回试验和验证见 [R122 编译策略实测](docs/Cold_compile_R122.md)。
+
+R123 完成 ADC 规则组 DMA 运行时迁移、电流滤波和 UI 单位选择复用，净回收 336 B，余量 784 B。实现范围、配置适配及验证见 [R123 ADC 与用户代码优化](docs/Flash_adc_runtime_R123.md)。
 
 RAM 数字包含链接器预留的 512 B 堆、2048 B 栈及保留诊断区；不是运行时栈高水位。ELF 文件还含调试信息，其磁盘大小不等于 MCU Flash 占用。`arm-none-eabi-size` 的段合计与连续 BIN 长度可能因对齐略有不同。
 
@@ -313,7 +336,9 @@ Status
 | Run Steps | 上下选择项，左右连加减，OK 提交；返回取消未提交草稿 |
 | 参数辨识页 | 左右翻页；检测中 OK 停止；结果页提供保存／应用／恢复预设／保存 Custom 等动作 |
 
-普通 UI 按键消抖为 20 ms，方向键长按重复起始等待为 300 ms，持续按住会按框架策略加速。KEY1 不走普通扫描；当前 100 nF 对地电容、内部上拉的冷启动等待为 30 ms，运行期仍保留立即停机路径。
+六个普通 UI 按键统一由 TIM2 每 1 ms 采样，消抖为 20 ms，方向键重复起始等待为 300 ms，重复间隔按按住时长依次为 160／100／60 ms；左右长按阈值为 600 ms。主循环消费已识别事件，不读取物理 GPIO，也不再做第二次物理消抖。KEY1 不走普通扫描；当前 100 nF 对地电容、内部上拉的冷启动等待为 30 ms，运行期仍保留立即停机路径。
+
+事件队列为 16 项，同键连续待处理的重复事件合并，普通短按保留先后顺序；Back 优先取消待处理操作。超过 1 s 未处理的积压、故障停机或页面／轴／模式变化会取消旧输入。检测与 UI 执行分开，操作实际生效仍需主循环获得执行时间。
 
 Run 显示当前轴、驱动／反馈方式、目标／实际、VBUS 和停机原因。HSO 的有效 `Curr Loop` 始终 ON；六步不使用 FOC 的 Curr Loop 选项。
 
@@ -1109,6 +1134,8 @@ def extract(buffer):
 
 完整控制台为 **`pc_tool/index.html`**。页面样式、脚本、字体、Web Serial、协议解析和曲线均内嵌，复制这一个文件即可使用，不需要 Python 后台或 CDN。
 
+串口异常恢复与资源释放已在 HTML 中处理；如再遇到偶发断连，可导出“浏览器运行诊断 JSON”中的 `transport` 事件继续定位。此项无需更新固件，见 [串口异常处理与定位](docs/PC_serial_recovery.md)。
+
 1. 在支持 Web Serial 的桌面 Chrome／Edge 中打开 HTML，确认安全上下文与浏览器串口授权可用。
 2. 选择板子的 USB CDC COM，或连接 USART1 的 USB 转串口 COM。连接先发送普通 `Format:Native`，再用带编号的 Get 读回确认。
 3. 连接不会自动运行，不会拿网页旧草稿覆盖板端设置。先核对工作模式，再设置电机／驱动，最后发 Run。
@@ -1293,7 +1320,7 @@ python tests/flash_report.py final --directory build/my-change
 | Custom 没有显示／不能覆盖 | 槽位必须有完整有效记录；覆盖前两轴都要退出该槽，等 Saved 后才能断电 |
 | ENC2 未接却影响保存 | 核对工作模式是否需要 ENC2、五次可选停止与 SPI2 状态；需要的 ENC2 会在停机后低频重连 |
 | CONTROL OVERRUN／OUTER GAP／STALE | 先保存 First 与耗时／计数，检查最坏执行和阻塞；时序锁存需复位，Clear diag 不解除 |
-| Debug Flash 溢出 | 当前余 448 B；先测量用户代码优化，保留功能和官方源码，不扩大容量或关闭保护 |
+| Debug Flash 溢出 | 当前余 736 B；先测量用户代码优化，保留功能和官方源码，不扩大容量或关闭保护 |
 
 <a id="references"></a>
 

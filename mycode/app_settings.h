@@ -20,8 +20,19 @@ typedef struct {
     bool current_loop;  /* Saved encoder preference; HSO's effective ON is separate. */
 } AppAxisSettings;
 
+/* Frontends parse/menu-map only. Values use the existing enum/native units;
+ * extra is the gear offset for GEAR. Alignment has no persistence side effect. */
+typedef enum {
+    APP_CFG_WORK,APP_CFG_MOTOR,APP_CFG_FEEDBACK,APP_CFG_SIXSTEP,
+    APP_CFG_GEAR,APP_CFG_ALIGN,APP_CFG_FOCUS
+} AppConfigAction;
+enum { APP_CONFIG_ACCEPTED=1,APP_CONFIG_RESET_AXIS=2 };
+unsigned AppSettings_Configure(AppConfigAction action,MotorAxis axis,int32_t value,int32_t extra);
+
 bool AppSettings_ReadAxis(MotorAxis axis,AppAxisSettings *out);
 bool AppSettings_StoreAxis(MotorAxis axis,const AppAxisSettings *value);
+/* M1 six-step throttle is independent of the three confirmed axis targets. */
+void AppSettings_StoreThrottle(unsigned throttle);
 void AppSettings_StoreTargets(MotorAxis axis,const int32_t targets[3],unsigned throttle);
 bool AppSettings_ValidRequest(unsigned axis,unsigned key);
 int8_t AppSettings_Apply(unsigned axis,unsigned key,int32_t value);

@@ -1,9 +1,11 @@
 #include "spi_port.h"
+#include "adc_port.h"
 #include "stm32g4xx_ll_spi.h"
 #include "stm32g4xx_ll_dma.h"
 
 #define SPI_ERRORS (SPI_SR_OVR|SPI_SR_MODF|SPI_SR_FRE)
 #define SPI_EVENTS (SPI_CR2_RXDMAEN|SPI_CR2_TXDMAEN|SPI_CR2_ERRIE|SPI_CR2_RXNEIE|SPI_CR2_TXEIE)
+static uint8_t lcd_tail_irqs;
 
 /* HAL_DMA_Init and __HAL_LINKDMA publish the actual CubeMX mapping.
  * RX and TX may be on different DMA controllers and arbitrary channels. */
@@ -15,10 +17,9 @@ static uint32_t dma_flags(const DMA_HandleTypeDef *d)
 static void stop_channel(DMA_HandleTypeDef *d)
 {
     if (!d) return;
-    LL_DMA_DisableChannel(d->DmaBaseAddress,channel(d));
-    LL_DMA_DisableIT_TC(d->DmaBaseAddress,channel(d));
-    LL_DMA_DisableIT_HT(d->DmaBaseAddress,channel(d));
-    LL_DMA_DisableIT_TE(d->DmaBaseAddress,channel(d));
+    /* The generated handle owns this CCR. Retire EN and all interrupt
+     * enables in one write, preserving its complete CubeMX DMA format. */
+    CLEAR_BIT(d->Instance->CCR,DMA_CCR_EN|DMA_CCR_TCIE|DMA_CCR_HTIE|DMA_CCR_TEIE);
     LL_DMA_WriteReg(d->DmaBaseAddress,IFCR,15UL<<d->ChannelIndex);
 }
 static void quiesce(SPI_HandleTypeDef *h)
@@ -72,8 +73,11 @@ void SpiPort_Service(SPI_HandleTypeDef *h)
         (sr&SPI_SR_TXE) && !(sr&(SPI_SR_BSY|SPI_SR_FTLVL));
     HAL_SPI_StateTypeDef state=h->State;
     if (done) {
-        quiesce(h);
+        /* DMA IRQ already quiesced both channels before clearing the request
+         * bits. Repeating it here doubles peripheral writes at 20k frames/s. */
         if (h->Instance==SPI3) {
+            CLEAR_BIT(h->Instance->CR2,SPI_CR2_TXEIE);
+            lcd_tail_irqs=0U;
             /* LCD is physically full duplex, MISO unused. Its TX-only DMA
              * may overrun RX; drain only after the final clock. */
             for (unsigned n=0;n<4U && LL_SPI_IsActiveFlag_RXNE(h->Instance);++n)
@@ -91,6 +95,14 @@ void SpiPort_Service(SPI_HandleTypeDef *h)
 
 void SpiPort_IRQHandler(SPI_HandleTypeDef *h)
 {
+    if (h->Instance==SPI3 && (h->Instance->CR2&SPI_CR2_TXEIE)) {
+        /* DMA TC can precede the last FIFO clocks. Finish from the generated
+         * SPI3 IRQ so each LCD chunk need not wait for a loaded main loop.
+         * Never spin: a stuck peripheral gets four tries, then main/timeout. */
+        if (!lcd_tail_irqs || --lcd_tail_irqs==0U)
+            CLEAR_BIT(h->Instance->CR2,SPI_CR2_TXEIE);
+        SpiPort_Service(h);
+    }
     if ((h->Instance->CR2&SPI_CR2_ERRIE) && dma_busy(h)) {
         uint32_t error=error_code(LL_SPI_ReadReg(h->Instance,SR));
         if (h->Instance==SPI3) error&=~HAL_SPI_ERROR_OVR;
@@ -100,11 +112,11 @@ void SpiPort_IRQHandler(SPI_HandleTypeDef *h)
 void SpiPort_DMAIRQ(DMA_HandleTypeDef *d)
 {
     SPI_HandleTypeDef *h=d->Parent;
-    /* This is also the generated ADC/WS2812 DMA vector entry. Their HAL
-     * ownership, callbacks and newly generated channel routes are intact. */
+    /* CubeMX routes its ADC handle through the same generated vector entry.
+     * WS2812 is dispatched separately by cubemx_irq.h. */
     if ((h!=&hspi1 && h!=&hspi2 && h!=&hspi3) ||
         (d!=h->hdmarx && d!=h->hdmatx)) {
-        HAL_DMA_IRQHandler(d);
+        AdcPort_DMAIRQ(d);
         return;
     }
     uint32_t mask=__get_PRIMASK(); __disable_irq();
@@ -132,6 +144,10 @@ void SpiPort_DMAIRQ(DMA_HandleTypeDef *d)
         /* Disable BOTH linked channels atomically before ADC can publish a
          * completed frame and start the next one. No wait for BSY in IRQ. */
         quiesce(h);
+        if (h->Instance==SPI3) {
+            lcd_tail_irqs=4U;
+            SET_BIT(h->Instance->CR2,SPI_CR2_TXEIE);
+        }
         __set_PRIMASK(mask);
         SpiPort_Service(h);
         return;
@@ -155,13 +171,13 @@ static HAL_StatusTypeDef claim(SPI_HandleTypeDef *h,HAL_SPI_StateTypeDef state)
 static void setup_dma(DMA_HandleTypeDef *d,const SPI_TypeDef *spi,
                       const void *memory,uint16_t length,bool complete)
 {
-    stop_channel(d);
+    /* start_dma holds PRIMASK and has quiesced both generated channels. */
     LL_DMA_SetPeriphAddress(d->DmaBaseAddress,channel(d),LL_SPI_DMA_GetRegAddr(spi));
     LL_DMA_SetMemoryAddress(d->DmaBaseAddress,channel(d),(uint32_t)(uintptr_t)memory);
     LL_DMA_SetDataLength(d->DmaBaseAddress,channel(d),length);
-    LL_DMA_EnableIT_TE(d->DmaBaseAddress,channel(d));
-    if (complete) LL_DMA_EnableIT_TC(d->DmaBaseAddress,channel(d));
-    LL_DMA_EnableChannel(d->DmaBaseAddress,channel(d));
+    /* Addresses/count are ready while EN is clear. Publish EN with its
+     * error/completion interrupts in one CCR write, retaining CubeMX format. */
+    SET_BIT(d->Instance->CCR,DMA_CCR_EN|DMA_CCR_TEIE|(complete ? DMA_CCR_TCIE : 0U));
 }
 static HAL_StatusTypeDef start_dma(SPI_HandleTypeDef *h,const uint8_t *tx,uint8_t *rx,uint16_t length)
 {

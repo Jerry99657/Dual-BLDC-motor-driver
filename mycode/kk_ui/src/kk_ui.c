@@ -533,126 +533,39 @@ void KK_UI_DispatchInput(KK_UI_InputEvent event, uint32_t now)
     }
 }
 
-static uint32_t kk_ui_repeat_interval(uint32_t held)
-{
-    if (held >= 1500U) return 60U;
-    if (held >= 800U) return 100U;
-    return 160U;
-}
-
+/* Hardware input has already been sampled/debounced. UI owns only routing,
+ * transition guards and the application callbacks, always in foreground. */
 static void kk_ui_process_input(uint32_t now, KK_UI_Input input)
 {
-    uint8_t press = 0U;
-    uint8_t repeat = 0U;
-    uint8_t stable = 0U;
-    uint8_t i;
-    KK_UI_InputEvent event;
-
-    input.keys &= KK_UI_KEY_MASK;
-    if (kk_ui.keys_initialized == 0U) {
-        for (i = 0U; i < KK_UI_KEY_COUNT; ++i) {
-            uint8_t down = (input.keys & (1U << i)) != 0U;
-            kk_ui.keys[i].changed_at = now;
-            kk_ui.keys[i].pressed_at = now;
-            kk_ui.keys[i].repeat_at = now;
-            kk_ui.keys[i].candidate = down;
-            kk_ui.keys[i].stable = down;
-            kk_ui.keys[i].armed = (uint8_t)!down;
-        }
-        kk_ui.keys_initialized = 1U;
-    } else {
-        for (i = 0U; i < KK_UI_KEY_COUNT; ++i) {
-            KK_UI_KeyState *key = &kk_ui.keys[i];
-            uint8_t down = (input.keys & (1U << i)) != 0U;
-            if (down != key->candidate) {
-                key->candidate = down;
-                key->changed_at = now;
-            }
-            if (key->candidate != key->stable &&
-                now - key->changed_at >= KK_UI_KEY_DEBOUNCE_MS) {
-                key->stable = key->candidate;
-                if (key->stable == 0U) {
-                    key->armed = 1U;
-                } else if (key->armed != 0U) {
-                    key->pressed_at = now;
-                    key->repeat_at = now + KK_UI_KEY_REPEAT_DELAY_MS;
-                    press |= (uint8_t)(1U << i);
-                }
-            }
-            if (i != 2U && i != 5U && key->stable != 0U && key->candidate != 0U &&
-                key->armed != 0U &&
-                (int32_t)(now - key->repeat_at) >= 0) {
-                repeat |= (uint8_t)(1U << i);
-                key->repeat_at = now +
-                    kk_ui_repeat_interval(now - key->pressed_at);
-            }
-        }
-    }
-    for (i = 0U; i < KK_UI_KEY_COUNT; ++i) {
-        if (kk_ui.keys[i].stable != 0U) stable |= (uint8_t)(1U << i);
-    }
-    /* 同时保留尚在去抖的原始按下，防止转场最后 20 ms 的按键穿透。 */
-    kk_ui.blocked_keys &= (uint8_t)(stable | input.keys);
-    kk_ui.repeat_resume_keys &= (uint8_t)(stable | input.keys);
-    if (kk_ui.transition.active != 0U) {
-        kk_ui.blocked_keys |= (uint8_t)(stable | input.keys);
-        uint8_t held_directions = (uint8_t)((stable | input.keys) &
-            (KK_UI_KEY_UP | KK_UI_KEY_DOWN | KK_UI_KEY_LEFT | KK_UI_KEY_RIGHT));
-        kk_ui.repeat_resume_keys |= held_directions;
-        for (i = 0U; i < KK_UI_KEY_COUNT; ++i) {
-            if ((held_directions & (1U << i)) != 0U) {
-                /* 按下事件不穿透；持续按住则从转场结束重新等待连发延时。 */
-                kk_ui.keys[i].pressed_at = now;
-                kk_ui.keys[i].repeat_at = now + KK_UI_KEY_REPEAT_DELAY_MS;
-            }
-        }
+    kk_ui.active_keys=input.keys & KK_UI_KEY_MASK;
+    kk_ui.blocked_keys &= kk_ui.active_keys;
+    kk_ui.repeat_resume_keys &= kk_ui.active_keys;
+    if (kk_ui.transition.active) {
+        kk_ui.blocked_keys |= kk_ui.active_keys;
+        kk_ui.repeat_resume_keys |= kk_ui.active_keys &
+            (KK_UI_KEY_UP|KK_UI_KEY_DOWN|KK_UI_KEY_LEFT|KK_UI_KEY_RIGHT);
         return;
     }
-    uint8_t resumed = (uint8_t)(repeat & kk_ui.repeat_resume_keys);
-    kk_ui.blocked_keys &= (uint8_t)~resumed;
-    kk_ui.repeat_resume_keys &= (uint8_t)~resumed;
-    press &= (uint8_t)~kk_ui.blocked_keys;
-    repeat &= (uint8_t)~kk_ui.blocked_keys;
-
-    event.steps = 1U;
-    /* Back 优先于 OK；两个键都只产生一次按下事件。 */
-    if ((press & KK_UI_KEY_BACK) != 0U) {
-        event.action = KK_UI_INPUT_BACK;
-        event.source = KK_UI_INPUT_PRESS;
-        KK_UI_DispatchInput(event, now);
-        return;
-    }
-    if ((press & KK_UI_KEY_OK) != 0U) {
-        event.action = KK_UI_INPUT_OK;
-        event.source = KK_UI_INPUT_PRESS;
-        KK_UI_DispatchInput(event, now);
-        return;
-    }
-    if (input.encoder_delta != 0) {
-        int32_t delta = input.encoder_delta;
-        event.action = delta < 0 ? KK_UI_INPUT_UP : KK_UI_INPUT_DOWN;
-        event.source = KK_UI_INPUT_ENCODER;
-        event.steps = (uint16_t)(delta < 0 ? -delta : delta);
-        KK_UI_DispatchInput(event, now);
-        return;
-    }
-    /* 相反方向抵消；斜向同时按下不同时修改模式和目标。 */
-    uint8_t directions = stable & (KK_UI_KEY_UP | KK_UI_KEY_DOWN |
-                                   KK_UI_KEY_LEFT | KK_UI_KEY_RIGHT);
-    if (directions == 0U || (directions & (directions - 1U)) != 0U) return;
-    static const KK_UI_InputAction actions[KK_UI_KEY_COUNT] = {
-        KK_UI_INPUT_UP, KK_UI_INPUT_DOWN, KK_UI_INPUT_OK,
-        KK_UI_INPUT_LEFT, KK_UI_INPUT_RIGHT, KK_UI_INPUT_BACK
-    };
-    for (i = 0U; i < KK_UI_KEY_COUNT; ++i) {
-        uint8_t bit = (uint8_t)(1U << i);
-        if (((press | repeat) & directions & bit) != 0U) {
-            event.action = actions[i];
-            event.source = (press & bit) ? KK_UI_INPUT_PRESS : KK_UI_INPUT_REPEAT;
-            KK_UI_DispatchInput(event, now);
-            break;
+    KK_UI_InputEvent event={.steps=1U};
+    unsigned key=(input.key_event & 7U);
+    if (key && key<=KK_UI_KEY_COUNT) {
+        event.action=(KK_UI_InputAction)(key-1U);
+        event.source=(KK_UI_InputSource)(input.key_event>>3);
+        uint8_t bit=(uint8_t)(1U<<(key-1U));
+        if (event.source==KK_UI_INPUT_REPEAT && (kk_ui.repeat_resume_keys & bit)) {
+            kk_ui.blocked_keys &= (uint8_t)~bit;
+            kk_ui.repeat_resume_keys &= (uint8_t)~bit;
         }
-    }
+        if (kk_ui.blocked_keys & bit) return;
+        if (event.source>=KK_UI_INPUT_RELEASE &&
+            (KK_UI_DialogActive() || KK_UI_CurrentPageType()!=KK_UI_PAGE_CUSTOM)) return;
+    } else if (input.encoder_delta) {
+        int32_t delta=input.encoder_delta;
+        event.action=delta<0 ? KK_UI_INPUT_UP : KK_UI_INPUT_DOWN;
+        event.source=KK_UI_INPUT_ENCODER;
+        event.steps=(uint16_t)(delta<0 ? -delta : delta);
+    } else return;
+    KK_UI_DispatchInput(event,now);
 }
 
 static KK_UI_Status kk_ui_latch_display(KK_UI_Status status)
@@ -719,12 +632,15 @@ KK_UI_Status KK_UI_Update(uint32_t now, KK_UI_Input input)
     }
     if (kk_ui.keys_initialized == 0U) {
         kk_ui.next_frame = now;
+        kk_ui.keys_initialized = 1U;
+        kk_ui.blocked_keys |= input.keys & KK_UI_KEY_MASK;
     }
     kk_ui.last_update = now;
     status = kk_ui_check_transfer(now);
     if (status != KK_UI_OK || kk_ui.display_fault != 0U) {
         return status != KK_UI_OK ? status : KK_UI_DISPLAY_ERROR;
     }
+    KK_UI_InputAccepted();
 
     KK_UI_AnimateNavigation(now);
     KK_UI_HomeAnimate(now);
@@ -771,6 +687,8 @@ bool KK_UI_GetIntEditorDraft(uint16_t binding_index, int32_t *out_value)
     return false;
 #endif
 }
+
+bool KK_UI_IsTransitioning(void) { return kk_ui.transition.active!=0U; }
 
 KK_UI_PageId KK_UI_GetCurrentPage(void)
 {
@@ -821,10 +739,6 @@ KK_UI_Status KK_UI_RecoverDisplay(void)
     kk_ui.next_frame = kk_ui.last_update;
     /* 刷新故障不能重置方向键的长按状态，否则每次改值引发一次刷新恢复，
      * 就会变成“按住只走一档”。仅对确定/返回保留释放后再触发的保护。 */
-    for (uint8_t i = 0U; i < KK_UI_KEY_COUNT; ++i) {
-        if ((i == 2U || i == 5U) &&
-            (kk_ui.keys[i].stable || kk_ui.keys[i].candidate))
-            kk_ui.blocked_keys |= (uint8_t)(1U << i);
-    }
+    kk_ui.blocked_keys |= kk_ui.active_keys & (KK_UI_KEY_OK|KK_UI_KEY_BACK);
     return KK_UI_OK;
 }

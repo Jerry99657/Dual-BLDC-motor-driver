@@ -5,7 +5,11 @@ run on a 64-bit host. Wrappers model only DR/OVR hardware side effects. No
 serial port, board or vendor file is changed.
 """
 from pathlib import Path
-import re, shutil, subprocess, sys
+import argparse, re, shutil, subprocess, sys
+parser=argparse.ArgumentParser(description=__doc__)
+parser.add_argument('--baseline',type=Path,help='Compare DMA register work with an earlier user spi_port.c')
+parser.add_argument('--lcd-baseline',type=Path,help='Compare LCD chunk progress while foreground service is unavailable')
+args=parser.parse_args()
 
 repo=Path(__file__).resolve().parents[2]
 subprocess.run([sys.executable,'tests/spi_host/check_config.py'],cwd=repo,check=True)
@@ -54,7 +58,30 @@ for peripheral,names in functions.items():
   '#pragma GCC diagnostic push\n#pragma GCC diagnostic ignored "-Wpointer-to-int-cast"\n'
   '#pragma GCC diagnostic ignored "-Wint-to-pointer-cast"\n'+'\n'.join(snippets)+'\n#pragma GCC diagnostic pop\n')
 compiler=shutil.which('gcc') or 'gcc'
-subprocess.run([compiler,'-std=c11','-O1','-Wall','-Wextra','-Werror',
+command=[compiler,'-std=c11','-O1','-Wall','-Wextra','-Werror',
  '-I'+str(inc),'-Itests/spi_host','-Imycode','mycode/spi_port.c',
- 'tests/spi_host/test_spi.c','-o',str(out/'spi.exe')],cwd=repo,check=True)
-subprocess.run([str(out/'spi.exe')],cwd=repo,check=True)
+ 'tests/spi_host/test_spi.c','-o',str(out/'spi.exe')]
+subprocess.run(command,cwd=repo,check=True)
+after=subprocess.check_output([str(out/'spi.exe')],cwd=repo,text=True)
+print(after,end='')
+if args.lcd_baseline:
+ baseline=command.copy();baseline.insert(1,'-DSPI_LCD_REFERENCE')
+ baseline[baseline.index('mycode/spi_port.c')]=str(args.lcd_baseline.resolve())
+ baseline[-1]=str(out/'spi-lcd-before.exe')
+ subprocess.run(baseline,cwd=repo,check=True)
+ before=subprocess.check_output([baseline[-1]],cwd=repo,text=True)
+ (out/'lcd-before.txt').write_text(before);(out/'lcd-after.txt').write_text(after)
+ old=int(re.search(r'LCD PIPE: (\d+)',before)[1]);new=int(re.search(r'LCD PIPE: (\d+)',after)[1])
+ assert old==0 and new==20,(old,new)
+ print('PASS: old LCD path stalls before first chunk callback; new path chains all 20 chunks with no foreground service')
+if args.baseline:
+ baseline=command.copy();baseline.insert(1,'-DSPI_DMA_REFERENCE');baseline[baseline.index('mycode/spi_port.c')]=str(args.baseline.resolve());baseline[-1]=str(out/'spi-before.exe')
+ subprocess.run(baseline,cwd=repo,check=True)
+ before=subprocess.check_output([baseline[-1]],cwd=repo,text=True)
+ (out/'register-before.txt').write_text(before);(out/'register-after.txt').write_text(after)
+ old=[tuple(map(int,m)) for m in re.findall(r'DMA WORK: (\d+) (\d+) (\d+)',before)]
+ new=[tuple(map(int,m)) for m in re.findall(r'DMA WORK: (\d+) (\d+) (\d+)',after)]
+ assert len(old)==len(new)==3
+ for a,b in zip(old,new):
+  assert a[0]==b[0] and a[1]>b[1] and a[2]>=b[2],(a,b)
+  print(f'PASS: SPI{a[0]+1} complete transfer CCR writes {a[1]} -> {b[1]}, flag-clear writes {a[2]} -> {b[2]}; identical functional/remapping regressions')

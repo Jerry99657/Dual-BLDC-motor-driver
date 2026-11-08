@@ -66,6 +66,9 @@ fixture({'Core/Src/main.c': [('BoardDiag_Init();','')]},False)
 fixture({'Core/Src/main.c': [('BoardDiag_LastCrash()->kind','0')]},False)
 fixture({'Core/Src/main.c': [('HAL_Delay(30U);','')]},False)
 fixture({'Core/Src/main.c': [('HAL_Delay(30U);','HAL_Delay(1U);')]},False)
+fixture({'Core/Src/spi.c': [('HAL_NVIC_EnableIRQ(SPI3_IRQn);','')]},False)
+fixture({'Core/Src/stm32g4xx_it.c': [('HAL_SPI_IRQHandler(&hspi3);','')]},False)
+fixture({'Core/Src/stm32g4xx_it.c': [('SpiPort_IRQHandler(&hspi3);','SpiPort_IRQHandler(&hspi2);')]},False)
 # Supported changes must never be pinned to a historical divider/priority.
 fixture({'Core/Src/spi.c': [('SPI_BAUDRATEPRESCALER_256;', 'SPI_BAUDRATEPRESCALER_128;'),
                            ('GPIO_SPEED_FREQ_MEDIUM;', 'GPIO_SPEED_FREQ_LOW;'),
@@ -112,6 +115,9 @@ for file, before, after in (
     ('gpio.c', 'GPIO_MODE_IT_FALLING;', 'GPIO_MODE_IT_RISING;'),
 ):
     fixture({'Core/Src/' + file: [(before, after)]}, False)
+fixture({'Core/Src/i2c.c': [('hi2c3.Instance = I2C3;', 'hi2c3.Instance = I2C3; hdma_i2c3_rx.Instance = DMA2_Channel6;')]}, False)
+fixture({'Core/Src/adc.c': [('__HAL_LINKDMA(adcHandle,DMA_Handle,hdma_adc1);','')]}, False)
+fixture({'Core/Src/adc.c': [('HAL_DMA_Init(&hdma_adc1)', 'HAL_DMAEx_ConfigMuxSync(&hdma_adc1,&sync); HAL_DMA_Init(&hdma_adc1)')]}, False)
 fixture({'Core/Src/stm32g4xx_it.c': [('HAL_DMA_IRQHandler(&hdma_spi1_rx);',
                                     'SpiPort_DMAIRQ(&hdma_spi2_rx);\n  return;')]}, False)
 

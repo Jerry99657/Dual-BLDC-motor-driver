@@ -38,10 +38,7 @@ static void kk_ui_start_transition(const KK_UI_PageState *outgoing,
     kk_ui.transition.active = 1U;
     kk_ui.transition.reverse = reverse ? 1U : 0U;
     kk_ui.transition.leave_custom = 0U;
-    for (uint8_t i = 0U; i < KK_UI_KEY_COUNT; ++i) {
-        if (kk_ui.keys[i].stable || kk_ui.keys[i].candidate)
-            kk_ui.blocked_keys |= (uint8_t)(1U << i);
-    }
+    kk_ui.blocked_keys |= kk_ui.active_keys;
 #if KK_UI_ENABLE_CUSTOM
     {
         const KK_UI_PageRoute *route = KK_UI_GetRoute(outgoing->page);

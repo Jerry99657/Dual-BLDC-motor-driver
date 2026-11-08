@@ -161,6 +161,10 @@ HAL_StatusTypeDef HAL_ADCEx_InjectedStop(ADC_HandleTypeDef *h) {
 HAL_StatusTypeDef HAL_ADC_Stop_DMA(ADC_HandleTypeDef *h) {
     assert(h == &hadc1); dma = false; return HAL_OK;
 }
+HAL_StatusTypeDef AdcPort_Start(ADC_HandleTypeDef *adc,volatile uint16_t *data,uint32_t count) {
+    return HAL_ADC_Start_DMA(adc,(uint32_t *)(void *)data,count);
+}
+HAL_StatusTypeDef AdcPort_Stop(ADC_HandleTypeDef *adc) { return HAL_ADC_Stop_DMA(adc); }
 static void reset(void) {
     MotorSampling_Stop();
     memset(&tim1,0,sizeof(tim1)); memset(&tim8,0,sizeof(tim8)); memset(&tim6,0,sizeof(tim6));

@@ -1,7 +1,7 @@
 #ifndef UI_HOST_MAIN_H
 #define UI_HOST_MAIN_H
 #include <stdint.h>
-typedef struct { uint32_t pins; } GPIO_TypeDef;
+typedef union { uint32_t pins, IDR; } GPIO_TypeDef;
 typedef struct { uint32_t Pin, Mode, Pull; } GPIO_InitTypeDef;
 typedef enum { GPIO_PIN_RESET, GPIO_PIN_SET } GPIO_PinState;
 extern GPIO_TypeDef host_gpio;

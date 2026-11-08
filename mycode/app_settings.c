@@ -3,6 +3,7 @@
 #include "motor_sampling.h"
 #include "motor_sixstep.h"
 #include "motor_detect.h"
+#include "motor_limits.h"
 #include <math.h>
 #include <stddef.h>
 #include <string.h>
@@ -32,12 +33,8 @@ bool AppSettings_ReadAxis(MotorAxis axis,AppAxisSettings *out)
     if((unsigned)axis>=MOTOR_AXIS_COUNT || !out) return false;
     uint32_t flags=MotorControl_GetOptions(axis);
     const MotorParams *motor=MotorParams_GetAxis(axis);
-    out->speed_limit=(int32_t)((flags & APP_SPEED_LIMIT_MASK)>>APP_SPEED_LIMIT_SHIFT);
-    if(out->speed_limit<1 || out->speed_limit>APP_SPEED_LIMIT_MAX) out->speed_limit=APP_SPEED_LIMIT_DEFAULT;
-    out->speed_limit=limit(out->speed_limit,1,(int32_t)motor->max_speed_mech);
-    out->position_speed=(int32_t)AppSettings_GetPositionSpeed(flags);
-    if(out->position_speed<1 || out->position_speed>APP_SPEED_LIMIT_MAX) out->position_speed=30;
-    out->position_speed=limit(out->position_speed,1,out->speed_limit);
+    out->speed_limit=limit((int32_t)MotorLimits_Speed(flags),1,(int32_t)motor->max_speed_mech);
+    out->position_speed=limit((int32_t)MotorLimits_Position(flags),1,out->speed_limit);
     out->current_loop=(flags & APP_FLAG_CURRENT_LOOP)!=0;
     memcpy(out->targets,axis_data(axis,false),sizeof(out->targets));
     memcpy(out->steps,axis_data(axis,true),sizeof(out->steps));
@@ -66,15 +63,17 @@ bool AppSettings_StoreAxis(MotorAxis axis,const AppAxisSettings *value)
     memcpy(axis_data(axis,true),value->steps,sizeof(value->steps));
     return true;
 }
+void AppSettings_StoreThrottle(unsigned throttle)
+{
+    AppSettings *st=AppStorage_Get();
+    st->control_config=(st->control_config & ~APP_CONFIG_THROTTLE_MASK) |
+        ((uint32_t)(throttle>100U ? 100U : throttle)<<APP_CONFIG_THROTTLE_SHIFT);
+}
 void AppSettings_StoreTargets(MotorAxis axis,const int32_t targets[3],unsigned throttle)
 {
     if((unsigned)axis>=MOTOR_AXIS_COUNT || !targets) return;
     memcpy(axis_data(axis,false),targets,12);
-    if(axis==MOTOR_AXIS_1) {
-        AppSettings *st=AppStorage_Get();
-        st->control_config=(st->control_config & ~APP_CONFIG_THROTTLE_MASK) |
-            ((uint32_t)(throttle>100U ? 100U : throttle)<<APP_CONFIG_THROTTLE_SHIFT);
-    }
+    if(axis==MOTOR_AXIS_1) AppSettings_StoreThrottle(throttle);
 }
 void AppSettings_Changed(uint32_t now) { dirty=true;changed_at=now; }
 void AppSettings_Input(uint32_t now) { input_at=now; }
@@ -99,11 +98,11 @@ bool AppSettings_SaveDetection(void)
     st->motor_detect_l_uh=MotorDetect_Inductance();st->motor_detect_flux_uwb=MotorDetect_Flux();
     AppSettings_Changed(HAL_GetTick());return true;
 }
-bool AppSettings_SelectMotor(MotorAxis axis,MotorProfile profile)
+static unsigned select_motor(MotorAxis axis,MotorProfile profile)
 {
     if((unsigned)axis>=MOTOR_AXIS_COUNT) return false;
     if(profile!=MOTOR_PROFILE_ESC && !MotorParams_GetProfile(profile)) return false;
-    if(profile==MotorParams_GetAxisProfile(axis) && !(axis==MOTOR_AXIS_1 && SixStep_IsGeneric())) return true;
+    if(profile==MotorParams_GetAxisProfile(axis) && !(axis==MOTOR_AXIS_1 && SixStep_IsGeneric())) return APP_CONFIG_ACCEPTED;
     MotorAxisSnapshot state;MotorControl_GetAxis(axis,&state);
     if(state.aligning) return false;
     bool sensorless=MotorControl_GetDrive(axis)!=MOTOR_DRIVE_ENCODER;
@@ -113,8 +112,10 @@ bool AppSettings_SelectMotor(MotorAxis axis,MotorProfile profile)
     if(!ok) return false;
     /* SelectProfile/SelectGeneric already clear confirmed targets and publish
      * the axis defaults while both outputs are certified stopped. */
-    AppSettings_Changed(HAL_GetTick());return true;
+    AppSettings_Changed(HAL_GetTick());return APP_CONFIG_ACCEPTED|APP_CONFIG_RESET_AXIS;
 }
+bool AppSettings_SelectMotor(MotorAxis axis,MotorProfile profile)
+{ return select_motor(axis,profile)!=0; }
 static bool defaults(void)
 {
     MotorControl_StopAll();
@@ -122,6 +123,28 @@ static bool defaults(void)
     AppStorage_ResetDefaults();
     MotorControl_Init();
     return true;
+}
+__attribute__((noinline,noclone,optimize("Oz"))) unsigned AppSettings_Configure(AppConfigAction action,MotorAxis axis,int32_t value,int32_t extra)
+{
+    if((unsigned)axis>=MOTOR_AXIS_COUNT) return 0;
+    bool ok=false;
+    switch(action) {
+    case APP_CFG_WORK: ok=MotorControl_SelectWork((MotorWorkMode)value);break;
+    case APP_CFG_MOTOR: return select_motor(axis,(MotorProfile)value);
+    case APP_CFG_FEEDBACK: case APP_CFG_SIXSTEP:
+        if(axis==MOTOR_AXIS_1 && (uint32_t)value<=1U)
+            ok=action==APP_CFG_FEEDBACK ? MotorControl_SelectFeedback(value!=0) : MotorControl_SelectSixStep(value!=0);
+        break;
+    case APP_CFG_GEAR: ok=MotorControl_SetGear(value,extra);break;
+    case APP_CFG_ALIGN: return MotorControl_RequestAlign(axis) ? APP_CONFIG_ACCEPTED : 0;
+    case APP_CFG_FOCUS:
+        if(axis!=MotorControl_GetFocus() && MotorControl_GetWork()==MOTOR_WORK_INDEPENDENT)
+            AppSettings_Changed(HAL_GetTick());
+        MotorControl_SetFocus(axis);return APP_CONFIG_ACCEPTED;
+    default:break;
+    }
+    if(ok) AppSettings_Changed(HAL_GetTick());
+    return ok ? APP_CONFIG_ACCEPTED : 0;
 }
 bool AppSettings_ValidRequest(unsigned axis,unsigned key)
 {

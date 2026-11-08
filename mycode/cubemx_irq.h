@@ -10,7 +10,7 @@
 static inline void CubeMX_DMAIRQ(DMA_HandleTypeDef *dma)
 {
     if (dma==htim3.hdma[TIM_DMA_ID_CC1]) WS2812_DMAIRQ(dma);
-    else SpiPort_DMAIRQ(dma); /* SPI LL, or the unchanged ADC HAL dispatcher. */
+    else SpiPort_DMAIRQ(dma); /* SPI or regular ADC runtime, following generated handles. */
 }
 #define HAL_DMA_IRQHandler(handle) CubeMX_DMAIRQ(handle)
 /* Self reference deliberately calls the real HAL function for other pins.

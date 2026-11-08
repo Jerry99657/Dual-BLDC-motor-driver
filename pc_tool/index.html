@@ -549,7 +549,7 @@ function runtimeMode(){return demo?'demo':replaying?'replay':connected?'serial':
 function runtimeSnapshot(){
  const memory=cacheMemory(),timings=runtimeStats.paintTimes.slice().sort((a,b)=>a-b),p95=timings.length?timings[Math.min(timings.length-1,Math.floor(timings.length*.95))]:0;
  return {format:'FOC-browser-diagnostics',version:1,at:new Date().toISOString(),uptimeSeconds:(performance.now()-runtimeStats.startedAt)/1000,browser:{userAgent:navigator.userAgent||'',dpr:globalThis.devicePixelRatio||1,width:globalThis.innerWidth||0,height:globalThis.innerHeight||0},
-  source:runtimeMode(),connected,outputFormat,firmware:boardConfig?.firmware??null,parser:{frames:received,crcErrors:parser.crc_errors,lost:parser.lost,resets:parser.resets,discarded:parser.discarded},
+  source:runtimeMode(),connected,outputFormat,firmware:boardConfig?.firmware??null,transport:serialSnapshot(),parser:{frames:received,crcErrors:parser.crc_errors,lost:parser.lost,resets:parser.resets,discarded:parser.discarded},
   sampling:{frames:runtimeStats.liveFrames,parsedPoints:runtimeStats.parsedPoints,rateHz:runtimeMeasurement?.mode===runtimeMode()?runtimeMeasurement.frameHz:null},
   rendering:{automaticHz:runtimeMeasurement?.refreshHz??0,paints:runtimeStats.paints,averageMs:runtimeStats.paints?runtimeStats.paintMs/runtimeStats.paints:0,recentP95Ms:p95,maxMs:runtimeStats.maxPaintMs,indexNodes:runtimeStats.indexNodes,rawScans:runtimeStats.rawScans},
   memory,plots:plots.map(p=>({number:p.index+1,shown:p.index<visiblePlots,inViewport:p.inViewport,paused:!!p.view.frozen,cacheSeconds:p.view.cacheSeconds,spanSeconds:p.view.span,selected:[...p.selected]})),
@@ -1484,6 +1484,84 @@ class JustFloatProbe{
 let outputFormat='Unknown',formatVerified=false;
 const formatProbe=new JustFloatProbe();
 let port=null,reader=null,readTask=null,writer=null,parser=new WireParser(),connected=false,closing=false,received=0,lastRx=0,lastEpoch=0,nextRequest=1,pending=new Map(),txChain=Promise.resolve(),boardConfig=null,recordChunks=[],recordBytes=0,recordWriter=null,recordOpening=false;
+let serialSession=null,serialCloseTask=null;
+const serialStats={connections:0,readErrors:0,writeErrors:0,recoveries:0,osDisconnects:0,bytes:0,lastByteAt:null,info:null,firmware:null,events:[]};
+function serialEvent(type,error=null,details={}){
+ const event={at:new Date().toISOString(),type,session:sessionToken,name:error?.name||'',message:error?.message||'',bytes:serialStats.bytes,frames:received,lastBoardMs:parser.last?.[1]??null,lastByteAgeMs:serialStats.lastByteAt===null?null:Date.now()-serialStats.lastByteAt,outputFormat,...details};
+ serialStats.events.push(event);if(serialStats.events.length>64)serialStats.events.shift();
+ log('SERIAL '+type+(error?' · '+event.name+': '+event.message:''));
+ if(error)rememberRuntimeError(event.name+': '+event.message,'serial-'+type);
+}
+function serialSnapshot(){return {...serialStats,lastByteAgeMs:serialStats.lastByteAt===null?null:Date.now()-serialStats.lastByteAt,lastFrameAgeMs:lastRx?performance.now()-lastRx:null,opening:connecting,closing,portRetained:!!port,events:serialStats.events.slice()}}
+function serialActive(session){return connected&&!closing&&serialSession===session&&session.token===sessionToken}
+function serialFailure(stage,error){
+ const label=stage==='processing'?'接收数据处理失败':stage==='write'?'串口发送失败':'串口连接中断';
+ return {stage,error,message:label+' ['+(error.name||'Error')+']：'+error.message+'；正在释放连接。可重新连接，无需先点断开。命令结果未知。'};
+}
+async function serialRead(session){
+ let consecutiveErrors=0;
+ while(serialActive(session)){
+  const stream=session.port.readable;if(!stream)return serialFailure('read',new Error('串口接收流已关闭'));
+  let current,readError=null;
+  try{
+   current=stream.getReader();reader=current;
+   while(serialActive(session)){
+    let chunk;try{chunk=await current.read()}catch(error){readError=error;break}
+    if(!serialActive(session))return null;
+    if(chunk.done)return serialFailure('read',new Error('串口接收流已结束'));
+    if(!chunk.value?.length)continue;
+    consecutiveErrors=0;serialStats.bytes+=chunk.value.length;serialStats.lastByteAt=Date.now();
+    if(session.recovering){session.recovering=false;serialStats.recoveries++;serialEvent('read-recovered');}
+    try{
+     const frames=parser.feed(chunk.value);if(frames.length)formatProbe.reset();
+     else if((outputFormat==='Native'||outputFormat==='JustFloat')&&formatProbe.feed(chunk.value))noticeJustFloat();
+     for(const frame of frames){if(frame.epoch!==seenParserEpoch){seenParserEpoch=frame.epoch;++recordEpoch}frame.epoch=recordEpoch;consume(frame)}
+    }catch(error){serialEvent('processing-error',error);return serialFailure('processing',error)}
+   }
+  }catch(error){readError=error}
+  finally{if(current){current.releaseLock();if(reader===current)reader=null}}
+  if(!serialActive(session))return null;
+  if(readError){
+   serialStats.readErrors++;const replacement=session.port.readable;
+   const recoverable=!!replacement&&replacement!==stream&&++consecutiveErrors<=3;
+   serialEvent('read-error',readError,{recoverable,readable:!!replacement,writable:!!session.port.writable});
+   if(recoverable){
+    /* Web Serial replaces nonfatal errored streams. Discard the partial
+     * frame, retain counters, and never replay an unacknowledged command. */
+    ++batchEpoch;++session.writeEpoch;failPending('串口接收错误，命令结果未知；请重新读取配置');boardConfig=null;renderConfig();
+    parser.buffer=new Uint8Array();formatProbe.reset();++recordEpoch;lastEpoch=recordEpoch;
+    session.recovering=true;$('error').textContent='串口接收错误 ['+readError.name+']：'+readError.message+'；正在恢复接收，请重新读取配置确认。';
+    continue;
+   }
+   return serialFailure('read',readError);
+  }
+ }
+ return null;
+}
+function closeSerial(reason=null,manual=false){
+ if(serialCloseTask)return serialCloseTask;
+ ++sessionToken;++batchEpoch;closing=true;connected=false;
+ const activePort=port,activeReader=reader,activeWriter=writer,activeReadTask=readTask;
+ failPending('连接已断开，命令结果未知');boardConfig=null;setOutputFormat('Unknown');formatProbe.reset();renderConfig();
+ if(reason)$('error').textContent=reason.message;
+ serialEvent(manual?'disconnect-request':'connection-ended',reason?.error||null,{stage:reason?.stage||'manual'});
+ serialCloseTask=Promise.resolve().then(async()=>{
+  try{
+   if(activeReader)try{await activeReader.cancel()}catch(error){serialEvent('cancel-error',error)}
+   if(activeReadTask)await activeReadTask;
+   /* Do not await abort/txChain before closing: a pending driver write can
+    * otherwise keep Disconnect waiting indefinitely. Release both locks
+    * first; SerialPort.close owns cancellation of the outstanding I/O. */
+   writer=null;txChain.catch(()=>{});txChain=Promise.resolve();
+   if(activeWriter){try{Promise.resolve(activeWriter.abort()).catch(error=>serialEvent('abort-error',error))}catch(error){serialEvent('abort-error',error)}activeWriter.releaseLock()}
+   if(activePort){await activePort.close();if(port===activePort)port=null}
+   serialEvent('closed');
+   if(reason)$('error').textContent=reason.message.replace('正在释放连接。','连接已释放。');
+  }catch(error){serialEvent('close-error',error);$('error').textContent='串口释放失败：'+error.message+'；请点击断开通信后重试。';throw error}
+  finally{reader=null;readTask=null;serialSession=null;closing=false;serialCloseTask=null;renderConfig();if(manual)log('已断开通信')}
+ });
+ return serialCloseTask;
+}
 const configKeys=['speed_x10','voltage_x100','position_x100','flags','led_brightness','speed_step_x10','torque_step_x100','position_step_x100','control_config','gear_ratio_x100','gear_offset_x100','axis2_flags','axis2_speed_x10','axis2_voltage_x100','axis2_position_x100','axis2_speed_step_x10','axis2_torque_step_x100','axis2_position_step_x100','motor_detect','motor_detect_l_uh','motor_detect_flux_uwb'];
 function decodeReply(f){const b=f.payload,v=new DataView(b.buffer,b.byteOffset,b.length),settings={};for(let i=0;i<configKeys.length;i++)settings[configKeys[i]]=v.getInt32(8+i*4,true);const cfg=settings.control_config,work=cfg&7;return {id:v.getUint16(0,true),result:v.getInt8(2),source:b[3],schema:b[4],firmware:b[5],capabilities:15,save:b[6],focus:b[7],customMask:b[5]>=105?(cfg>>>28)&7:0,profiles:[0,1].map(a=>b[5]>=105&&((cfg>>>(24+2*a))&3)?((cfg>>>(24+2*a))&3)+2:a?(cfg>>>4)&1:(settings.flags>>>24)&1),drive:work===0?(cfg&16384?2:cfg&8?1:0):0,work,settings}}
 function failPending(reason){for(const p of pending.values()){clearTimeout(p.timer);p.reject(Error(reason))}pending.clear();refreshControlChoices()}
@@ -1494,10 +1572,41 @@ function recordFrame(f){if(!recording)return;const stamp=new Date().toISOString(
 }
 let txRecord=Promise.resolve(),recordQueuedBytes=0,recordEpoch=0,seenParserEpoch=0;
 async function toggleRecord(){if(recordOpening)return;recordOpening=true;try{if(recording||recordWriter||recordChunks.length){recording=false;await txRecord;if(recordWriter){const sink=recordWriter;try{await sink.close()}finally{recordWriter=null}}else download('motor-'+Date.now()+'.csv',recordChunks.join(''),'text/csv;charset=utf-8');recordChunks=[];recordBytes=0;return}const header='\ufeffhost_time,board_ms,sequence,epoch,packet_kind,field,unit,value\r\n';if(typeof showSaveFilePicker==='function'){const handle=await showSaveFilePicker({suggestedName:'motor-'+Date.now()+'.csv',types:[{description:'CSV',accept:{'text/csv':['.csv']}}]});recordWriter=await handle.createWritable();await recordWriter.write(header);recordPath=handle.name}else{recordChunks=[header];recordBytes=header.length;recordPath='浏览器内存 · 16 MiB 自动导出'}recording=true}finally{recordOpening=false}}
-function consume(f){received++;lastRx=performance.now();if(f.epoch!==lastEpoch){lastEpoch=f.epoch;failPending('板端已重启，命令结果未知；请重新读取');boardConfig=null;renderConfig();log('检测到板端重启');}try{recordFrame(f)}catch(e){recording=false;$('error').textContent='记录失败：'+e.message}if(f.kind===33){consumeRow(f);return}if(f.kind===16)status(decodeStatus(f));else if(f.kind===32){const r=decodeReply(f);if(!pending.has(r.id))return;const p=pending.get(r.id);pending.delete(r.id);clearTimeout(p.timer);if(!((r.schema===1&&r.firmware===87)||(r.schema===2&&r.firmware>=88&&r.firmware<=122))){p.reject(Error('配置协议不匹配'));return}if((p.command.startsWith('GetRow:')&&r.result===1)||(boardConfig&&r.source!==boardConfig.source)){p.reject(Error('回执类型／来源不匹配'));return}r.read_at=new Date().toISOString();if(p.command==='Get'&&r.result===1){setOutputFormat('Native');formatProbe.reset()}const previous=boardConfig;boardConfig=r;renderConfig();controlReply(p.command,r,previous);if(r.result===1)p.resolve(r);else p.reject(Error('板端拒绝 #'+r.id+'：'+({[-1]:'当前状态不允许／检查轴与停机条件',[-2]:'参数或命令格式错误',[-3]:'忙／来源冲突',[-4]:'请求取消／过期，请重新确认状态'}[r.result]||r.result)));}else if(!replaying){f.values=channels(f);if(f.values.length)add(f)}}
-async function connect(){if(demo)throw Error('请先退出离线演示');if(connecting||port||connected||closing)throw Error('请先断开当前连接');if(!globalThis.isSecureContext||!navigator.serial)throw Error('请用支持 Web Serial 的桌面 Chrome／Edge 打开此文件');connecting=true;const token=++sessionToken;let selectedPort;try{selectedPort=await navigator.serial.requestPort();await selectedPort.open({baudRate:115200,dataBits:8,stopBits:1,parity:'none',flowControl:'none',bufferSize:8192});}finally{connecting=false}if(token!==sessionToken){await selectedPort.close();return}port=selectedPort;connected=true;parser=new WireParser();received=0;lastRx=0;seenParserEpoch=0;lastEpoch=++recordEpoch;boardConfig=null;lastStatus={};status(lastStatus);cancelCsvLoad();clear();replaying=false;$('replay').textContent='';writer=port.writable.getWriter();reader=port.readable.getReader();readTask=(async()=>{try{while(connected){const r=await reader.read();if(r.done)break;const frames=parser.feed(r.value);if(frames.length)formatProbe.reset();else if((outputFormat==='Native'||outputFormat==='JustFloat')&&formatProbe.feed(r.value)){noticeJustFloat()}for(const frame of frames){if(frame.epoch!==seenParserEpoch){seenParserEpoch=frame.epoch;++recordEpoch}frame.epoch=recordEpoch;consume(frame)}}}catch(e){if(!closing)$('error').textContent='通信中断：'+e.message}finally{reader.releaseLock();reader=null;connected=false;boardConfig=null;setOutputFormat('Unknown');formatProbe.reset();renderConfig();failPending('连接已断开，命令结果未知');}})();log('已连接，先切换 Native 再查询配置，不自动运行');await selectOutputFormat('Native')}
-async function disconnect(){if(closing)return;++sessionToken;closing=true;connected=false;failPending('连接已断开，命令结果未知');try{if(reader)await reader.cancel();if(readTask)await readTask;if(writer){await writer.abort().catch(()=>{});await txChain.catch(()=>{});writer.releaseLock();writer=null}if(port){await port.close();port=null}}finally{closing=false;boardConfig=null;renderConfig();log('已断开通信')}}
-async function transmit(text){if(!connected||!writer)throw Error('尚未连接串口');const bytes=new TextEncoder().encode(text+'\n'),sink=writer;const job=txChain.catch(()=>{}).then(()=>{if(sink!==writer||!connected)throw Error('连接已改变');return sink.write(bytes)});txChain=job;return job}
+function consume(f){received++;lastRx=performance.now();if(f.epoch!==lastEpoch){lastEpoch=f.epoch;failPending('板端已重启，命令结果未知；请重新读取');boardConfig=null;renderConfig();log('检测到板端重启');}try{recordFrame(f)}catch(e){recording=false;$('error').textContent='记录失败：'+e.message}if(f.kind===33){consumeRow(f);return}if(f.kind===16)status(decodeStatus(f));else if(f.kind===32){const r=decodeReply(f);if(!pending.has(r.id))return;const p=pending.get(r.id);pending.delete(r.id);clearTimeout(p.timer);if(!((r.schema===1&&r.firmware===87)||(r.schema===2&&r.firmware>=88&&r.firmware<=132))){p.reject(Error('配置协议不匹配'));return}if((p.command.startsWith('GetRow:')&&r.result===1)||(boardConfig&&r.source!==boardConfig.source)){p.reject(Error('回执类型／来源不匹配'));return}r.read_at=new Date().toISOString();if(p.command==='Get'&&r.result===1){setOutputFormat('Native');formatProbe.reset()}const previous=boardConfig;boardConfig=r;renderConfig();controlReply(p.command,r,previous);if(r.result===1)p.resolve(r);else p.reject(Error('板端拒绝 #'+r.id+'：'+({[-1]:'当前状态不允许／检查轴与停机条件',[-2]:'参数或命令格式错误',[-3]:'忙／来源冲突',[-4]:'请求取消／过期，请重新确认状态'}[r.result]||r.result)));}else if(!replaying){f.values=channels(f);if(f.values.length)add(f)}}
+async function connect(){
+ if(demo)throw Error('请先退出离线演示');if(connecting||port||connected||closing)throw Error('请先断开当前连接');
+ if(!globalThis.isSecureContext||!navigator.serial)throw Error('请用支持 Web Serial 的桌面 Chrome／Edge 打开此文件');
+ connecting=true;const token=++sessionToken;let selectedPort;
+ try{
+  selectedPort=await navigator.serial.requestPort();if(token!==sessionToken)return;
+  await selectedPort.open({baudRate:115200,dataBits:8,stopBits:1,parity:'none',flowControl:'none',bufferSize:65536});
+  if(token!==sessionToken){await selectedPort.close();return}
+  port=selectedPort;serialSession={port,token,recovering:false,writeEpoch:0};const session=serialSession;
+  serialStats.connections++;serialStats.lastByteAt=null;serialStats.info=port.getInfo?.()||null;serialStats.firmware=null;serialEvent('opened');
+  parser=new WireParser();received=0;lastRx=0;seenParserEpoch=0;lastEpoch=++recordEpoch;boardConfig=null;lastStatus={};status(lastStatus);
+  cancelCsvLoad();clear();replaying=false;$('replay').textContent='';writer=port.writable.getWriter();connected=true;
+  readTask=serialRead(session);
+  readTask.then(reason=>{if(reason&&serialActive(session))return closeSerial(reason)}).catch(error=>rememberRuntimeError(error.message,'serial-cleanup'));
+  writer.closed?.catch(error=>{if(serialActive(session)){serialStats.writeErrors++;serialEvent('writer-error',error);closeSerial(serialFailure('write',error)).catch(()=>{})}});
+  log('已连接，先切换 Native 再查询配置，不自动运行');await selectOutputFormat('Native');
+  if(!serialActive(session))throw Error('连接已中断，请重新连接');serialStats.firmware=boardConfig.firmware;serialEvent('native-ready');
+ }catch(error){
+  serialEvent('connect-error',error);
+  if(selectedPort&&port===selectedPort)await closeSerial(serialFailure('connect',error)).catch(()=>{});
+  throw error;
+ }finally{connecting=false}
+}
+async function disconnect(){return closeSerial(null,true)}
+async function transmit(text){
+ if(!connected||!writer)throw Error('尚未连接串口');const bytes=new TextEncoder().encode(text+'\n'),sink=writer,session=serialSession,writeEpoch=session.writeEpoch;
+ const job=txChain.catch(()=>{}).then(()=>{if(sink!==writer||!serialActive(session)||writeEpoch!==session.writeEpoch)throw Error('连接已改变或接收错误，未发送的命令已取消');return sink.write(bytes)}).catch(error=>{
+  if(sink===writer&&serialActive(session)&&writeEpoch===session.writeEpoch){serialStats.writeErrors++;serialEvent('write-error',error);closeSerial(serialFailure('write',error)).catch(()=>{})}throw error;
+ });txChain=job;return job;
+}
+if(navigator.serial?.addEventListener){
+ navigator.serial.addEventListener('disconnect',event=>{if(event.target===port||event.port===port){serialStats.osDisconnects++;serialEvent('os-disconnect')}});
+ navigator.serial.addEventListener('connect',()=>serialEvent('os-connect'));
+}
 async function send(command){command=String(command);if(replaying&&command!=='Stop'&&command!=='Get'&&!command.startsWith('GetRow:'))throw Error('当前为历史回放，请先返回实时');if(!/^[\x20-\x7e]+$/.test(command)||command.includes('@')||command.length>52)throw Error('命令须为 1～52 个 ASCII 字符，不能包含换行或 @');if(!connected)throw Error('尚未连接串口');if(command==='Format:Native')return selectOutputFormat('Native');if(command==='Format:JustFloat')return selectOutputFormat('JustFloat');if(outputFormat==='JustFloat'){if(/^(?:M[12]:)?Stop$/.test(command)){++batchEpoch;failPending('已发送停止');await transmit(command);log('TX '+command+' · JustFloat 无命令回执，请核对电机状态');return null}throw Error('板端为 JustFloat，请先切换 Native 使用控制台')}if(command!=='Get'&&command!=='Stop'&&!boardConfig)throw Error('请先读取配置并核对固件');if(pending.size&&!/^(?:M[12]:)?Stop$/.test(command))throw Error('请等待上一条命令回执');if(/^(?:M[12]:)?Stop$/.test(command))++batchEpoch;if(/^(?:M[12]:)?Stop$/.test(command))failPending('已发送停止，先前命令结果请重新查询');const id=nextRequest;nextRequest=nextRequest%65535+1;let resolve,reject;const reply=new Promise((a,b)=>{resolve=a;reject=b});reply.catch(()=>{});const timer=setTimeout(()=>{pending.delete(id);refreshControlChoices();reject(Error('#'+id+' 等待回执超时；结果未知，不自动重发，请读取确认'))},2500);pending.set(id,{resolve,reject,timer,command});refreshControlChoices();log('TX #'+id+' '+command);if(!boardConfig&&/^(?:M[12]:)?Stop$/.test(command))transmit('\n'+command).catch(()=>{});transmit('@'+id+':'+command).catch(e=>{if(pending.has(id)){clearTimeout(timer);pending.delete(id);refreshControlChoices();reject(e)}});const r=await reply;log('ACK #'+id+' '+command+' · 板端已受理，实际目标见实时曲线');return r}
 function setOutputFormat(format,verified=true){
  outputFormat=format;formatVerified=verified;
@@ -1728,13 +1837,13 @@ const EDITORS=[
  [5,'ibusLimit','M1 IBUS 阈值','A',.5,4,.1]
 ];
 let batchEpoch=0;
-function requireExtensions(){if(!boardConfig||boardConfig.schema!==2||(boardConfig.firmware<88||boardConfig.firmware>122))throw Error('此操作需要 UI-R88-PC；请升级固件后重新读取设置')}
+function requireExtensions(){if(!boardConfig||boardConfig.schema!==2||(boardConfig.firmware<88||boardConfig.firmware>132))throw Error('此操作需要 UI-R88-PC；请升级固件后重新读取设置')}
 function axisOptions(r,a){const s=r.settings,p=a?'axis2_':'',f=(a?s.axis2_flags:s.flags)>>>0;return {posSpeed:((f>>>8)&63)|(((f>>>25)&15)<<6)||30,speedLimit:(f>>>14)&1023||100,currentLoop:f&1,speedStep:s[p+'speed_step_x10']/10,torqueStep:s[p+'torque_step_x100']/100,positionStep:s[p+'position_step_x100']/100}}
 function editableConfig(r){const s=r.settings;return {work:r.work,profiles:r.profiles.slice(),drive:r.drive,esc:!!(s.control_config&32768),focus:r.focus,axes:[axisOptions(r,0),axisOptions(r,1)],ledBrightness:s.led_brightness,ledEnable:(s.flags>>>1)&1,gearRatio:s.gear_ratio_x100/100,gearOffset:s.gear_offset_x100/100,ibusLimit:(((s.control_config>>>8)&63)||30)/10}}
 function editorScope(k){return k===1||k===2||k===6||k>=8}
 for(const [key,id,title,unit,min,max,step]of EDITORS){const label=document.createElement('label'),input=document.createElement('input');label.className='row';label.append(document.createTextNode(title+' '));input.id=id;input.type=(key===6||key===7)?'checkbox':'number';input.min=min;input.max=max;input.step=step;input.setAttribute?.('aria-label',title);label.append(input,document.createTextNode(' '+unit));$(editorScope(key)?'axisEditors':'globalEditors').append(label)}
 function refreshSettingsCapabilities(){
- const r=boardConfig,a=Number($('settingsAxis').value||1)-1,enabled=r?.schema===2&&r?.firmware>=88&&r?.firmware<=122;
+ const r=boardConfig,a=Number($('settingsAxis').value||1)-1,enabled=r?.schema===2&&r?.firmware>=88&&r?.firmware<=132;
  for(const id of ['pauseMotors','applySettings','saveSettings','clearIbus','resetSettings','startDetect','saveDetect','readDiag','importConfig','applyDetection','restoreMotorPreset','readMotorParams'])$(id).disabled=!enabled;
  for(const id of ['applyDetection','restoreMotorPreset','readMotorParams'])$(id).disabled=!(enabled&&r.firmware>=104);
  $('saveCustom').disabled=!(enabled&&r.firmware>=105);
@@ -2205,7 +2314,7 @@ bindPlot();initMeasurement();if(globalThis.location?.hash==='#demo')toggleDemo()
  let lastCheckpoint=0;
  function checkpointRuntime(closed=false){
   const now=performance.now();if(!closed&&now-lastCheckpoint<10000)return;lastCheckpoint=now;
-  const s=runtimeSnapshot(),checkpoint={format:'FOC-browser-checkpoint',version:1,at:s.at,closed,source:s.source,uptimeSeconds:s.uptimeSeconds,sampling:s.sampling,rendering:s.rendering,memory:s.memory,plots:s.plots,errors:s.errors.slice(-20)};
+  const s=runtimeSnapshot(),checkpoint={format:'FOC-browser-checkpoint',version:1,at:s.at,closed,source:s.source,uptimeSeconds:s.uptimeSeconds,sampling:s.sampling,rendering:s.rendering,memory:s.memory,plots:s.plots,transport:s.transport,errors:s.errors.slice(-20)};
   try{localStorage.setItem('foc-runtime-checkpoint',JSON.stringify(checkpoint))}catch{}
  }
  $('runtimeDetails').addEventListener('toggle',()=>{if($('runtimeDetails').open)refreshRuntime()});

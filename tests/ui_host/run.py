@@ -10,6 +10,7 @@ parser=argparse.ArgumentParser(description="UI/storage/display regressions and o
 parser.add_argument("--query-baseline",type=Path,help="Previous ui_app.c to compile against the same deterministic host fixture")
 parser.add_argument("--formatter-baseline",type=Path,help="Previous ui_app.c; compare all diagnostic rows byte for byte")
 parser.add_argument("--view-baseline",type=Path,help="Previous ui_app.c; compare custom-page drawing, frame streams and interaction regression")
+parser.add_argument("--input-baseline",type=Path,help="Previous ui_input.c; compare real key/page interaction and refresh regression")
 args=parser.parse_args()
 repo = Path(__file__).resolve().parents[2]
 output = repo / "build/ui-validation"
@@ -26,12 +27,52 @@ includes = ["tests/ui_host", "mycode", "mycode/kk_ui/include", "mycode/kk_ui/src
 command = [shutil.which("gcc") or "gcc", "-std=c11", "-Wall", "-Wextra", "-Werror", "-O1", "-DKK_OLED_TEST", "-DCONTROL_STUB_UI"]
 command += ["-I" + str(repo / p) for p in includes]
 command += [str(p) for p in sources] + ["-Wl,--wrap=OLED_DrawUTF8", "-lm", "-o", str(output / "test_ui.exe")]
+input_command=command[:command.index(str(sources[0]))]
+input_command += [str(repo/'mycode/ui_input.c'),str(repo/'tests/ui_host/test_input.c'),'-o',str(output/'test_input.exe')]
+subprocess.run(input_command,cwd=repo,check=True)
+subprocess.run([str(output/'test_input.exe')],cwd=repo,check=True)
 subprocess.run(command, cwd=repo, check=True)
+subprocess.run([str(output / "test_ui.exe"),"keys"], cwd=repo, check=True)
 subprocess.run([str(output / "test_ui.exe")], cwd=repo, check=True)
 subprocess.run([str(output / "test_ui.exe"),"headless"], cwd=repo, check=True)
 subprocess.run([str(output / "test_ui.exe"),"queries"], cwd=repo, check=True)
 subprocess.run([str(output / "test_ui.exe"),"align"], cwd=repo, check=True)
 subprocess.run([str(output / "test_ui.exe"),"settings"], cwd=repo, check=True)
+config_command=command.copy()
+config_command[config_command.index(str(repo/'tests/ui_host/test_ui.c'))]=str(repo/'tests/ui_host/test_config.c')
+config_command[-1]=str(output/'test_config.exe')
+subprocess.run(config_command,cwd=repo,check=True)
+subprocess.run([config_command[-1]],cwd=repo,check=True)
+subprocess.run([config_command[-1],'headless'],cwd=repo,check=True)
+diag_command=command.copy()
+diag_command[diag_command.index(str(repo/'tests/ui_host/test_ui.c'))]=str(repo/'tests/ui_host/test_diag.c')
+diag_command[-1]=str(output/'test_diag.exe')
+subprocess.run(diag_command,cwd=repo,check=True)
+subprocess.run([diag_command[-1]],cwd=repo,check=True)
+# Mistyped compound descriptors must fail at definition time, not miscast a
+# different snapshot during a query. These copies never enter the firmware.
+syntax_prefix=command[:command.index(str(sources[0]))]
+ui_source=(repo/'mycode/ui_app.c').read_text(encoding='utf-8')
+valid='VALUE_ROW(MT6701Diagnostics,zero_count,enc_zero,VALUE_ZERO_INFO)'
+assert ui_source.count(valid)==1
+for name,invalid in [
+    ('wrong-snapshot','VALUE_ROW(StHsoSnapshot,qualified_samples,enc_zero,VALUE_ZERO_INFO)'),
+    ('unknown-kind','VALUE_ROW(MT6701Diagnostics,zero_count,enc_zero,VALUE_FORMAT_COUNT)')]:
+    bad=output/(name+'-diag.c');bad.write_text(ui_source.replace(valid,invalid),encoding='utf-8')
+    check=subprocess.run(syntax_prefix+['-fsyntax-only',str(bad)],cwd=repo,capture_output=True,text=True)
+    assert check.returncode and 'VALUE_KIND' in check.stderr,(name,check.stdout,check.stderr)
+print('PASS: wrong snapshot/unknown compound descriptor kinds are rejected at compile time')
+if args.input_baseline:
+    previous_command=command.copy()
+    previous_command[previous_command.index(str(repo/'mycode/ui_input.c'))]=str(args.input_baseline.resolve())
+    previous_command[-1]=str(output/'input_baseline.exe')
+    subprocess.run(previous_command,cwd=repo,check=True)
+    for scenario in ('keys','align','settings',''):
+        arguments=[scenario] if scenario else []
+        before=subprocess.check_output([previous_command[-1],*arguments],cwd=repo)
+        after=subprocess.check_output([str(output/'test_ui.exe'),*arguments],cwd=repo)
+        assert before==after,('Input refactor changed UI regression output',scenario)
+    print('PASS: R127/current input implementations produce identical key, alignment, settings and page regression output')
 metrics=subprocess.check_output([str(output / "test_ui.exe"),"metrics"],cwd=repo,text=True)
 (output/"query-metrics-current.txt").write_text(metrics)
 if args.query_baseline:
@@ -74,6 +115,34 @@ if args.formatter_baseline:
         traces.append(re.sub(rb'UI-R[0-9]+-[A-Z0-9]+',b'UI-FW',data))
     assert traces[0]==traces[1],"Diagnostic formatter changed an existing row"
     print(f'PASS: {len(traces[0].splitlines())} diagnostic rows match baseline exactly (firmware label normalized)')
+    # Instrument only a host-test copy of the formatter, never firmware.
+    counted=(repo/'mycode/ui_text.c').read_text(encoding='utf-8')
+    for function,counter in [('UiText_Format','test_format_calls'),('UiText_Fixed','test_fixed_calls')]:
+        start=counted.index('int '+function+'(');brace=counted.index('{',start)
+        counted=counted[:brace+1]+'\n    ++'+counter+';'+counted[brace+1:]
+    counted='extern unsigned test_format_calls,test_fixed_calls;\n'+counted
+    counted_path=output/'counted-ui-text.c';counted_path.write_text(counted,encoding='utf-8')
+    results=[];edge_traces=[]
+    for name,source_command in [('before',baseline_command),('after',command)]:
+        run_command=source_command.copy()
+        run_command[run_command.index(str(repo/'tests/ui_host/test_ui.c'))]=str(repo/'tests/ui_host/test_diag.c')
+        run_command[run_command.index(str(repo/'mycode/ui_text.c'))]=str(counted_path)
+        run_command[-1]=str(output/(name+'-diag.exe'))
+        subprocess.run(run_command,cwd=repo,check=True)
+        edge_traces.append(subprocess.check_output([run_command[-1]],cwd=repo,text=True))
+        work=subprocess.check_output([run_command[-1],'work'],cwd=repo,text=True)
+        (output/(name+'-diag-work.txt')).write_text(work,encoding='utf-8')
+        results.append(work)
+    assert edge_traces[0]==edge_traces[1],'Compound diagnostic boundary results changed'
+    rows=lambda text:[list(map(int,line.split()[1:])) for line in text.splitlines() if line.startswith('WORK ')]
+    old,new=map(rows,results)
+    assert len(old)==len(new)==24
+    assert results[0].splitlines()[0]==results[1].splitlines()[0],'LCD formatting work increased'
+    for a,b in zip(old,new):
+        assert a[:3]==b[:3] and a[3]>=b[3] and a[4]>=b[4] and a[5]==b[5],(a,b)
+    before=sum(row[3]+row[4] for row in old);after=sum(row[3]+row[4] for row in new)
+    assert before>after
+    print(f'PASS: compound edge-case outputs identical; 24 field queries format calls {before} -> {after}; full LCD format calls/snapshot reads unchanged')
 
 if args.view_baseline:
     comparison=output/'view-comparison'

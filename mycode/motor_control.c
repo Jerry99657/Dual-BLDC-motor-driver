@@ -11,6 +11,7 @@
 #include "motor_detect.h"
 #include <string.h>
 #include "motor_math.h"
+#include "motor_limits.h"
 
 /* Both axes share encoder estimation code, with separate state. M1 retains
  * its encoder/HSO mux; M2 owns its PI, calibration and run state below. */
@@ -116,16 +117,11 @@ uint32_t MotorControl_GetOptions(MotorAxis axis)
 }
 __attribute__((noinline,noclone)) static float speed_limit(MotorAxis axis)
 {
-    uint32_t flags=MotorControl_GetOptions(axis);
-    unsigned lim=(flags & APP_SPEED_LIMIT_MASK)>>APP_SPEED_LIMIT_SHIFT;
-    if (!lim || lim>APP_SPEED_LIMIT_MAX) lim=APP_SPEED_LIMIT_DEFAULT;
-    return MotorMath_Min((float)lim,MotorParams_GetAxis(axis)->max_speed_mech);
+    return MotorMath_Min((float)MotorLimits_Speed(MotorControl_GetOptions(axis)),MotorParams_GetAxis(axis)->max_speed_mech);
 }
 __attribute__((noinline,noclone)) static float position_speed(MotorAxis axis)
 {
-    unsigned limit=AppSettings_GetPositionSpeed(MotorControl_GetOptions(axis));
-    if (!limit || limit>APP_SPEED_LIMIT_MAX) limit=30;
-    return MotorMath_Min((float)limit,speed_limit(axis));
+    return MotorMath_Min((float)MotorLimits_Position(MotorControl_GetOptions(axis)),speed_limit(axis));
 }
 __attribute__((noinline,noclone)) float MotorControl_LimitSpeed(MotorAxis axis,float value)
 {
@@ -382,7 +378,7 @@ __attribute__((noinline,noclone,optimize("Oz"))) bool MotorControl_SelectProfile
             }
         } else {
             stop_axis(axis); (void)MotorParams_SelectAxis(axis,profile);
-            reset_m2(); save_config();
+            reset_m2();
         }
         if (ok) { clear_saved_axis(axis);save_config(); }
     }
@@ -592,15 +588,21 @@ __attribute__((noinline,noclone)) static void set_target(MotorAxis axis,JerryFOC
 {
     if (axis==MOTOR_AXIS_1) {
         if (mode==JERRYFOC_MODE_VELOCITY) JerryFOC_setVelocity(value);
-        else if (mode==JERRYFOC_MODE_POSITION) JerryFOC_setAbsolutePosition(value,
-            MotorMath_Min(limit>0 ? limit : position_speed(axis),position_speed(axis)));
+        else if (mode==JERRYFOC_MODE_POSITION) {
+            float cap=position_speed(axis);
+            JerryFOC_setAbsolutePosition(value,MotorMath_Min(limit>0 ? limit : cap,cap));
+        }
         else JerryFOC_setCurrent(value);
     } else {
         const MotorParams *m=MotorParams_GetAxis(axis);
-        if (mode==JERRYFOC_MODE_VELOCITY) control.m2.target_speed=clamp(value,-speed_limit(axis),speed_limit(axis));
+        if (mode==JERRYFOC_MODE_VELOCITY) {
+            float cap=speed_limit(axis);
+            control.m2.target_speed=clamp(value,-cap,cap);
+        }
         else if (mode==JERRYFOC_MODE_POSITION) {
             control.m2.target_position=value;
-            control.m2.position_speed=clamp(limit>0 ? limit : position_speed(axis),0.1f,position_speed(axis));
+            float cap=position_speed(axis);
+            control.m2.position_speed=clamp(limit>0 ? limit : cap,0.1f,cap);
         } else {
             float max=control.m2.loop ? m->rated_current : m->vel_limit;
             control.m2.target_q=clamp(value,-max,max);
@@ -730,7 +732,10 @@ __attribute__((noinline,noclone,optimize("Oz"))) bool MotorControl_CommandFrom(M
         MotorControl_Stop(axis); command_text="READY"; __set_PRIMASK(mask); return true;
     }
     if (axis==MOTOR_AXIS_1 && MotorControl_SixStepAllowed()) {
-        if (mode==JERRYFOC_MODE_VELOCITY && fabsf(value)>speed_limit(axis)) value=copysignf(speed_limit(axis),value);
+        if (mode==JERRYFOC_MODE_VELOCITY) {
+            float cap=speed_limit(axis);
+            if (fabsf(value)>cap) value=copysignf(cap,value);
+        }
         bool ok=(value==0 || (!control.timing_fault && resume_global_stop())) &&
             (mode==JERRYFOC_MODE_VELOCITY ? SixStep_Start(value) : SixStep_Throttle(value));
         command_text=ok ? "READY" : "6STEP RANGE/STOP";
@@ -739,7 +744,8 @@ __attribute__((noinline,noclone,optimize("Oz"))) bool MotorControl_CommandFrom(M
     }
     if (!resume_global_stop()) { __set_PRIMASK(mask); return false; }
     if (axis==MOTOR_AXIS_1 && MotorControl_HsoAllowed()) {
-        value=clamp(value,-speed_limit(axis),speed_limit(axis));
+        float cap=speed_limit(axis);
+        value=clamp(value,-cap,cap);
         if (!StHso_ValidTarget(value)) {
             command_text="HSO SPEED/DIR"; __set_PRIMASK(mask); return false;
         }
@@ -782,7 +788,10 @@ __attribute__((noinline,noclone,optimize("Oz"))) bool MotorControl_CommandFrom(M
         __set_PRIMASK(mask); return ok;
     }
     set_mode(axis,mode,loop);
-    if (mode==JERRYFOC_MODE_VELOCITY) value=clamp(value,-speed_limit(axis),speed_limit(axis));
+    if (mode==JERRYFOC_MODE_VELOCITY) {
+        float cap=speed_limit(axis);
+        value=clamp(value,-cap,cap);
+    }
     set_target(axis,mode,value,limit);
     bool ok=axis==MOTOR_AXIS_1 ? JerryFOC_startOutput()!=0U : MotorSampling_SetAxisOutputEnabled(axis,true);
     if (!ok && axis==MOTOR_AXIS_2) { stop_axis(axis); command_text="START REJECTED"; }
@@ -873,27 +882,27 @@ void MotorControl_Fast(void)
     }
     __set_PRIMASK(gate_mask);
     const MotorSampleFrame *f=MotorSampling_GetFrame();
+    const MotorParams *m=MotorParams_GetAxis(MOTOR_AXIS_2);
     control.m2.ia=f->m2_current[0]; control.m2.ib=f->m2_current[1];
-    float angle=norm(control.m2.electrical_scale*enc.angle-control.m2.electrical_zero);
+    float angle=control.m2.electrical_scale*enc.angle-control.m2.electrical_zero;
     float sensor;uint32_t at;
     if (f->timing_valid && MT6701_GetTimedAngle(1,&sensor,&at)) {
         angle=MotorMath_PredictAngle(control.m2.electrical_scale*sensor-control.m2.electrical_zero,
-            (float)MotorParams_GetAxis(MOTOR_AXIS_2)->pole_pairs*control.m2.velocity,
+            (float)m->pole_pairs*control.m2.velocity,
             (int32_t)(f->current_cycles[1]-at));
-        angle=norm(angle);
     }
+    angle=norm(angle);
     float alpha,beta,d,q;
     JerryFOC_Clarke(control.m2.ia,control.m2.ib,&alpha,&beta); JerryFOC_Park(alpha,beta,angle,&d,&q);
     control.m2.id=0.5f*(control.m2.id+d); control.m2.iq=0.5f*(control.m2.iq+q);
     if (!active) return;
     if (control.m2.aligning) {
-        const MotorParams *m=MotorParams_GetAxis(MOTOR_AXIS_2);
         JerryFOC_setAxisVoltage(MOTOR_AXIS_2,0,MotorMath_Min(3.0f,m->Rs*m->rated_current),0,NULL,NULL);
         return;
     }
     if (!control.m2.aligned) { MotorControl_Stop(MOTOR_AXIS_2); return; }
     if (control.m2.loop) {
-        float cap=MotorParams_GetAxis(MOTOR_AXIS_2)->rated_current;
+        float cap=m->rated_current;
         JerryFOC_CurrentControl(MOTOR_AXIS_2,&control.m2.loops,angle,control.m2.velocity,
             0.0f,clamp(control.m2.target_q,-cap,cap),control.m2.id,control.m2.iq);
     } else JerryFOC_setEncoderVoltage(MOTOR_AXIS_2,control.m2.target_q,0,angle,control.m2.velocity,NULL,NULL);

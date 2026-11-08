@@ -68,6 +68,8 @@ bool AppStorage_IsDeferred(void) { return storage_deferred; }
 bool AppStorage_IsDeferred(void) { return false; }
 #endif
 static MotorWorkMode work;
+static bool work_allowed=true;
+void ControlStub_SetWorkAllowed(bool value) { work_allowed=value; }
 static MotorAxis focus;
 static bool hso=false;
 static bool following;
@@ -159,6 +161,7 @@ float MotorControl_GroupError(void) { return 0; }
 float MotorControl_GroupTarget(void) { return JerryFOC_getTargetVelocity ? JerryFOC_getTargetVelocity() : 0; }
 uint32_t MotorControl_MaxCycles(void) { return 0; }
 bool MotorControl_SelectWork(MotorWorkMode m) {
+    if(!work_allowed) return false;
     work=m;
     SixStep_SetGeneric(MotorControl_SixStepAllowed() && (AppStorage_Get()->control_config & APP_CONFIG_ESC));
     focus=m==MOTOR_WORK_SINGLE_M2 || (m==MOTOR_WORK_INDEPENDENT && (AppStorage_Get()->control_config & APP_CONFIG_FOCUS_M2)) ? MOTOR_AXIS_2 : MOTOR_AXIS_1;

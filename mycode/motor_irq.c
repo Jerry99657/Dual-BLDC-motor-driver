@@ -5,6 +5,7 @@
 #include "tim.h"
 #include "adc.h"
 #include "board_diag.h"
+#include "ui_input.h"
 #include "stm32g4xx_ll_exti.h"
 #include "stm32g4xx_ll_tim.h"
 #include "stm32g4xx_ll_adc.h"
@@ -23,6 +24,7 @@ void MotorIRQ_Tim2(void)
     if (LL_TIM_IsEnabledIT_UPDATE(TIM2) && LL_TIM_IsActiveFlag_UPDATE(TIM2)) {
         uint32_t entered=DWT->CYCCNT;
         LL_TIM_ClearFlag_UPDATE(TIM2); /* rc_w0: preserve unrelated flags. */
+        ui_input_tick();
         JerryFOC_OuterIRQ();
         BoardDiag_Timing(1U,entered,0U);
     }
@@ -41,7 +43,7 @@ void MotorIRQ_Break(void)
     }
 }
 
-/* HAL still owns calibration, starts/stops and regular DMA. Preserve its
+/* HAL owns calibration and ADC enable/stop. Preserve its
  * error/state bits, but do not run the generic software-trigger/queue state
  * machine for this fixed external-trigger injected pair. */
 static bool adc_errors(ADC_HandleTypeDef *adc,uint32_t pending,uint32_t allowed)

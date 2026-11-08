@@ -51,6 +51,11 @@ set_source_files_properties(mycode/uart_port.c PROPERTIES COMPILE_OPTIONS "-Os;-
 
 # Every build checks the generated configuration against user-driver contracts.
 # CubeMX remains the source of pin/clock/DMA initialization parameters.
+
+# Regular ADC circular-DMA runtime; CubeMX and HAL retain ADC initialization.
+target_sources(${CMAKE_PROJECT_NAME} PRIVATE mycode/adc_port.c)
+set_source_files_properties(mycode/adc_port.c PROPERTIES COMPILE_OPTIONS "-Os;-flto")
+
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
 add_custom_target(cubemx_config_check
     COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/scripts/check_cubemx.py

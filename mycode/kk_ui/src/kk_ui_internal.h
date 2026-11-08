@@ -44,15 +44,6 @@ typedef struct {
 } KK_UI_PageState;
 
 typedef struct {
-    uint32_t changed_at;
-    uint32_t pressed_at;
-    uint32_t repeat_at;
-    uint8_t candidate;
-    uint8_t stable;
-    uint8_t armed;
-} KK_UI_KeyState;
-
-typedef struct {
     int32_t scroll_from_q8;
     int32_t focus_from_q8;
     uint32_t started;
@@ -159,7 +150,6 @@ typedef struct {
     KK_UI_Overlay overlay;
     KK_UI_Toast toast;
     KK_UI_Deferred deferred;
-    KK_UI_KeyState keys[KK_UI_KEY_COUNT];
     KK_UI_EventId events[KK_UI_EVENT_QUEUE_LENGTH];
     KK_UI_ErrorInfo error;
     uint32_t last_update;
@@ -178,6 +168,7 @@ typedef struct {
     uint8_t in_callback;
     uint8_t reject_flash;
     uint8_t blocked_keys;
+    uint8_t active_keys;
     uint8_t repeat_resume_keys; /* 转场期间按住的方向键，结束后重新计时连发。 */
 } KK_UI_Runtime;
 

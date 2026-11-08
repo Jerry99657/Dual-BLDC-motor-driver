@@ -261,10 +261,14 @@ __attribute__((noinline)) void JerryFOC_TrackCurrent(PIDController *pid,float ap
     pid->integral_prev=symmetric_limit(pid->integral_prev+0.2f*(applied-requested),pid->limit);
 }
 
+static float axis_voltage(MotorAxis axis,float uq,float ud,float angle,float *aq,float *ad,
+    bool route_encoder,float speed,const MotorParams *motor);
+
 __attribute__((noinline,noclone)) void JerryFOC_CurrentControl(MotorAxis axis,
     MotorControllers *loops,float angle,float speed,float target_d,float target_q,float id,float iq)
 {
     bool hso=axis==MOTOR_AXIS_1 && MotorControl_HsoAllowed();
+    const MotorParams *m=MotorParams_GetAxis(axis);
     float ffq=0.0f,ffd=0.0f;
     if (hso) {
         /* HSO uses PI-only voltage control during startup AND CONTROL.
@@ -272,11 +276,10 @@ __attribute__((noinline,noclone)) void JerryFOC_CurrentControl(MotorAxis axis,
          * model voltage later. The observer still receives measured U/I. */
         loops->current_feedforward=0.0f;
     } else {
-        const MotorParams *m=MotorParams_GetAxis(axis);
         float w=speed*(float)m->pole_pairs;
         if (!isfinite(w)) w=0.0f;
         float previous_gain=loops->current_feedforward;
-        float gain=MotorMath_Min(1.0f,previous_gain+0.002f);
+        float gain=previous_gain==1.0f ? 1.0f : MotorMath_Min(1.0f,previous_gain+0.002f);
         ffq=w*(m->psi_f+m->Ls*id);ffd=-w*m->Ls*iq;
         float gain_change=gain-previous_gain;
         if (gain_change!=0.0f) {
@@ -292,14 +295,16 @@ __attribute__((noinline,noclone)) void JerryFOC_CurrentControl(MotorAxis axis,
     float ud=JerryFOC_CurrentPI(&loops->d,target_d-id)+ffd;
     float aq,ad;
     bool blocked=axis==MOTOR_AXIS_1 && !JerryFOC_isDriveReady();
-    if (hso || blocked) JerryFOC_setAxisVoltage(axis,blocked ? 0.0f : uq,blocked ? 0.0f : ud,angle,&aq,&ad);
-    else JerryFOC_setEncoderVoltage(axis,uq,ud,angle,speed,&aq,&ad);
+    /* Reuse this call's model and the bus value actually used by modulation.
+     * The modulator still performs its own live route/readiness gates. */
+    float bus=axis_voltage(axis,blocked ? 0.0f : uq,blocked ? 0.0f : ud,
+        angle,&aq,&ad,!hso && !blocked,speed,m);
     if (!hso && !blocked) {
         /* CCR quantization is bounded by one PWM tick; integrating it as
          * saturation biases PI even with zero current error. Keep the real
          * CCR estimate, but ignore sub-tick differences for anti-windup. */
         TIM_TypeDef *timer=axis==MOTOR_AXIS_1 ? htim1.Instance : htim8.Instance;
-        float quantum=timer->ARR ? MotorSampling_GetBusVoltage()/(float)timer->ARR : 0.0f;
+        float quantum=timer->ARR ? bus/(float)timer->ARR : 0.0f;
         if (fabsf(aq-uq)<quantum) aq=uq;
         if (fabsf(ad-ud)<quantum) ad=ud;
     }
@@ -378,13 +383,19 @@ extern uint32_t SystemCoreClock;
  * to 0.5% duty, uses a continuous +/-0.1 A current transition and the TI
  * 25 C / 10 V-gate nominal Rds=1.8 mOhm. These are initial model values. */
 static float inverter_loss(float amps,float dead_voltage)
-{ return dead_voltage*MotorMath_Clamp(amps*10.0f,-1.0f,1.0f)+0.0018f*amps; }
-
-__RAM_FUNC __attribute__((noinline,noclone)) static void axis_voltage(MotorAxis axis,
-    float Uq,float Ud,float angle_el,float *applied_q,float *applied_d,bool encoder,float speed)
 {
-    if ((unsigned)axis >= MOTOR_AXIS_COUNT) return;
-    const MotorParams *motor=MotorParams_GetAxis(axis);
+    float sign=amps*10.0f;
+    sign=sign< -1.0f ? -1.0f : sign>1.0f ? 1.0f : sign;
+    return dead_voltage*sign+0.0018f*amps;
+}
+
+__RAM_FUNC __attribute__((noinline,noclone)) static float axis_voltage(MotorAxis axis,
+    float Uq,float Ud,float angle_el,float *applied_q,float *applied_d,bool route_encoder,float speed,
+    const MotorParams *motor)
+{
+    if ((unsigned)axis >= MOTOR_AXIS_COUNT) return 0.0f;
+    bool encoder=route_encoder && (axis!=MOTOR_AXIS_1 || !MotorControl_HsoAllowed());
+    if (route_encoder && axis==MOTOR_AXIS_1 && !JerryFOC_isDriveReady()) { Uq=Ud=0;encoder=false; }
     float bus_voltage = MotorSampling_GetBusVoltage();
     if (!MotorSampling_IsAxisReady(axis) || !isfinite(bus_voltage) || bus_voltage < 1.0f ||
         !isfinite(Uq) || !isfinite(Ud) || !isfinite(angle_el)) {
@@ -395,7 +406,7 @@ __RAM_FUNC __attribute__((noinline,noclone)) static void axis_voltage(MotorAxis 
             foc.g_shared_prev_Ualpha=foc.g_shared_prev_Ubeta=0.0f;
             foc.g_shared_prev_Ud=foc.g_shared_prev_Uq=0.0f;
         }
-        return;
+        return bus_voltage;
     }
     TIM_TypeDef *timer=(axis==MOTOR_AXIS_1 ? htim1.Instance : htim8.Instance);
     const MotorSampleFrame *frame=MotorSampling_GetFrame();
@@ -500,7 +511,7 @@ __RAM_FUNC __attribute__((noinline,noclone)) static void axis_voltage(MotorAxis 
             foc.g_shared_prev_Ualpha=actual_alpha; foc.g_shared_prev_Ubeta=actual_beta;
             foc.g_shared_prev_Ud=actual_d; foc.g_shared_prev_Uq=actual_q;
         }
-        return;
+        return bus_voltage;
     }
 neutral:
     setAxisPwm(axis,0.5f,0.5f,0.5f);
@@ -508,16 +519,15 @@ neutral:
     if (applied_d) *applied_d=0.0f;
     if (axis==MOTOR_AXIS_1)
         foc.g_shared_prev_Ualpha=foc.g_shared_prev_Ubeta=foc.g_shared_prev_Ud=foc.g_shared_prev_Uq=0.0f;
+    return bus_voltage;
 }
 void JerryFOC_setAxisVoltage(MotorAxis axis,float uq,float ud,float angle,float *aq,float *ad)
 {
-    axis_voltage(axis,uq,ud,angle,aq,ad,false,0.0f);
+    (void)axis_voltage(axis,uq,ud,angle,aq,ad,false,0.0f,MotorParams_GetAxis(axis));
 }
 void JerryFOC_setEncoderVoltage(MotorAxis axis,float uq,float ud,float angle,float speed,float *aq,float *ad)
 {
-    bool encoder=axis!=MOTOR_AXIS_1 || !MotorControl_HsoAllowed();
-    if (axis==MOTOR_AXIS_1 && !JerryFOC_isDriveReady()) { uq=ud=0;encoder=false; }
-    axis_voltage(axis,uq,ud,angle,aq,ad,encoder,speed);
+    (void)axis_voltage(axis,uq,ud,angle,aq,ad,true,speed,MotorParams_GetAxis(axis));
 }
 
 __RAM_FUNC void JerryFOC_setPhaseVoltage(float Uq, float Ud, float angle_el)
@@ -577,10 +587,13 @@ static uint8_t sensored_active(void)
     return (foc.angle_source && AngleSrc_Encoder_IsSource(foc.angle_source)) ? 1U : 0U;
 }
 
-__attribute__((noinline,noclone)) static uint8_t sensored_control_ready(void)
+__attribute__((noinline,noclone)) static uint8_t encoder_control_ready(void)
 {
-    return (JerryFOC_isDriveReady() && MT6701_IsContinuous() && MT6701_IsHealthy() &&
-            AngleSrc_Encoder_IsAligned()) ? 1U : 0U;
+    return MT6701_IsContinuous() && MT6701_IsHealthy() && AngleSrc_Encoder_IsAligned();
+}
+static uint8_t sensored_control_ready(void)
+{
+    return JerryFOC_isDriveReady() && encoder_control_ready();
 }
 
 __attribute__((noinline,noclone)) void JerryFOC_InitPID(PIDController *pid,float p,float i,float limit,float ramp)
@@ -848,6 +861,17 @@ __RAM_FUNC void JerryFOC_Park(float Ialpha, float Ibeta, float angle_el, float *
     *Iq = Ibeta * ct - Ialpha * st;
 }
 
+/* Idle monitoring, open-loop diagnostics and closed loop share the same
+ * current filter. Each mode supplies its own d-axis history. */
+__attribute__((noinline,noclone)) static void filter_m1_current(float raw_d,float raw_q,float *previous_d)
+{
+    float alpha = M0_Curr_Flt.Tf / (M0_Curr_Flt.Tf + 0.0001f);
+    iq_current = alpha * M0_Curr_Flt.y_prev + (1.0f - alpha) * raw_q;
+    M0_Curr_Flt.y_prev = iq_current;
+    id_current = alpha * *previous_d + (1.0f - alpha) * raw_d;
+    *previous_d = id_current;
+}
+
 /* ================= 10 kHz 快速环 ================= */
 __RAM_FUNC void JerryFOC_run(void)
 {
@@ -862,11 +886,7 @@ __RAM_FUNC void JerryFOC_run(void)
             float ia, ib, raw_d, raw_q;
             JerryFOC_Clarke(phase_current_a, phase_current_b, &ia, &ib);
             JerryFOC_Park(ia, ib, foc.angle_source->getElectricalAngle(), &raw_d, &raw_q);
-            float alpha = M0_Curr_Flt.Tf / (M0_Curr_Flt.Tf + Ts_curr);
-            iq_current = alpha * M0_Curr_Flt.y_prev + (1.0f-alpha) * raw_q;
-            M0_Curr_Flt.y_prev = iq_current;
-            id_current = alpha * foc.id_filter_prev + (1.0f-alpha) * raw_d;
-            foc.id_filter_prev = id_current;
+            filter_m1_current(raw_d,raw_q,&foc.id_filter_prev);
         }
         return;
     }
@@ -878,9 +898,13 @@ __RAM_FUNC void JerryFOC_run(void)
         return;
     }
 
+    const bool hso=MotorControl_HsoAllowed();
+
+    /* Drive readiness was checked above. Reuse that admission here; the
+     * modulator/output path still performs its own live safety checks. */
     /* 正常闭环要求编码器在线且已完成零点标定；
      * 纯开环诊断不需要编码器零点。 */
-    if (!g_openloop_debug && !(MotorControl_HsoAllowed() ? StHso_IsRunning() : sensored_control_ready())) {
+    if (!g_openloop_debug && !(hso ? StHso_IsRunning() : encoder_control_ready())) {
         JerryFOC_Target_Iq = 0.0f;
         JerryFOC_setPhaseVoltage(0.0f, 0.0f, 0.0f);
         return;
@@ -905,45 +929,39 @@ __RAM_FUNC void JerryFOC_run(void)
         float raw_Id, raw_Iq;
         JerryFOC_Park(Ialpha, Ibeta, g_openloop_angle, &raw_Id, &raw_Iq);
 
-        float alpha = M0_Curr_Flt.Tf / (M0_Curr_Flt.Tf + Ts_curr);
-        iq_current = alpha * M0_Curr_Flt.y_prev + (1.0f - alpha) * raw_Iq;
-        M0_Curr_Flt.y_prev = iq_current;
-        id_current = alpha * foc.debug_id_filter_prev + (1.0f - alpha) * raw_Id;
-        foc.debug_id_filter_prev = id_current;
+        filter_m1_current(raw_Id,raw_Iq,&foc.debug_id_filter_prev);
 
         JerryFOC_setPhaseVoltage(uq_voltage, 0.0f, g_openloop_angle);
         return;
     }
 
-    float electrical_angle = MotorControl_HsoAllowed() ? StHso_ControlAngle() :
-        foc.angle_source ? foc.angle_source->getElectricalAngle() : 0.0f;
-    if (!MotorControl_HsoAllowed() && foc.angle_source && AngleSrc_Encoder_IsSource(foc.angle_source) && sample->timing_valid)
+    float electrical_angle;
+    if (hso) electrical_angle=StHso_ControlAngle();
+    else if (foc.angle_source && AngleSrc_Encoder_IsSource(foc.angle_source) && sample->timing_valid)
         electrical_angle=AngleSrc_Encoder_At(filtered_velocity_global,sample->current_cycles[0]);
+    else electrical_angle=foc.angle_source ? foc.angle_source->getElectricalAngle() : 0.0f;
 
     float raw_Id, raw_Iq;
     JerryFOC_Park(Ialpha, Ibeta, electrical_angle, &raw_Id, &raw_Iq);
 
-    float alpha = M0_Curr_Flt.Tf / (M0_Curr_Flt.Tf + Ts_curr);
-    iq_current = alpha * M0_Curr_Flt.y_prev + (1.0f - alpha) * raw_Iq;
-    M0_Curr_Flt.y_prev = iq_current;
-    id_current = alpha * foc.id_filter_prev + (1.0f - alpha) * raw_Id;
-    foc.id_filter_prev = id_current;
+    filter_m1_current(raw_Id,raw_Iq,&foc.id_filter_prev);
 
     float target_iq = JerryFOC_Target_Iq;
     if (!isfinite(target_iq)) target_iq = 0.0f;
     float target_id = 0.0f;
-    if (MotorControl_HsoAllowed()) StHso_BlendCurrent(&target_id,&target_iq);
+    if (hso) StHso_BlendCurrent(&target_id,&target_iq);
     if (!flag_use_current_loop) {
         JerryFOC_setEncoderVoltage(MOTOR_AXIS_1,target_iq,0.0f,electrical_angle,filtered_velocity_global,NULL,NULL);
     } else {
         /* Also enforce this at the fast-loop boundary: the velocity outer
          * loop and external application code can write Target_Iq directly. */
-        float iq_cap=sqrtf(MotorMath_Max(0.0f,active_motor->rated_current*active_motor->rated_current-target_id*target_id));
+        float iq_cap=target_id==0.0f ? fabsf(active_motor->rated_current) :
+            sqrtf(MotorMath_Max(0.0f,active_motor->rated_current*active_motor->rated_current-target_id*target_id));
         target_iq = symmetric_limit(target_iq,iq_cap);
         /* HSO's dq crossfade is an applied current, not the 1 kHz speed-PI
          * request. Feeding it back here would blend the same request again
          * on each of the ten fast-loop ticks and distort startup torque. */
-        if (!MotorControl_HsoAllowed()) JerryFOC_Target_Iq = target_iq;
+        if (!hso) JerryFOC_Target_Iq = target_iq;
         JerryFOC_CurrentControl(MOTOR_AXIS_1,&m1_controllers,electrical_angle,
             filtered_velocity_global,target_id,target_iq,id_current,iq_current);
     }
@@ -986,11 +1004,12 @@ void JerryFOC_OuterIRQ(void)
     /* 编码器多圈机械角与速度只在这里更新 */
     AngleSrc_Encoder_Update(Ts);
 
-    uint8_t control_ready = MotorControl_HsoAllowed() ? StHso_IsRunning() : sensored_control_ready();
+    const bool hso=MotorControl_HsoAllowed();
+    uint8_t control_ready = hso ? StHso_IsRunning() : sensored_control_ready();
 
     /* 速度：编码器角度源直接提供机械角速度 */
-    float raw_velocity = MotorControl_HsoAllowed() ? StHso_ControlVelocity() : 0.0f;
-    if (!MotorControl_HsoAllowed() && foc.angle_source) {
+    float raw_velocity = hso ? StHso_ControlVelocity() : 0.0f;
+    if (!hso && foc.angle_source) {
         if (foc.angle_source->providesVelocity) raw_velocity=foc.angle_source->getVelocity();
         else {
             static float last_mechanical_angle;
@@ -1019,7 +1038,7 @@ void JerryFOC_OuterIRQ(void)
         foc.sensored_velocity_reference = filtered_velocity_global;
         JerryFOC_ResetPID(&vel_loop_M0);
         JerryFOC_ResetPID(&pos_loop_M0);
-    } else if (g_openloop_debug || (MotorControl_HsoAllowed() && StHso_IsStarting())) {
+    } else if (g_openloop_debug || (hso && StHso_IsStarting())) {
         if (!g_openloop_debug) { JerryFOC_Target_Iq=0; foc.sensored_velocity_reference=raw_velocity; JerryFOC_ResetPID(&vel_loop_M0); }
         /* 开环诊断：目标电压由协议命令直接设置，外环不介入 */
     } else if (foc.current_control_mode == JERRYFOC_MODE_POSITION) {

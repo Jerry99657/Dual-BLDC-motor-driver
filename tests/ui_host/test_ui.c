@@ -15,6 +15,7 @@
 #include "board_diag.h"
 #include "st_hso.h"
 #include "app_storage.h"
+#include "app_settings.h"
 #include "motor_control.h"
 #include "ui_fonts.h"
 #include "motor_sixstep.h"
@@ -73,6 +74,7 @@ static FILE *draw_trace;
 static uint32_t last_hash;
 static unsigned transfer_delay = 30;
 static bool fail_next_frame;
+static bool fail_next_start;
 static unsigned recoveries;
 static JerryFOC_ControlMode mode;
 static float velocity, angle, iq;
@@ -107,6 +109,7 @@ static MT6701Diagnostics enc_diag,enc2_diag;
 extern void ControlStub_SetSecondState(MotorAxisSnapshot s);
 extern void ControlStub_SetDeferred(bool value);
 extern void ControlStub_SetOptionsAllowed(bool value);
+extern void ControlStub_SetWorkAllowed(bool value);
 extern void ControlStub_ResetInput(void);
 volatile float JerryFOC_Target_Velocity, JerryFOC_Target_Position, JerryFOC_Target_Iq;
 volatile uint8_t g_openloop_debug;
@@ -209,7 +212,8 @@ uint8_t JerryFOC_selectMotor(MotorProfile profile) {
 }
 bool AppStorage_IsReady(void) { return true; }
 AppSettings *AppStorage_Get(void) { return &settings; }
-void AppStorage_Load(void) {}
+static unsigned storage_loads;
+void AppStorage_Load(void) { ++storage_loads; }
 bool AppStorage_Save(void) { return true; }
 bool AppStorage_RequestSave(void) {
     if(save_state==APP_SAVE_WRITING) return false;
@@ -245,12 +249,15 @@ static void count_frame(void) {
 OLED_Status OLED_DriverWriteBlocking(void) { count_frame(); return OLED_OK; }
 OLED_Status OLED_DriverWriteIT(void) { return OLED_UNSUPPORTED; }
 OLED_Status OLED_DriverWriteDMA(void) {
+    if(fail_next_start) { fail_next_start=false;return OLED_ERROR; }
     count_frame(); dma_busy=true; dma_done=tick+transfer_delay; return OLED_OK;
 }
 bool OLED_DriverIsBusy(void) { return dma_busy; }
 void OLED_DriverAbort(void) { dma_busy=false; OLED_InternalTransferFinished(OLED_ERROR); }
 OLED_Status OLED_DriverSetContrast(uint8_t value) { (void)value; return OLED_UNSUPPORTED; }
 OLED_Status OLED_DriverSetPowerSave(bool enable) { (void)enable; return OLED_OK; }
+static unsigned foreground_period;
+static bool periodic_input=true;
 static void step(uint8_t keys, unsigned ms) {
     for (unsigned i=0; i<ms; ++i) {
         ++tick;
@@ -262,9 +269,10 @@ static void step(uint8_t keys, unsigned ms) {
         static const uint16_t pins[]={KEY_Up_Pin,KEY_Down_Pin,KEY_OK_Pin,KEY_Left_Pin,KEY_Right_Pin,KEY2_Pin,KEY1_Pin};
         host_gpio.pins=0xFFFFU;
         for(unsigned key=0;key<7;++key) if(keys&(1U<<key)) host_gpio.pins&=~pins[key];
-        uint8_t raw_keys=ui_input_poll();
+        if(periodic_input) ui_input_tick();
+        if(foreground_period && tick%foreground_period) continue;
         ui_app_update(tick);
-        KK_UI_Status status=KK_UI_Update(tick,(KK_UI_Input){.keys=raw_keys});
+        KK_UI_Status status=KK_UI_Update(tick,ui_input_poll());
         if(status==KK_UI_DISPLAY_ERROR || status==KK_UI_DISPLAY_TIMEOUT) {
             ++recoveries;
             ui_app_note_display_error();
@@ -623,12 +631,112 @@ static void check_r58(void) {
     MotorControl_SelectWork(MOTOR_WORK_SINGLE_M1); MotorControl_SetFocus(MOTOR_AXIS_1);
     puts("PASS: R58 M1 protection routes/editor units/cancel/bounds/persistence, running and editor-race refusal, HAL failure, confirmed manual clear and fixed physical-M1 diagnostics");
 }
-static void enter_independent_run(void) {
+static void enter_dual_run(MotorWorkMode work) {
     reset(); MotorControl_StopAll(); MotorControl_SelectFeedback(false);
-    MotorControl_SelectWork(MOTOR_WORK_INDEPENDENT); MotorControl_SetFocus(MOTOR_AXIS_1);
+    MotorControl_SelectWork(work); MotorControl_SetFocus(MOTOR_AXIS_1);
     ControlStub_SetSecondState((MotorAxisSnapshot){.healthy=true,.aligned=true,.ready=true,.status="READY"});
     ui_app_reset(tick); assert(KK_UI_Init(ui_app_get())==KK_UI_OK); settle();
     press(KK_UI_KEY_OK); settle(); assert(KK_UI_GetCurrentPage()==UI_PAGE_RUN);
+}
+static void enter_independent_run(void) { enter_dual_run(MOTOR_WORK_INDEPENDENT); }
+static void check_display_key_rearm(void) {
+    unsigned saved_delay=transfer_delay;
+    for(unsigned back_key=0;back_key<2;++back_key) {
+        enter_independent_run();press(KK_UI_KEY_RIGHT);press(KK_UI_KEY_UP);press(KK_UI_KEY_OK);
+        assert(output_requested);
+        transfer_delay=3;
+        for(unsigned i=0;i<200 && dma_busy;++i) step(0,1);
+        assert(!dma_busy);
+        velocity=1.2f;KK_UI_Invalidate();
+        for(unsigned i=0;i<30 && !dma_busy;++i) step(0,1);
+        assert(dma_busy);
+        unsigned before=recoveries;fail_next_frame=true;
+        uint8_t key=back_key ? KK_UI_KEY_BACK : KK_UI_KEY_OK;
+        /* A display fault during debounce intentionally consumes the held
+         * press. It must not later confirm/start a different screen. */
+        step(key,80);
+        assert(recoveries==before+1 && output_requested && KK_UI_GetCurrentPage()==UI_PAGE_RUN);
+        step(0,30);press(key);
+        assert(!output_requested); /* A fresh press stops on its first event. */
+        if(!back_key) assert(KK_UI_GetCurrentPage()==UI_PAGE_RUN);
+    }
+    transfer_delay=saved_delay;
+    enter_independent_run();unsigned before=recoveries;
+    fail_next_start=true;press(KK_UI_KEY_UP);press(KK_UI_KEY_OK);
+    assert(!fail_next_start && recoveries==before+1 && output_requested);
+    assert(fabsf(JerryFOC_Target_Iq-0.05f)<0.001f); /* Submit error after routing must not add twice. */
+    MotorControl_StopAll();MotorControl_SelectWork(MOTOR_WORK_SINGLE_M1);
+    MotorControl_SetFocus(MOTOR_AXIS_1);
+    puts("PASS: display recovery reproduces consumed OK/Back during debounce, no delayed toggle; release/new press stops independent Run immediately");
+}
+static void check_sparse_run_keys(void) {
+    const MotorWorkMode works[]={MOTOR_WORK_INDEPENDENT,MOTOR_WORK_SYNC_SPEED,MOTOR_WORK_SYNC_POSITION};
+    for(unsigned w=0;w<3;++w)for(unsigned capture=0;capture<2;++capture)for(unsigned back_key=0;back_key<2;++back_key) {
+        enter_dual_run(works[w]);press(KK_UI_KEY_UP);press(KK_UI_KEY_OK);
+        assert(output_requested);
+        /* Reproduce a short press entirely between two foreground visits.
+         * Periodic sampling continues while drawing/main is unavailable. */
+        periodic_input=capture!=0;foreground_period=80;
+        step(0,80U-tick%80U);step(0,5);
+        step(back_key ? KK_UI_KEY_BACK : KK_UI_KEY_OK,35);
+        step(0,280);
+        assert(output_requested==(capture==0));
+        if(capture) { MotorAxisSnapshot s;MotorControl_GetAxis(MOTOR_AXIS_2,&s);assert(!s.active); }
+        foreground_period=0;periodic_input=true;
+    }
+    /* A retained STOP press must never become START after a hardware fault. */
+    enter_independent_run();press(KK_UI_KEY_UP);press(KK_UI_KEY_OK);
+    foreground_period=80;step(0,80U-tick%80U);step(0,5);step(KK_UI_KEY_OK,35);
+    global_stopped=true;output_requested=false;step(0,400);
+    assert(global_stopped && !output_requested);
+    foreground_period=0;
+    enter_independent_run();press(KK_UI_KEY_UP);press(KK_UI_KEY_OK);
+    foreground_period=80;step(0,80U-tick%80U);step(0,5);step(KK_UI_KEY_OK,35);
+    MotorControl_SetFocus(MOTOR_AXIS_2);step(0,400);
+    MotorAxisSnapshot second;MotorControl_GetAxis(MOTOR_AXIS_2,&second);
+    assert(output_requested && !second.active); /* No press crosses axis context. */
+    foreground_period=0;
+    /* Independent M2 keeps running when M1 stops. Cancel M1's old STOP
+     * press even though the page and the other output are still active. */
+    enter_independent_run();press(KK_UI_KEY_UP);press(KK_UI_KEY_OK);
+    assert(MotorControl_Command(MOTOR_AXIS_2,JERRYFOC_MODE_VELOCITY,1,30,false));step(0,50);
+    foreground_period=80;step(0,80U-tick%80U);step(0,5);step(KK_UI_KEY_OK,35);
+    MotorControl_Stop(MOTOR_AXIS_1);step(0,400);
+    MotorControl_GetAxis(MOTOR_AXIS_2,&second);assert(!output_requested && second.active);
+    foreground_period=0;
+    /* First OK applies a changed target; a second short OK arrives before
+     * the foreground has sampled release. It must still stop exactly once. */
+    enter_independent_run();press(KK_UI_KEY_RIGHT);press(KK_UI_KEY_UP);press(KK_UI_KEY_OK);
+    press(KK_UI_KEY_UP);
+    foreground_period=80;step(0,80U-tick%80U);step(0,5);step(KK_UI_KEY_OK,35);step(0,120);
+    assert(output_requested);
+    step(0,5);step(KK_UI_KEY_OK,35);step(0,440);assert(!output_requested);
+    foreground_period=0;
+    enter_dual_run(MOTOR_WORK_SYNC_SPEED);press(KK_UI_KEY_UP);press(KK_UI_KEY_OK);
+    step(KK_UI_KEY_OK,1200);step(0,30);assert(!output_requested && !MotorControl_IsGroupActive());
+    enter_dual_run(MOTOR_WORK_SYNC_SPEED);press(KK_UI_KEY_UP);press(KK_UI_KEY_OK);
+    foreground_period=80;step(0,80U-tick%80U);step(0,5);
+    for(unsigned i=0;i<35;++i) step(KK_UI_KEY_BACK|((i/5U)%2U ? KK_UI_KEY_OK : 0U),1);
+    step(0,280);assert(!output_requested);foreground_period=0; /* Independent debounce. */
+    enter_dual_run(MOTOR_WORK_SYNC_SPEED);press(KK_UI_KEY_UP);press(KK_UI_KEY_OK);
+    foreground_period=80;step(0,80U-tick%80U);step(0,5);step(KK_UI_KEY_OK,35);
+    MotorControl_StopAll();step(KK_UI_KEY_OK,400);assert(!output_requested && !MotorControl_IsGroupActive());
+    foreground_period=0;step(0,30);press(KK_UI_KEY_OK);assert(output_requested); /* Fresh press still works. */
+    MotorControl_StopAll();MotorControl_SelectWork(MOTOR_WORK_SINGLE_M1);MotorControl_SetFocus(MOTOR_AXIS_1);
+    for(unsigned left=0;left<2;++left) {
+        reset();foreground_period=80;
+        step(0,80U-tick%80U);step(0,5);
+        step(left ? KK_UI_KEY_LEFT : KK_UI_KEY_RIGHT,35);step(0,280);
+        assert(KK_UI_GetCurrentPage()==UI_PAGE_HOME && kk_ui.current.selected==(left ? 3 : 1));
+        foreground_period=0;
+    }
+    enter_independent_run();foreground_period=80;
+    step(0,80U-tick%80U);step(0,5);step(KK_UI_KEY_UP,35);step(0,200);
+    foreground_period=0;press(KK_UI_KEY_OK);assert(output_requested && fabsf(JerryFOC_Target_Iq-0.05f)<0.001f);
+    foreground_period=80;step(0,80U-tick%80U);step(0,5);step(KK_UI_KEY_DOWN,35);step(0,200);
+    foreground_period=0;press(KK_UI_KEY_OK);assert(fabsf(JerryFOC_Target_Iq)<0.001f);
+    MotorControl_StopAll();MotorControl_SelectWork(MOTOR_WORK_SINGLE_M1);MotorControl_SetFocus(MOTOR_AXIS_1);
+    puts("PASS: all six keys use TIM2 capture: 35ms OK/Back in independent/sync runs and Home L/R/Run U/D survive 80ms foreground visits; disabled sampling delivers no physical events; fault/axis changes cancel old motion input");
 }
 static void check_run_lr_gestures(void) {
     for(unsigned run_mode=0;run_mode<3;++run_mode) {
@@ -1344,6 +1452,36 @@ static void check_run_alignment(void) {
     puts("PASS: Follow OK stops actual group before alignment checks in both master roles, including stale stopped UI state");
     puts("PASS: R97 Run distinguishes global stop/aligning, held-key align denial, explicit align/second-confirm start, no automatic restart and unhealthy/ADC gates");
 }
+static void check_axis_commit(void) {
+    MotorControl_SelectWork(MOTOR_WORK_INDEPENDENT);MotorControl_SetFocus(MOTOR_AXIS_1);reset();MotorControl_StopAll();
+    for(unsigned a=0;a<2;++a) {
+        MotorAxis axis=(MotorAxis)a;
+        assert(MotorParams_SelectAxis(axis,MOTOR_PROFILE_4015));
+        AppSettings_StoreThrottle(37);
+        const uint32_t config=settings.control_config;
+        AppAxisSettings value;assert(AppSettings_ReadAxis(axis,&value));
+        value.speed_limit=40;value.position_speed=30;
+        value.targets[0]=-900;value.targets[1]=20;value.targets[2]=30;
+        AppSettings before=settings;
+        ControlStub_SetOptionsAllowed(false);
+        assert(!AppSettings_StoreAxis(axis,&value) && !memcmp(&settings,&before,sizeof(settings)));
+        ControlStub_SetOptionsAllowed(true);
+        assert(AppSettings_StoreAxis(axis,&value));
+        assert((a ? settings.axis2_speed_x10 : settings.speed_x10)==-400);
+        assert((a ? settings.axis2_voltage_x100 : settings.voltage_x100)==20);
+        assert((a ? settings.axis2_position_x100 : settings.position_x100)==30);
+        assert((a ? settings.speed_x10 : settings.axis2_speed_x10)==(a ? before.speed_x10 : before.axis2_speed_x10));
+        assert(settings.control_config==config); /* Axis settings do not republish throttle. */
+        int32_t targets[]={123,45,67};AppSettings_StoreTargets(axis,targets,200);
+        assert((a ? settings.axis2_speed_x10 : settings.speed_x10)==123);
+        assert(((settings.control_config&APP_CONFIG_THROTTLE_MASK)>>APP_CONFIG_THROTTLE_SHIFT)==(a ? 37U : 100U));
+        AppSettings_StoreThrottle(0);
+        assert(!(settings.control_config&APP_CONFIG_THROTTLE_MASK));
+        assert((settings.control_config&~APP_CONFIG_THROTTLE_MASK)==(config&~APP_CONFIG_THROTTLE_MASK));
+    }
+    MotorControl_SelectWork(MOTOR_WORK_SINGLE_M1);
+    puts("PASS: accepted axis target clamp, rejected options atomicity, peer isolation and independent M1 throttle publication");
+}
 static void check_settings_service_ui(void) {
     MotorControl_SelectWork(MOTOR_WORK_SINGLE_M1);MotorControl_SetFocus(MOTOR_AXIS_1);reset();MotorControl_StopAll();
     assert(MotorControl_CommandFrom(MOTOR_AXIS_1,JERRYFOC_MODE_VELOCITY,30,0,false,MOTOR_INPUT_USB));
@@ -1374,6 +1512,7 @@ static void check_settings_service_ui(void) {
     unsigned count=save_requests;
     ui_app_reset(tick);assert(KK_UI_Init(ui_app_get())==KK_UI_OK);
     assert(App_SaveState()==APP_SAVE_PENDING && settings.led_brightness==64);
+    assert(storage_loads==0); /* UI consumes accepted RAM; only Init/reload read NOR. */
     step(0,2600);assert(save_requests==count+1 && saved_settings.led_brightness==64);
     puts("PASS: R99 settings service publication preserves foreign-axis Run drafts, saves only confirmed targets, keeps same-profile running state and survives UI reconstruction");
 }
@@ -1440,7 +1579,8 @@ static void check_step_navigation_batches(void) {
 int main(int argc,char **argv) {
     const char *trace_path=getenv("UI_DRAW_TRACE");
     if(trace_path) { draw_trace=fopen(trace_path,"wb");assert(draw_trace); }
-    if(argc>1 && !strcmp(argv[1],"settings")) { check_settings_service_ui();check_setting_routes();check_tx_format();return 0; }
+    if(argc>1 && !strcmp(argv[1],"keys")) { ui_input_init();check_sparse_run_keys();check_display_key_rearm();return 0; }
+    if(argc>1 && !strcmp(argv[1],"settings")) { check_axis_commit();check_settings_service_ui();check_setting_routes();check_tx_format();return 0; }
     if(argc>1 && !strcmp(argv[1],"align")) { check_run_alignment();return 0; }
     if(argc>1 && !strcmp(argv[1],"metrics")) { query_metrics();return 0; }
     if(argc>1 && !strcmp(argv[1],"queries")) { check_query_rows();return 0; }
@@ -1461,10 +1601,10 @@ int main(int argc,char **argv) {
         assert(save_requests==count+1 && saved_settings.speed_x10==134 && KK_UI_GetCurrentPage()==0);
         puts("PASS: R88 headless Settings, save service and diagnostic model before any LCD/UI initialization");return 0;
     }
-    ui_input_init(); assert(ui_input_poll()==0);
+    ui_input_init(); assert(ui_input_poll().keys==0);
     assert(ui_gpio_init_mask==0); /* Every GPIO mode/pull stays CubeMX-owned. */
-    host_gpio.pins&=~KEY1_Pin; assert(ui_input_poll()==0); host_gpio.pins=0xFFFFU;
-    host_gpio.pins &= ~KEY2_Pin; assert(ui_input_poll()==KK_UI_KEY_BACK);
+    host_gpio.pins&=~KEY1_Pin; assert(ui_input_poll().keys==0); host_gpio.pins=0xFFFFU;
+    host_gpio.pins &= ~KEY2_Pin; assert((ui_input_tick(),ui_input_poll().keys)==KK_UI_KEY_BACK);
     host_gpio.pins=0xFFFFU;
     /* Regression: every wrap edge, plus rapid presses before animation settles. */
     for(unsigned i=0;i<4;++i) {
@@ -1776,6 +1916,8 @@ int main(int argc,char **argv) {
     step(KK_UI_KEY_DOWN,1000); step(0,30);
     assert(fabsf(JerryFOC_Target_Iq-0.30f)<0.001f);
     press(KK_UI_KEY_OK);
+    if(fabsf(JerryFOC_Target_Iq)>=0.001f || recoveries!=before_recovery+2)
+        fprintf(stderr,"Down after recovery: target=%f recovery=%u/%u\n",(double)JerryFOC_Target_Iq,recoveries,before_recovery+2);
     assert(fabsf(JerryFOC_Target_Iq)<0.001f && recoveries==before_recovery+2);
     reset(); press(KK_UI_KEY_RIGHT); press(KK_UI_KEY_OK); settle();
     select_setting("Run Steps");

@@ -211,7 +211,7 @@ static bool apply_configuration(uint8_t kind,const char *value)
         "MasterM1\0"
         "MasterM2";
         unsigned i=enum_value(names,value,MOTOR_WORK_COUNT);
-        return i<MOTOR_WORK_COUNT && MotorControl_SelectWork((MotorWorkMode)i);
+        return i<MOTOR_WORK_COUNT && App_Configure(APP_CFG_WORK,MOTOR_AXIS_1,(int32_t)i,0);
     }
     case CONFIG_MOTOR1: case CONFIG_MOTOR2: {
         MotorAxis a=kind==CONFIG_MOTOR1 ? MOTOR_AXIS_1 : MOTOR_AXIS_2;
@@ -219,24 +219,24 @@ static bool apply_configuration(uint8_t kind,const char *value)
         _Static_assert(MOTOR_PROFILE_2804==0 && MOTOR_PROFILE_4015==1 && MOTOR_PROFILE_ESC==2 &&
             MOTOR_PROFILE_CUSTOM1==3 && MOTOR_PROFILE_CUSTOM3==5 && MOTOR_PROFILE_COUNT==6,"Motor command order");
         unsigned i=enum_value(names,value,MOTOR_PROFILE_COUNT);
-        return i<MOTOR_PROFILE_COUNT && (i!=MOTOR_PROFILE_ESC || a==MOTOR_AXIS_1) && App_SelectMotor(a,(MotorProfile)i);
+        return i<MOTOR_PROFILE_COUNT && (i!=MOTOR_PROFILE_ESC || a==MOTOR_AXIS_1) && App_Configure(APP_CFG_MOTOR,a,(int32_t)i,0);
     }
     case CONFIG_FEEDBACK: {
         unsigned i=enum_value("Encoder\0" "HSO\0" "SixStep",value,3);
-        return i<2 ? MotorControl_SelectFeedback(i!=0) : i==2 && MotorControl_SelectSixStep(true);
+        return i<3 && App_Configure(i==2 ? APP_CFG_SIXSTEP : APP_CFG_FEEDBACK,MOTOR_AXIS_1,i==2 ? 1 : (int32_t)i,0);
     }
     case CONFIG_GEAR: {
         float v[2];
         if (parse_hso_values(value,v,2) && fabsf(v[0])>=0.01f && fabsf(v[0])<=10.0f && fabsf(v[1])<=62.83f)
-            return MotorControl_SetGear((int32_t)roundf(v[0]*100),(int32_t)roundf(v[1]*100));
+            return App_Configure(APP_CFG_GEAR,MOTOR_AXIS_1,(int32_t)roundf(v[0]*100),(int32_t)roundf(v[1]*100));
         break;
     }
     case CONFIG_ALIGN: case CONFIG_FOCUS:
         if (value[0]=='M' && (value[1]=='1' || value[1]=='2') && value[2]=='\0') {
             MotorAxis a=value[1]=='1' ? MOTOR_AXIS_1 : MOTOR_AXIS_2;
-            if (kind==CONFIG_FOCUS) { MotorControl_SetFocus(a); return true; }
+            if (kind==CONFIG_FOCUS) return App_Configure(APP_CFG_FOCUS,a,0,0);
             uint32_t mask=__get_PRIMASK(); __disable_irq();
-            bool ok=Protocol_RequestCurrent() && MotorControl_RequestAlign(a);
+            bool ok=Protocol_RequestCurrent() && App_Configure(APP_CFG_ALIGN,a,0,0);
             __set_PRIMASK(mask); return ok;
         }
         break;
@@ -347,7 +347,6 @@ __attribute__((noinline,noclone)) static int8_t handle_line(char *line,MotorInpu
         if (!App_CanConfigure()) return -3;
         if(kind==CONFIG_ALIGN && command_was_stopped && HAL_GetTick()-command_at>10U) return -4;
         result=!explicit_axis && apply_configuration(kind,argument) ? 1 : -1;
-        if(result==1 && kind!=CONFIG_ALIGN) App_ConfigChanged();
         return result;
     }
     if (kind==CMD_STREAM) {
@@ -566,7 +565,7 @@ static void telemetry_reply(void)
             TelemetryReply *r=&telemetry_packet.payload.reply;
             _Static_assert(sizeof(TelemetryReply)==92 && offsetof(AppSettings,calibration)-offsetof(AppSettings,speed_x10)==84,"RPC settings layout");
             r->id=reply_id; r->result=reply_result; r->source=reply_source;
-            r->schema=2; r->firmware=122; r->save=(uint8_t)App_SaveState(); r->focus=(uint8_t)MotorControl_GetFocus();
+            r->schema=2; r->firmware=132; r->save=(uint8_t)App_SaveState(); r->focus=(uint8_t)MotorControl_GetFocus();
             memcpy(r->settings,&AppStorage_Get()->speed_x10,sizeof(r->settings));
             r->settings[(offsetof(AppSettings,control_config)-offsetof(AppSettings,speed_x10))/4U]=
                 (AppStorage_Get()->control_config & ~(7UL<<28)) | (MotorParams_CustomMask()<<28);

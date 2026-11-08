@@ -14,6 +14,8 @@ HostDwt host_dwt;
 ADC_TypeDef irq_adc1,irq_adc2;
 ADC_HandleTypeDef hadc1={.Instance=ADC1},hadc2={.Instance=ADC2};
 static unsigned key_calls,outer_calls,break_calls,fast_calls,error_calls,pair_errors;
+static unsigned input_calls;
+void ui_input_tick(void) { assert(!(irq_tim2.SR & TIM_SR_UIF));++input_calls; }
 static bool reenter_timer,reenter_adc,fuzzing;
 static bool m1_power,m2_power;
 
@@ -43,6 +45,7 @@ void MotorSampling_AdcErrorIRQ(void)
 }
 void JerryFOC_OuterIRQ(void)
 {
+    assert(input_calls==outer_calls+1U);
     assert(!(irq_tim2.SR & TIM_SR_UIF));
     ++outer_calls;
     if (reenter_timer) { reenter_timer=false; irq_tim2.SR |= TIM_SR_UIF; }
@@ -67,6 +70,7 @@ static void reset(void)
     hadc1.State=hadc2.State=HAL_ADC_STATE_INJ_BUSY;
     hadc1.ErrorCode=hadc2.ErrorCode=0;
     key_calls=outer_calls=break_calls=fast_calls=error_calls=pair_errors=0;
+    input_calls=0;
     reenter_timer=reenter_adc=fuzzing=false; m1_power=m2_power=true;
 }
 static void check_timing_boundaries(void)

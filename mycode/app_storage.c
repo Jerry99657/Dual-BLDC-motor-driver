@@ -165,6 +165,21 @@ static bool settings_write(uint32_t addr, const AppSettings *s)
     return settings_is_valid(&verify);
 }
 
+/* Publish only a valid bank. Init supplies defaults on failure; explicit
+ * reload keeps the accepted RAM settings if neither bank can be read. */
+__attribute__((cold)) static bool settings_load_banks(void)
+{
+    AppSettings a, b;
+    bool ok_a = settings_read(APP_SETTINGS_ADDR_A, &a);
+    bool ok_b = settings_read(APP_SETTINGS_ADDR_B, &b);
+    if (!ok_a && !ok_b) return false;
+    bool use_b = ok_b && (!ok_a || (int32_t)(b.seq - a.seq) >= 0);
+    s_settings = use_b ? b : a;
+    s_active_addr = use_b ? APP_SETTINGS_ADDR_B : APP_SETTINGS_ADDR_A;
+    s_settings_valid = true;
+    return true;
+}
+
 static bool log_read(uint32_t addr, LogRecord *out)
 {
     if (!W25Q_Read(APP_LOG_ADDR + addr, (uint8_t *)out, sizeof(*out))) {
@@ -230,29 +245,7 @@ __attribute__((cold)) bool AppStorage_Init(void)
         return false;
     }
 
-    AppSettings a;
-    AppSettings b;
-    bool ok_a = settings_read(APP_SETTINGS_ADDR_A, &a);
-    bool ok_b = settings_read(APP_SETTINGS_ADDR_B, &b);
-
-    if (ok_a && ok_b) {
-        if ((int32_t)(b.seq - a.seq) >= 0) {
-            s_settings = b;
-            s_active_addr = APP_SETTINGS_ADDR_B;
-        } else {
-            s_settings = a;
-            s_active_addr = APP_SETTINGS_ADDR_A;
-        }
-        s_settings_valid = true;
-    } else if (ok_a) {
-        s_settings = a;
-        s_active_addr = APP_SETTINGS_ADDR_A;
-        s_settings_valid = true;
-    } else if (ok_b) {
-        s_settings = b;
-        s_active_addr = APP_SETTINGS_ADDR_B;
-        s_settings_valid = true;
-    } else {
+    if (!settings_load_banks()) {
         settings_set_defaults();
         s_active_addr = APP_SETTINGS_ADDR_A;
         s_settings_valid = false;
@@ -279,25 +272,7 @@ __attribute__((cold)) void AppStorage_Load(void)
         return;
     }
 
-    AppSettings a;
-    AppSettings b;
-    bool ok_a = settings_read(APP_SETTINGS_ADDR_A, &a);
-    bool ok_b = settings_read(APP_SETTINGS_ADDR_B, &b);
-
-    if (ok_a && ok_b) {
-        s_settings = ((int32_t)(b.seq - a.seq) >= 0) ? b : a;
-        s_active_addr = ((int32_t)(b.seq - a.seq) >= 0)
-            ? APP_SETTINGS_ADDR_B : APP_SETTINGS_ADDR_A;
-        s_settings_valid = true;
-    } else if (ok_a) {
-        s_settings = a;
-        s_active_addr = APP_SETTINGS_ADDR_A;
-        s_settings_valid = true;
-    } else if (ok_b) {
-        s_settings = b;
-        s_active_addr = APP_SETTINGS_ADDR_B;
-        s_settings_valid = true;
-    }
+    (void)settings_load_banks();
 }
 
 bool AppStorage_Save(void)

@@ -99,20 +99,16 @@ for mode in ("Debug", "Release"):
     verify_uart_init(elf,tool("objdump","-d",elf))
     assert 'LL_USART_Init(USART1,' in (repo/'Core/Src/usart.c').read_text(encoding='utf-8')
     assert not re.search(r'^\w+ [tT] (?:HAL_UART_(?:IRQHandler|Transmit_IT|Receive_IT)|UART_(?:RxISR|TxISR|DMAAbortOnError))[^\n]*$',symbols,re.M),mode
-    # HAL still sets up SPI/TIM/ADC/DMA. SPI and LED runtime belong to user
-    # modules; ADC retains HAL DMA callbacks and the unchanged fallback.
+    # CubeMX/HAL retain setup. Dedicated user modules own runtime DMA;
+    # no generic callback/abort chain should survive in the linked image.
     assert not re.search(r'^\w+ [tT] (?:HAL_SPI_(?:IRQHandler|Transmit|Receive|TransmitReceive|Abort|DMAStop)|SPI_(?:DMA|RxISR|TxISR))[^\n]*$',symbols,re.M),mode
-    # R92 calls HAL DMA from an LTO user module: its unchanged dispatcher may
-    # inline there. Check the callback machinery as well as the source route.
-    dma_code=tool("objdump", "-d", "--disassemble=SpiPort_DMAIRQ", elf)
-    for callback in ('ADC_DMAHalfConvCplt','ADC_DMAConvCplt','ADC_DMAError'):
-        assert callback in symbols,(mode,callback)
-    for removed in ('HAL_TIM_PWM_Start_DMA','HAL_TIM_PWM_Stop_DMA',
+    for removed in ('HAL_ADC_Start_DMA','HAL_ADC_Stop_DMA','HAL_DMA_Start_IT','HAL_DMA_Abort',
+                    'HAL_DMA_IRQHandler','ADC_DMAHalfConvCplt','ADC_DMAConvCplt','ADC_DMAError',
+                    'HAL_TIM_PWM_Start_DMA','HAL_TIM_PWM_Stop_DMA',
                     'TIM_DMADelayPulseCplt','TIM_DMADelayPulseHalfCplt','TIM_DMAError',
                     'HAL_TIM_PWM_PulseFinishedCallback','HAL_TIM_ErrorCallback'):
-        assert not re.search(r'^\w+ [tT] '+removed+r'$',symbols,re.M),(mode,removed)
-    assert 'HAL_DMA_IRQHandler(d);' in (repo/'mycode/spi_port.c').read_text(encoding='utf-8')
-    assert re.search(r'^\w+ [tT] HAL_DMA_IRQHandler[^\n]*$',symbols,re.M) or re.search(r'\bbx\s+r\d+',dma_code),(mode,'HAL DMA callback dispatch')
+        assert not re.search(r'^\w+ [tT] '+removed+r'[^\n]*$',symbols,re.M),(mode,removed)
+    assert 'AdcPort_DMAIRQ(d);' in (repo/'mycode/spi_port.c').read_text(encoding='utf-8')
     adc_calls=calls(tool("objdump", "-d", "--disassemble=MotorIRQ_Adc12", elf))
     tim_calls=calls(tool("objdump", "-d", "--disassemble=MotorIRQ_Tim2", elf))
     assert any(c.startswith("StHso_Process") for c in adc_calls), (mode, adc_calls)
@@ -153,7 +149,7 @@ for mode in ("Debug", "Release"):
                 routes+=exti_transfers(route)
         expected='WS2812_DMAIRQ' if handle=='hdma_tim3_ch1' else 'SpiPort_DMAIRQ'
         assert any(c.startswith(expected) for c in routes),(mode,vector,routes)
-    # HAL DMA is either an out-of-line call or its callback dispatch was verified above.
+    # Generated ADC routes enter the shared SPI/ADC runtime through their current handle.
 
     image = (root / "FOC_two.bin").read_bytes()
     import sys
@@ -162,7 +158,7 @@ for mode in ("Debug", "Release"):
     raw_resources=resources();packed_resources=pack(raw_resources)
     assert packed_resources in image and unpack(packed_resources,len(raw_resources))==raw_resources,mode
     text_image=image+raw_resources
-    assert b"UI-R122-SIZ" in text_image and b"UI-R90-UART" not in text_image, mode
+    assert b"UI-R132-FMT" in text_image and b"UI-R90-UART" not in text_image, mode
     assert b"Format:" in text_image and b"JustFloat" in text_image and b"TX Format:" in text_image,mode
     assert "App_FloatToDoubleBits" in symbols and "__aeabi_f2d" in symbols,mode
     for unused in ("__aeabi_dadd","__aeabi_dsub","__adddf3","__subdf3"):

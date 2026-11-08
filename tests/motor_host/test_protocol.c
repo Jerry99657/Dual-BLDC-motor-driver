@@ -9,6 +9,7 @@
 #include "JerryFOC.h"
 #include "motor_control.h"
 #include "app_storage.h"
+#include "app_control.h"
 #include "st_hso.h"
 #include "uart_port.h"
 #include "usb_device.h"
@@ -21,6 +22,10 @@ volatile float JerryFOC_Target_Iq, JerryFOC_Target_Position;
 volatile uint8_t g_openloop_debug;
 volatile float g_openloop_angle;
 static bool ready=true, active, fault, usable;
+extern unsigned app_host_config_calls;
+extern AppConfigAction app_host_config_action;
+extern MotorAxis app_host_config_axis;
+extern int32_t app_host_config_value,app_host_config_extra;
 bool MotorSampling_ResumeGlobalStop(void) { return true; }
 static float velocity=10, target;
 static JerryFOC_ControlMode mode;
@@ -162,12 +167,17 @@ static void check_configuration_queue(void) {
         command(line);assert(Protocol_GetControlResult()==1 && MotorControl_GetWork()==(MotorWorkMode)i);
     }
     command("Work:SingleM1");command("Motor1:2804");command("Motor2:2804");
+    assert(app_host_config_action==APP_CFG_MOTOR && app_host_config_axis==MOTOR_AXIS_2 && app_host_config_value==MOTOR_PROFILE_2804);
     command("Feedback:HSO");assert(MotorControl_HsoAllowed());
+    assert(app_host_config_action==APP_CFG_FEEDBACK && app_host_config_axis==MOTOR_AXIS_1 && app_host_config_value==1);
     command("Feedback:SixStep");assert(MotorControl_SixStepAllowed() && !MotorControl_HsoAllowed());
+    assert(app_host_config_action==APP_CFG_SIXSTEP && app_host_config_value==1);
     command("Feedback:Encoder");assert(!MotorControl_SixStepAllowed() && !MotorControl_HsoAllowed());
     command("Focus:M1");command("Align:M2");assert(Protocol_GetControlResult()==1);
+    assert(app_host_config_action==APP_CFG_ALIGN && app_host_config_axis==MOTOR_AXIS_2);
     const char *gears[]={"Gear:-2.5,0.1","Gear:1e-2,-6.283e1","Gear:0x1p1,0x.8p1"};
     for(unsigned i=0;i<sizeof(gears)/sizeof(*gears);++i) { command(gears[i]);assert(Protocol_GetControlResult()==1); }
+    assert(app_host_config_action==APP_CFG_GEAR && app_host_config_value==200 && app_host_config_extra==100);
     const char *invalid[]={"Work:bad","Motor1:40150","Motor2:","Feedback:HSOx","Feedback:","Gear:0,0","Gear:1","Gear:1,0junk","Align:M3","Focus:M0","Focus:M","Focus:M1x","Align:M2x","Align:M2:",
         "Work:SingleM","Work:SingleM1x","Motor1:Custom0","Motor1:Custom4","Motor1:Custom11",
         "Motor1:Custom1x","Motor1:custom1","Motor2:ESC","Feedback:Encoderx","Feedback:SixSte"};
@@ -255,7 +265,7 @@ static void check_rpc(void) {
     telemetry_host_tick=100;assert(Telemetry_Select("Off"));
     command("@1:Get");Telemetry_Service();
     assert(inflight_len==106 && inflight[3]==32 && inflight[12]==1 && inflight[14]==1 && inflight[15]==PROTO_SRC_USB);
-    assert(inflight[16]==2 && inflight[17]==122);
+    assert(inflight[16]==2 && inflight[17]==132);
     assert(inflight[18]==APP_SAVE_PENDING); /* Dirty config must not claim an older save completed. */
     int32_t saved;memcpy(&saved,inflight+20,4);assert(saved==123);
     assert(fwrite(inflight,1,inflight_len,trace)==inflight_len);
@@ -286,6 +296,10 @@ static void check_rpc(void) {
     assert(inflight[12]==12 && (int8_t)inflight[14]==-4 && target==0);telemetry_host_stopped=false;
     telemetry_host_stopped=true;enqueue("@13:Speed:20");telemetry_host_tick+=11;Protocol_Service();Telemetry_Service();
     assert(inflight[12]==13 && (int8_t)inflight[14]==-4 && target==0);telemetry_host_stopped=false;
+    unsigned configured=app_host_config_calls;
+    telemetry_host_stopped=true;enqueue("@14:Align:M1");telemetry_host_tick+=11;Protocol_Service();Telemetry_Service();
+    assert(inflight[12]==14 && (int8_t)inflight[14]==-4 && app_host_config_calls==configured && host_primask==0);
+    telemetry_host_stopped=false;
     unsigned calls=submissions;command("@0:Speed:12");command("@65536:Speed:12");command("@x:Speed:12");
     assert(target==0 && submissions==calls);
     extern unsigned app_host_axis,app_host_key;

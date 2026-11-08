@@ -289,14 +289,11 @@ int main(void)
     MT6701_2_Service(HAL_GetTick());
     MotorControl_Service(HAL_GetTick());
     now = HAL_GetTick();
-    uint8_t ui_keys = ui_input_poll();
-
     if (ui_ok) {
         ui_app_update(now);
         /* 存储服务可能耗时，动画与 DMA 超时判定必须使用新时间。 */
         now = HAL_GetTick();
-        KK_UI_Status ui_status = KK_UI_Update(
-            now, (KK_UI_Input){.keys = ui_keys});
+        KK_UI_Status ui_status = KK_UI_Update(now, ui_input_poll());
         if (ui_status == KK_UI_DISPLAY_ERROR ||
             ui_status == KK_UI_DISPLAY_TIMEOUT) {
             ui_app_note_display_error();

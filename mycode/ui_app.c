@@ -130,7 +130,7 @@
     X(text_keyrpt,"KeyRpt") \
     X(text_disperr,"DispErr") \
     X(text_fw,"FW") \
-    X(text_firmware,"UI-R122-SIZ") \
+    X(text_firmware,"UI-R132-FMT") \
     X(text_clear_diag,"Clear diag") \
     X(text_mcu,"MCU") \
     X(text_stm32g431,"STM32G431") \
@@ -519,9 +519,7 @@ static uint32_t s_last_live_at;
 /* Independent Run only: a short L/R action waits for release; holding never
  * performs the short action first. The press itself is debounced by KK_UI. */
 static uint8_t s_run_lr_key;
-static bool s_run_lr_releasing;
 static bool s_global_stop_seen;
-static uint32_t s_run_lr_pressed_at,s_run_lr_released_at;
 
 /* ---------- 动态文本 ---------- */
 static MotorProfile s_profiles[2];
@@ -588,34 +586,30 @@ static void sync_from_storage(void);
 static void focus_axis(MotorAxis axis);
 static void adopt_remote(void);
 static void update_position_speed_limit(void);
-static void reset_motor_view(void);
 typedef struct {
-    int32_t speed_x10;
-    int32_t voltage_x100;
-    int32_t position_x100;
-    int32_t position_speed;
-    int32_t speed_limit;
-    bool current_loop;
+    AppAxisSettings settings;
     JerryFOC_ControlMode run_mode;
+    bool run_active;
     int32_t run_speed_x10;
     int32_t run_voltage_x100;
     int32_t run_position_x100;
     int32_t run_current_x100;
     int32_t confirmed_current_x100;
     float run_position_origin;
-    bool run_active;
-    int32_t steps[3];
 } AxisView;
+#if defined(__arm__)
+_Static_assert(sizeof(AxisView)==64,"Keep confirmed settings and stopped drafts within the existing view budget");
+#endif
 static AxisView views[2];
 static AxisView current_view;
 /* Six-step throttle must never overwrite encoder Uq/Iq settings. */
 static int32_t s_throttle_pct,s_run_throttle_pct;
-#define s_speed_x10 (current_view.speed_x10)
-#define s_voltage_x100 (current_view.voltage_x100)
-#define s_position_x100 (current_view.position_x100)
-#define s_position_speed (current_view.position_speed)
-#define s_speed_limit (current_view.speed_limit)
-#define s_current_loop (current_view.current_loop)
+#define s_speed_x10 (current_view.settings.targets[0])
+#define s_voltage_x100 (current_view.settings.targets[1])
+#define s_position_x100 (current_view.settings.targets[2])
+#define s_position_speed (current_view.settings.position_speed)
+#define s_speed_limit (current_view.settings.speed_limit)
+#define s_current_loop (current_view.settings.current_loop)
 #define s_run_mode (current_view.run_mode)
 #define s_run_speed_x10 (current_view.run_speed_x10)
 #define s_run_voltage_x100 (current_view.run_voltage_x100)
@@ -624,7 +618,9 @@ static int32_t s_throttle_pct,s_run_throttle_pct;
 #define s_confirmed_current_x100 (current_view.confirmed_current_x100)
 #define s_run_position_origin (current_view.run_position_origin)
 #define s_run_active (current_view.run_active)
-#define s_run_steps (current_view.steps)
+#define s_run_steps (current_view.settings.steps)
+/* Settings triples use speed/torque/position; UI modes use torque/speed/position. */
+static unsigned step_index(unsigned mode) { return mode==JERRYFOC_MODE_POSITION ? 2U : mode^1U; }
 static void save_view(void) { views[s_view_axis]=current_view; }
 static void load_view(MotorAxis axis)
 {
@@ -650,6 +646,12 @@ static JerryFOC_ControlMode fallback_mode(void) {
         JERRYFOC_MODE_VELOCITY : JERRYFOC_MODE_POSITION;
 }
 __attribute__((noinline)) static bool throttle_mode(JerryFOC_ControlMode mode) { return mode==JERRYFOC_MODE_TORQUE && s_view_axis==MOTOR_AXIS_1 && MotorControl_SixStepAllowed(); }
+__attribute__((noinline,noclone)) static const char *run_unit(JerryFOC_ControlMode mode)
+{
+    if (mode==JERRYFOC_MODE_VELOCITY) return ui_strings.text_rad_s;
+    if (mode==JERRYFOC_MODE_POSITION) return "rad";
+    return s_current_loop ? "A" : "V";
+}
 static int run_scale(bool oil) { return oil ? 1 : s_run_mode==JERRYFOC_MODE_VELOCITY ? 10 : 100; }
 /* Both minimum APIs already return whole multiples of 5 rad/s. */
 static int32_t hso_min_x10(void) { return (int32_t)((MotorControl_SixStepAllowed() ? SixStep_MinSpeed() : StHso_MinSpeed())*10.0f); }
@@ -658,7 +660,7 @@ static int32_t hso_max_x10(void)
     int32_t limit=(int32_t)(400.0f*6.283185307f*10.0f/MotorParams_GetAxis(MOTOR_AXIS_1)->pole_pairs);
     if (MotorControl_SixStepAllowed()) limit=(int32_t)(SixStep_MaxSpeed()*10.0f); /* Positive: truncation equals floor. */
     int32_t configured=(text_query ? (int32_t)MotorControl_LimitSpeed(MOTOR_AXIS_1,1.0e6f) :
-        s_view_axis==MOTOR_AXIS_1 ? s_speed_limit : views[0].speed_limit)*10;
+        s_view_axis==MOTOR_AXIS_1 ? s_speed_limit : views[0].settings.speed_limit)*10;
     return configured < limit ? configured : limit;
 }
 
@@ -705,22 +707,37 @@ __attribute__((noinline)) static void fmt_pair(unsigned field,unsigned first,uns
 }
 
 /* Fixed application descriptors: 10-bit destination offset in 4-byte units,
- * 6-bit format, 8-bit snapshot offset. Decode without unaligned loads. */
+ * 6-bit format, 8-bit snapshot offset. Decode without unaligned loads.
+ * ZERO / HSO / SIX compound kinds require their corresponding snapshot type;
+ * their multi-member dependencies are kept together in refresh_values(). */
 enum { VALUE_COUNT, VALUE_RAD, VALUE_AMP, VALUE_TENTH, VALUE_DEG,
        VALUE_PERCENT, VALUE_MV, VALUE_MWB, VALUE_COUNT16, VALUE_VOLT,
        VALUE_SPEED, VALUE_DUTY, VALUE_SIX_SPEED, VALUE_AXIS_SPEED, VALUE_RPM,
-       VALUE_ERROR_DEG, VALUE_HEX32, VALUE_HEX16, VALUE_PAIR16, VALUE_FORMAT_COUNT };
+       VALUE_ERROR_DEG, VALUE_HEX32, VALUE_HEX16, VALUE_PAIR16,
+       VALUE_ZERO_INFO, VALUE_ZERO_BEFORE, VALUE_ZERO_AFTER, VALUE_ZERO_TIME,
+       VALUE_HSO_QUALITY, VALUE_HSO_FLUX, VALUE_HSO_TIME,
+       VALUE_SIX_QUALITY, VALUE_SIX_START, VALUE_FORMAT_COUNT };
 typedef struct { uint8_t field_low,field_high_format,offset; } ValueRow;
 _Static_assert(sizeof(ValueRow)==3,"Compact display descriptor");
 _Static_assert(sizeof(UiTexts)<=4096 && VALUE_FORMAT_COUNT<=64,"Display buffer offsets/formats");
+_Static_assert(VALUE_PAIR16<VALUE_ZERO_INFO && VALUE_ZERO_TIME<VALUE_HSO_QUALITY &&
+    VALUE_HSO_TIME<VALUE_SIX_QUALITY,"Compound descriptor kind ranges");
 _Static_assert(sizeof(MotorAxisSnapshot)<=UINT8_MAX && sizeof(StHsoSnapshot)<=UINT8_MAX &&
     sizeof(MT6701Diagnostics)<=UINT8_MAX && sizeof(MotorSamplingDiagnostics)<=UINT8_MAX &&
     sizeof(SixStepSnapshot)<=UINT8_MAX,
     "Review source offsets before extending display snapshots");
 /* Reject a newly added destination that cannot use this compact encoding. */
 #define VALUE_FIELD(field) (offsetof(UiTexts,field)+0U*sizeof(char[offsetof(UiTexts,field)%4U ? -1 : 1]))
+#define VALUE_COMPOUND_TYPE(type,format) _Generic((type *)0, \
+    MT6701Diagnostics *: ((format)>=VALUE_ZERO_INFO && (format)<=VALUE_ZERO_TIME), \
+    StHsoSnapshot *: ((format)>=VALUE_HSO_QUALITY && (format)<=VALUE_HSO_TIME), \
+    SixStepSnapshot *: ((format)>=VALUE_SIX_QUALITY && (format)<=VALUE_SIX_START),default:0)
+/* Reject a mistyped snapshot/compound kind while defining the row, without
+ * spending runtime code or RAM on descriptor validation. */
+#define VALUE_KIND(type,format) ((format)+0U*sizeof(char[((unsigned)(format)<VALUE_FORMAT_COUNT && \
+    ((format)<VALUE_ZERO_INFO || VALUE_COMPOUND_TYPE(type,format))) ? 1 : -1]))
 #define VALUE_ROW(type,member,field,format) {(VALUE_FIELD(field)/4U)&255U, \
-    (VALUE_FIELD(field)/1024U)|((format)<<2U),offsetof(type,member)}
+    (VALUE_FIELD(field)/1024U)|(VALUE_KIND(type,format)<<2U),offsetof(type,member)}
 __attribute__((noinline)) static void refresh_values(const void *snapshot,const ValueRow *rows,unsigned count)
 {
     /* One byte per float format: unit:4, multiplier:3, hundredths:1. */
@@ -729,7 +746,8 @@ __attribute__((noinline)) static void refresh_values(const void *snapshot,const 
     static const char *const units[]={NULL,"rad","A","mWb","V",ui_strings.text_rad_s,"%","rpm","deg"};
     static const float multipliers[]={1.0f,57.2957795f,100.0f,1000.0f,9.5492966f};
 #define VALUE_FORMAT(unit,multiplier,hundredths) ((unit)|((multiplier)<<4U)|((hundredths)<<7U))
-    static const uint8_t formats[VALUE_FORMAT_COUNT]={
+    /* Only float kinds index this table; composite kinds need no padding. */
+    static const uint8_t formats[]={
         [VALUE_RAD]=VALUE_FORMAT(UNIT_RAD,0,1),
         [VALUE_AMP]=VALUE_FORMAT(UNIT_AMP,0,1),
         [VALUE_TENTH]=VALUE_FORMAT(UNIT_NONE,0,0),
@@ -753,6 +771,43 @@ __attribute__((noinline)) static void refresh_values(const void *snapshot,const 
         unsigned field=(row->field_low+((row->field_high_format&3U)<<8U))*4U;
         if (text_query && field!=text_query->field) continue;
         char *destination=text_destination(field);
+        /* Zero-episode rows share one immutable encoder snapshot. Skip the
+         * entire row before its dependent calculations during GetRow. */
+        if(format>=VALUE_ZERO_INFO && format<=VALUE_ZERO_TIME) {
+            const MT6701Diagnostics *enc=snapshot;
+            if(!enc->zero_count) strcpy(destination,"--");
+            else if(format==VALUE_ZERO_INFO) {
+                const char *zero=enc->zero_age>3U ? "GAP" :
+                    (enc->zero_before<=128U || enc->zero_before>=16384U-128U) ? ui_strings.text_near : "FAR";
+                UiText_Format(destination,16U,ui_strings.fmt_s_u,zero,enc->zero_count);
+            } else if(format!=VALUE_ZERO_TIME) {
+                uint16_t point;memcpy(&point,source,sizeof(point));
+                if((format==VALUE_ZERO_BEFORE ? enc->zero_age : point)==UINT16_MAX) strcpy(destination,"--");
+                else fmt_counter(field,point);
+            } else fmt_counter(field,(enc->zero_after==UINT16_MAX ? HAL_GetTick() : enc->zero_ended_at)-enc->zero_started_at);
+            continue;
+        }
+        if(format>=VALUE_HSO_QUALITY) {
+            if(format<=VALUE_HSO_TIME) {
+                const StHsoSnapshot *hso=snapshot;
+                if(format==VALUE_HSO_QUALITY)
+                    UiText_Format(destination,24U,ui_strings.fmt_lu_u_ms_lu_20,
+                        (unsigned long)(hso->qualified_samples/10U),
+                        hso->state==ST_HSO_LEARNING || hso->reason==ST_HSO_REASON_LEARN_TIMEOUT ? 1000U : 200U,
+                        (unsigned long)hso->bad_samples);
+                else if(format==VALUE_HSO_FLUX)
+                    UiText_Format(destination,24U,ui_strings.fmt_lu_uwb,(unsigned long)(hso->reference_flux_wb*1000000.0f));
+                else UiText_Format(destination,24U,ui_strings.fmt_lu_us_lu,
+                    (unsigned long)(hso->max_control_cycles/170U),(unsigned long)hso->overruns);
+            } else {
+                const SixStepSnapshot *six=snapshot;
+                if(format==VALUE_SIX_QUALITY)
+                    UiText_Format(destination,24U,ui_strings.fmt_u_12_c_u_u_c,six->quality,six->gate ? six->gate : '-',
+                        six->phase_pct,six->period_pct,'0'+six->period_fraction%10U);
+                else UiText_Format(destination,24U,ui_strings.fmt_u_500_ms,six->startup_ms);
+            }
+            continue;
+        }
         if(format==VALUE_COUNT || format==VALUE_COUNT16 || format>=VALUE_HEX32) {
             uint32_t value=0;
             memcpy(&value,source,format==VALUE_COUNT16 || format==VALUE_HEX16 ? sizeof(uint16_t) : sizeof(value));
@@ -947,26 +1002,16 @@ static void refresh_info(unsigned mask)
             VALUE_ROW(MT6701Diagnostics,track_errors,enc_track,VALUE_COUNT),
             VALUE_ROW(MT6701Diagnostics,spi_errors,enc_spi,VALUE_COUNT),
             VALUE_ROW(MT6701Diagnostics,frame_errors,enc_frame,VALUE_COUNT),
+            VALUE_ROW(MT6701Diagnostics,zero_count,enc_zero,VALUE_ZERO_INFO),
+            VALUE_ROW(MT6701Diagnostics,zero_before,enc_zpre,VALUE_ZERO_BEFORE),
+            VALUE_ROW(MT6701Diagnostics,zero_after,enc_zpost,VALUE_ZERO_AFTER),
+            VALUE_ROW(MT6701Diagnostics,zero_started_at,enc_ztime,VALUE_ZERO_TIME),
         };
         refresh_values(&enc,encoder_values,sizeof(encoder_values)/sizeof(encoder_values[0]));
         put_text(offsetof(UiTexts,enc_last),MT6701_ErrorText(enc.last_error));
-        const char *zero=enc.zero_age>3U ? "GAP" :
-            (enc.zero_before<=128U || enc.zero_before>=16384U-128U) ? ui_strings.text_near : "FAR";
-        if (enc.zero_count) {
-            UiText_Format(TEXT(enc_zero),sizeof(TEXT(enc_zero)),ui_strings.fmt_s_u,zero,enc.zero_count);
-            if (enc.zero_age!=UINT16_MAX) fmt_counter(offsetof(UiTexts,enc_zpre),enc.zero_before);
-            else put_text(offsetof(UiTexts,enc_zpre),"--");
-            if (enc.zero_after!=UINT16_MAX) fmt_counter(offsetof(UiTexts,enc_zpost),enc.zero_after);
-            else put_text(offsetof(UiTexts,enc_zpost),"--");
-            fmt_counter(offsetof(UiTexts,enc_ztime),(enc.zero_after==UINT16_MAX ? HAL_GetTick() : enc.zero_ended_at)-enc.zero_started_at);
-        } else {
-            put_text(offsetof(UiTexts,enc_zero),"--"); put_text(offsetof(UiTexts,enc_zpre),"--"); put_text(offsetof(UiTexts,enc_zpost),"--");
-            put_text(offsetof(UiTexts,enc_ztime),"--");
-        }
     }
     if (mask&(REF_SIXSTEP)) {
         SixStepSnapshot six; SixStep_GetSnapshot(&six);
-        UiText_Format(TEXT(six_quality),sizeof(TEXT(six_quality)),ui_strings.fmt_u_12_c_u_u_c,six.quality,six.gate ? six.gate : '-',six.phase_pct,six.period_pct,'0'+six.period_fraction%10U);
         static const char *const reject_text[]={"-",ui_strings.text_phase_early,ui_strings.text_phase_late,ui_strings.text_period_low,ui_strings.text_period_high};
         put_text(offsetof(UiTexts,six_reject),reject_text[six.reject<=SIX_REJECT_LONG ? six.reject : 0]);
         put_text(offsetof(UiTexts,six_sample),six.sampling_off ? "OFF" : "ON");
@@ -977,9 +1022,10 @@ static void refresh_info(unsigned mask)
             VALUE_ROW(SixStepSnapshot,startup_emf,six_start_emf,VALUE_VOLT),
             VALUE_ROW(SixStepSnapshot,startup_current,six_start_i,VALUE_AMP),
             VALUE_ROW(SixStepSnapshot,ramp_hz_s,six_ramp,VALUE_TENTH),
+            VALUE_ROW(SixStepSnapshot,quality,six_quality,VALUE_SIX_QUALITY),
+            VALUE_ROW(SixStepSnapshot,startup_ms,six_start,VALUE_SIX_START),
         };
         refresh_values(&six,six_values,sizeof(six_values)/sizeof(six_values[0]));
-        UiText_Format(TEXT(six_start),sizeof(TEXT(six_start)),ui_strings.fmt_u_500_ms,six.startup_ms);
     }
     if (mask&(REF_HSO)) {
         StHsoSnapshot hso; StHso_GetSnapshot(&hso);
@@ -989,10 +1035,6 @@ static void refresh_info(unsigned mask)
         if (maximum<minimum) put_text(offsetof(UiTexts,hso_max),ui_strings.text_no_run_range);
         /* All reason literals fit these 16-byte application buffers. */
         put_text(offsetof(UiTexts,hso_gate),StHso_ReasonText(JerryFOC_isHSOActive() ? hso.reason : hso.entry_reason));
-        UiText_Format(TEXT(hso_qual), sizeof(TEXT(hso_qual)), ui_strings.fmt_lu_u_ms_lu_20,
-                 (unsigned long)(hso.qualified_samples / 10U),
-                 hso.state==ST_HSO_LEARNING || hso.reason==ST_HSO_REASON_LEARN_TIMEOUT ? 1000U : 200U,
-                 (unsigned long)hso.bad_samples);
         put_text(offsetof(UiTexts,hso_lost),JerryFOC_getHSOFaultText());
         put_text(offsetof(UiTexts,hso_reject),StHso_ReasonText(hso.capture_reason));
         static const ValueRow hso_values[]={
@@ -1006,12 +1048,13 @@ static void refresh_info(unsigned mask)
             VALUE_ROW(StHsoSnapshot,emf_offset_v,hso_offset,VALUE_MV),
             VALUE_ROW(StHsoSnapshot,emf_offset_limit_v,hso_olimit,VALUE_MV),
             VALUE_ROW(StHsoSnapshot,flux_wb,hso_flux_actual,VALUE_MWB),
+            VALUE_ROW(StHsoSnapshot,qualified_samples,hso_qual,VALUE_HSO_QUALITY),
+            VALUE_ROW(StHsoSnapshot,reference_flux_wb,hso_flux,VALUE_HSO_FLUX),
+            VALUE_ROW(StHsoSnapshot,max_control_cycles,hso_time,VALUE_HSO_TIME),
         };
         refresh_values(&hso,hso_values,sizeof(hso_values)/sizeof(hso_values[0]));
         put_text(offsetof(UiTexts,hso),
                  JerryFOC_hasHSOFault() ? ui_strings.text_lost : StHso_StateText(hso.state));
-        UiText_Format(TEXT(hso_flux), sizeof(TEXT(hso_flux)), ui_strings.fmt_lu_uwb, (unsigned long)(hso.reference_flux_wb * 1000000.0f));
-        UiText_Format(TEXT(hso_time), sizeof(TEXT(hso_time)), ui_strings.fmt_lu_us_lu, (unsigned long)(hso.max_control_cycles / 170U), (unsigned long)hso.overruns);
     }
     if (mask&(REF_ADC|REF_DRIVE)) {
         MotorSamplingDiagnostics adc; MotorSampling_GetAxisDiagnostics(axis,&adc);
@@ -1471,6 +1514,7 @@ __attribute__((noinline,noclone)) static void clear_run_flags(void)
 /* 模式和目标一起提交，防止 1 kHz 外环在两次写入之间使用旧目标。 */
 static void stop_run(void)
 {
+    ui_input_complete(UI_INPUT_CANCEL);
     s_run_lr_key=0U;
     /* Entering/backing out of an idle Run page must not interrupt the
      * independent startup alignment. An explicit serial Stop still can. */
@@ -1526,6 +1570,7 @@ static bool run_target_changed(void)
 
 static void update_position_speed_limit(void)
 {
+    int_bindings[INT_SPEED_LIMIT].maximum=(int32_t)MotorParams_GetAxis(s_view_axis)->max_speed_mech;
     int_bindings[INT_POSITION_SPEED].maximum=s_speed_limit;
     s_position_speed=clamp_i32(s_position_speed,1,s_speed_limit);
 }
@@ -1533,40 +1578,55 @@ static void update_position_speed_limit(void)
 /* UI owns drafts; the settings service validates and publishes accepted values. */
 static bool ui_store_current(void)
 {
-    AppAxisSettings value={.position_speed=s_position_speed,.speed_limit=s_speed_limit,.current_loop=s_current_loop};
-    _Static_assert(offsetof(AxisView,speed_x10)==0 && offsetof(AxisView,voltage_x100)==4 && offsetof(AxisView,position_x100)==8,"UI target triple");
-    memcpy(value.targets,&current_view,sizeof(value.targets));
-    value.steps[0]=s_run_steps[1];value.steps[1]=s_run_steps[0];value.steps[2]=s_run_steps[2];
-    if (!AppSettings_StoreAxis(s_view_axis,&value)) {
+    if (!AppSettings_StoreAxis(s_view_axis,&current_view.settings)) {
         sync_from_storage();s_current_loop_display=s_current_loop;
         s_pending_toast=MotorControl_CommandText();return false;
     }
-    AppSettings_StoreTargets(s_view_axis,value.targets,(unsigned)s_throttle_pct);
+    if (s_view_axis==MOTOR_AXIS_1) AppSettings_StoreThrottle((unsigned)s_throttle_pct);
     return true;
+}
+static void sync_axis_view(MotorAxis axis,AxisView *view,bool reset)
+{
+    bool loop=view->settings.current_loop;
+    AppSettings_ReadAxis(axis,&view->settings);
+    s_profiles[axis]=MotorParams_GetAxisProfile(axis);
+    if(reset) {
+        view->run_speed_x10=view->settings.targets[0];
+        view->run_voltage_x100=view->settings.targets[1];
+        view->run_position_x100=view->settings.targets[2];
+        view->run_current_x100=view->confirmed_current_x100=0;
+        view->run_position_origin=0;
+        view->run_mode=JERRYFOC_MODE_TORQUE;view->run_active=false;
+    } else {
+        view->run_speed_x10=clamp_i32(view->run_speed_x10,-view->settings.speed_limit*10,view->settings.speed_limit*10);
+        if(loop!=view->settings.current_loop) view->run_current_x100=view->confirmed_current_x100=0;
+    }
+}
+static void sync_common_settings(bool reset_throttle)
+{
+    AppSettings *st=AppStorage_Get();
+    s_led_brightness=clamp_i32((int32_t)st->led_brightness,0,100);
+    s_led_enable=(st->flags & APP_FLAG_LED_ENABLE)!=0;
+    s_throttle_pct=clamp_i32((st->control_config & APP_CONFIG_THROTTLE_MASK)>>APP_CONFIG_THROTTLE_SHIFT,0,100);
+    if(reset_throttle) s_run_throttle_pct=s_throttle_pct;
 }
 static void sync_from_storage(void)
 {
-    AppAxisSettings value;AppSettings_ReadAxis(s_view_axis,&value);
-    AppSettings *st=AppStorage_Get();
-    memcpy(&current_view,value.targets,sizeof(value.targets));
-    s_speed_limit=value.speed_limit;s_position_speed=value.position_speed;s_current_loop=value.current_loop;
-    int_bindings[INT_SPEED_LIMIT].maximum=(int32_t)MotorParams_GetAxis(s_view_axis)->max_speed_mech;
-    update_position_speed_limit();
-    s_run_steps[1]=value.steps[0];s_run_steps[0]=value.steps[1];s_run_steps[2]=value.steps[2];
-    s_led_brightness=clamp_i32((int32_t)st->led_brightness,0,100);
-    s_led_enable=(st->flags & APP_FLAG_LED_ENABLE)!=0;
-    s_throttle_pct=s_run_throttle_pct=clamp_i32((st->control_config & APP_CONFIG_THROTTLE_MASK)>>APP_CONFIG_THROTTLE_SHIFT,0,100);
+    sync_axis_view(s_view_axis,&current_view,false);
+    sync_common_settings(false);update_position_speed_limit();
 }
 
 /* Boot and Defaults publish the same accepted axis options. Saved targets
  * seed stopped drafts only, never an automatic output request. */
-static void reload_axis_views(void)
+static void sync_views(unsigned reset_axes)
 {
+    save_view();
     for (unsigned a=0;a<2;++a) {
-        s_view_axis=(MotorAxis)a;
-        reset_motor_view();
-        save_view();
+        sync_axis_view((MotorAxis)a,&views[a],(reset_axes&(1U<<a))!=0);
     }
+    sync_common_settings((reset_axes&1U)!=0);
+    load_view(MotorControl_GetFocus());
+    s_ratio_x100=AppStorage_Get()->gear_ratio_x100;s_offset_x100=AppStorage_Get()->gear_offset_x100;
 }
 
 static void focus_axis(MotorAxis axis)
@@ -1576,41 +1636,7 @@ static void focus_axis(MotorAxis axis)
     ui_store_current(); save_view();
     MotorControl_SetFocus(axis); load_view(axis);
     if (changed && MotorControl_GetWork()==MOTOR_WORK_INDEPENDENT) mark_settings_dirty(HAL_GetTick());
-    int_bindings[INT_SPEED_LIMIT].maximum=(int32_t)MotorParams_GetAxis(axis)->max_speed_mech;
     clear_run_stop(); refresh_texts(); KK_UI_Invalidate();
-}
-
-__attribute__((noinline)) static void reset_motor_view(void)
-{
-    /* The controller/settings service owns defaults and accepted values.
-     * Rebuilding a view only resets its stopped drafts. */
-    s_profiles[s_view_axis]=MotorParams_GetAxisProfile(s_view_axis);
-    sync_from_storage();
-    s_run_speed_x10=s_speed_x10;
-    s_run_voltage_x100=s_voltage_x100;
-    s_run_position_x100=s_position_x100;
-    s_run_current_x100 = s_confirmed_current_x100 = 0;
-    s_run_position_origin = 0.0f;
-    s_run_mode = JERRYFOC_MODE_TORQUE;
-    s_run_active=false;
-}
-
-static bool select_motor(MotorProfile profile)
-{
-    if (profile == MotorParams_GetAxisProfile(s_view_axis) && !esc_view()) return true;
-    bool independent_feedback=sensorless();
-    bool ok=AppSettings_SelectMotor(s_view_axis,profile);
-    if (!ok) {
-        s_run_active=s_run_active && MotorSampling_IsAxisOutputRequested(s_view_axis);
-        s_pending_toast = independent_feedback ? ui_strings.text_wait_for_stop : ui_strings.text_stop_check_encoder;
-        return false;
-    }
-    reset_motor_view(); clear_run_stop();
-    refresh_save_state();
-    refresh_texts();
-    s_pending_toast = independent_feedback ? ui_strings.text_motor_set : ui_strings.text_motor_set_align;
-    KK_UI_Invalidate();
-    return true;
 }
 
 static void run_mode_step(int delta)
@@ -1625,33 +1651,6 @@ static void run_mode_step(int delta)
         s_run_mode=(JerryFOC_ControlMode)(((unsigned)s_run_mode+1U)%3U);
     /* 各模式保留自己的草稿，切换后必须再次 OK 才能启动。 */
     KK_UI_Invalidate();
-}
-
-static void service_run_lr(uint32_t now)
-{
-    if (!s_run_lr_key) return;
-    uint8_t raw=ui_input_raw_keys();
-    if (KK_UI_GetCurrentPage()!=UI_PAGE_RUN || MotorControl_GetWork()!=MOTOR_WORK_INDEPENDENT ||
-        (raw && raw!=s_run_lr_key)) {
-        s_run_lr_key=0U; return; /* Back/OK, chords or a context change cancel it. */
-    }
-    bool held;
-    if (raw) {
-        s_run_lr_releasing=false;
-        if (now-s_run_lr_pressed_at<600U) return;
-        held=true;
-    } else {
-        if (!s_run_lr_releasing) { s_run_lr_releasing=true; s_run_lr_released_at=now; }
-        if (now-s_run_lr_released_at<20U) return;
-        /* If a foreground stall crossed the deadline, release still cannot
-         * turn a long press into a short mode-change/stop operation. */
-        held=s_run_lr_released_at-s_run_lr_pressed_at>=600U;
-    }
-    uint8_t key=s_run_lr_key;
-    s_run_lr_key=0U;
-    AppSettings_Input(now);
-    if (held) focus_axis(key==KK_UI_KEY_LEFT ? MOTOR_AXIS_1 : MOTOR_AXIS_2);
-    else run_mode_step(key==KK_UI_KEY_LEFT ? -1 : 1);
 }
 
 /* ---------- 公共接口 ---------- */
@@ -1676,18 +1675,18 @@ static void ensure_model(void)
 {
     if (s_model_ready) return;
     init_ui_resources(); init_info_rows();
-    reload_axis_views(); load_view(MotorControl_GetFocus());
-    s_ratio_x100=AppStorage_Get()->gear_ratio_x100;
-    s_offset_x100=AppStorage_Get()->gear_offset_x100;
+    sync_views(3U);
     s_model_ready=true;
 }
 
 void ui_app_reset(uint32_t now_ms)
 {
+    ui_input_complete(UI_INPUT_CANCEL);
     s_remote_page=0;
     s_global_stop_seen=false;
     clear_run_stop();
-    AppStorage_Load();
+    /* Storage initializes before control/UI. Rebuilding the view must not
+     * reread Flash or discard accepted settings awaiting delayed save. */
     s_model_ready=false; ensure_model();
 
     if (s_view_axis==MOTOR_AXIS_1) JerryFOC_useCurrentLoop(s_current_loop ? 1U : 0U);
@@ -1707,6 +1706,7 @@ void ui_app_reset(uint32_t now_ms)
 
 void ui_app_note_display_error(void)
 {
+    ui_input_complete(UI_INPUT_DISPLAY_ERROR);
     ++s_display_errors;
 }
 
@@ -1727,16 +1727,12 @@ void ui_app_update(uint32_t now_ms)
     }
     s_global_stop_seen=global_stop;
     if (MotorControl_GetFocus()!=s_view_axis) focus_axis(MotorControl_GetFocus());
-    service_run_lr(now_ms);
     if (MotorControl_IsHandFollow() && KK_UI_GetCurrentPage()==UI_PAGE_RUN && MotorControl_IsPassive(s_view_axis))
         focus_axis((MotorAxis)(1U-s_view_axis));
     for (unsigned a=0;a<2;++a) {
         if (s_profiles[a]==MotorParams_GetAxisProfile((MotorAxis)a)) continue;
-        MotorAxis old=s_view_axis; save_view(); load_view((MotorAxis)a);
-        s_profiles[a]=MotorParams_GetAxisProfile((MotorAxis)a);
-        reset_motor_view();
-        save_view(); load_view(old);
-        int_bindings[INT_SPEED_LIMIT].maximum=(int32_t)MotorParams_GetAxis(old)->max_speed_mech;
+        save_view();sync_axis_view((MotorAxis)a,&views[a],true);
+        sync_common_settings(a==MOTOR_AXIS_1);load_view(s_view_axis);
         mark_settings_dirty(now_ms); KK_UI_Invalidate();
     }
     if (!MotorControl_ModeAllowed(s_run_mode))
@@ -1827,10 +1823,18 @@ void ui_app_update(uint32_t now_ms)
 
     /* Protocol changes may have a newer tick than this UI frame's timestamp. */
     App_SaveService(HAL_GetTick());
+    /* Every page/mode uses the same input path. Cancel queued operations
+     * when their page, axis, work or control context has changed. Stops also
+     * cancel input before the next foreground dispatch. */
+    KK_UI_PageId input_page=KK_UI_GetCurrentPage();
+    if (ui_input_context((uint16_t)(input_page |
+        (input_page==UI_PAGE_RUN ? ((unsigned)s_view_axis<<5U) |
+        ((unsigned)MotorControl_GetWork()<<6U) | ((unsigned)s_run_mode<<9U) |
+        (global_stop ? 4096U : 0U) : 0U)))) s_run_lr_key=0U;
 }
 
 /* Both frontends apply business once and read back through this adapter. */
-static void refresh_config_views(void);
+static void refresh_config_views(unsigned reset_axes);
 static void show_settings_result(unsigned key,bool ok)
 {
     switch(key) {
@@ -1846,8 +1850,7 @@ static void show_settings_result(unsigned key,bool ok)
         break;
     case APP_ACTION_DEFAULTS:
         if(ok) {
-            clear_run_stop();reload_axis_views();load_view(MOTOR_AXIS_1);
-            s_ratio_x100=100;s_offset_x100=0;refresh_save_state();
+            clear_run_stop();refresh_save_state();
         }
         s_pending_toast=ok ? ui_strings.text_defaults_restored : ui_strings.text_stop_check_encoder;
         KK_UI_Invalidate();break;
@@ -1863,7 +1866,7 @@ static void finish_setting(unsigned key,int32_t value,int8_t result)
 {
     if (!s_model_ready) return;
     if(value==0 || key<=APP_SET_IBUS_LIMIT) show_settings_result(key,result>0);
-    refresh_config_views();
+    refresh_config_views(key==APP_ACTION_DEFAULTS && result>0 ? 3U : 0U);
 }
 static bool apply_event(KK_UI_EventId evt)
 {
@@ -1882,11 +1885,7 @@ static bool apply_event(KK_UI_EventId evt)
         finish_setting(key,value,result);return result>0;
     }
     if (evt>=EVT_WORK_BASE && evt<EVT_WORK_BASE+MOTOR_WORK_COUNT) {
-        if (MotorControl_SelectWork((MotorWorkMode)(evt-EVT_WORK_BASE))) {
-            focus_axis(MotorControl_GetFocus()); s_run_active=false;
-            s_pending_toast=MotorControl_WorkText(); mark_settings_dirty(HAL_GetTick());
-        } else { s_pending_toast=ui_strings.text_stop_both_first; ok=false; }
-        return ok;
+        return App_Configure(APP_CFG_WORK,MOTOR_AXIS_1,evt-EVT_WORK_BASE,0);
     }
     switch (evt) {
     case EVT_TX_FORMAT:
@@ -1894,33 +1893,22 @@ static bool apply_event(KK_UI_EventId evt)
         refresh_texts();KK_UI_Invalidate();
         break;
     case EVT_FOCUS_M1: case EVT_FOCUS_M2:
-        focus_axis(evt==EVT_FOCUS_M1 ? MOTOR_AXIS_1 : MOTOR_AXIS_2);
-        s_pending_toast=s_view_axis==MOTOR_AXIS_1 ? ui_strings.text_axis_m1 : ui_strings.text_axis_m2;
-        break;
+        return App_Configure(APP_CFG_FOCUS,evt==EVT_FOCUS_M1 ? MOTOR_AXIS_1 : MOTOR_AXIS_2,0,0);
     case EVT_FEEDBACK:
-        if ((ok=MotorControl_SelectFeedback(s_hso_choice))) mark_settings_dirty(HAL_GetTick());
-        else s_pending_toast=ui_strings.text_single_m1_stop;
-        s_hso_choice=MotorControl_HsoAllowed();
-        refresh_texts(); KK_UI_Invalidate();
-        break;
+        return App_Configure(APP_CFG_FEEDBACK,MOTOR_AXIS_1,s_hso_choice,0);
     case EVT_SIXSTEP:
-        if ((ok=MotorControl_SelectSixStep(s_six_choice))) mark_settings_dirty(HAL_GetTick());
-        else s_pending_toast=ui_strings.text_single_m1_stop;
-        refresh_texts(); KK_UI_Invalidate();
-        break;
+        return App_Configure(APP_CFG_SIXSTEP,MOTOR_AXIS_1,s_six_choice,0);
     case EVT_ALIGN:
-        s_pending_toast=(ok=MotorControl_RequestAlign(s_view_axis)) ? ui_strings.text_align_requested : ui_strings.text_stop_check_axis;
-        break;
+        return App_Configure(APP_CFG_ALIGN,s_view_axis,0,0);
     case EVT_MOTOR_2804_CONFIRMED:
     case EVT_MOTOR_4015_CONFIRMED:
-        ok=select_motor(evt == EVT_MOTOR_4015_CONFIRMED ? MOTOR_PROFILE_4015 : MOTOR_PROFILE_2804);
-        break;
+        return App_SelectMotor(s_view_axis,evt == EVT_MOTOR_4015_CONFIRMED ? MOTOR_PROFILE_4015 : MOTOR_PROFILE_2804);
     case EVT_MOTOR_ESC:
-        ok=select_motor(MOTOR_PROFILE_ESC); break;
+        return App_SelectMotor(s_view_axis,MOTOR_PROFILE_ESC);
     case EVT_CUSTOM1:case EVT_CUSTOM2:case EVT_CUSTOM3:
-        ok=select_motor((MotorProfile)(MOTOR_PROFILE_CUSTOM1+evt-EVT_CUSTOM1));break;
+        return App_SelectMotor(s_view_axis,(MotorProfile)(MOTOR_PROFILE_CUSTOM1+evt-EVT_CUSTOM1));
     case EVT_RUN_STEPS_CHANGED:
-        for (unsigned i = 0U; i < 3U; ++i) s_run_steps[i] = s_step_drafts[i];
+        for (unsigned i = 0U; i < 3U; ++i) s_run_steps[step_index(i)] = s_step_drafts[i];
         if ((ok=ui_store_current())) mark_settings_dirty(HAL_GetTick());
         break;
 
@@ -1943,32 +1931,49 @@ bool App_CanConfigure(void)
         KK_UI_ShowToast(ui_strings.text_remote,500U)!=KK_UI_BUSY);
 }
 
-static void refresh_config_views(void)
+static void refresh_config_views(unsigned reset_axes)
 {
     if (!s_model_ready) return;
-    save_view();
-    for (unsigned a=0;a<2;++a) {
-        load_view((MotorAxis)a);bool loop=s_current_loop;sync_from_storage();
-        s_run_speed_x10=clamp_i32(s_run_speed_x10,-s_speed_limit*10,s_speed_limit*10);
-        if (loop!=s_current_loop) s_run_current_x100=s_confirmed_current_x100=0;
-        s_profiles[a]=MotorParams_GetAxisProfile((MotorAxis)a);save_view();
-    }
-    load_view(MotorControl_GetFocus());
-    s_ratio_x100=AppStorage_Get()->gear_ratio_x100;s_offset_x100=AppStorage_Get()->gear_offset_x100;
+    sync_views(reset_axes);
     refresh_texts();KK_UI_Invalidate();
 }
 void App_ConfigChanged(void)
 {
-    AppSettings_Changed(HAL_GetTick());refresh_config_views();
+    AppSettings_Changed(HAL_GetTick());refresh_config_views(0);
     if (s_model_ready && MotorControl_GetInput(s_view_axis)>=MOTOR_INPUT_USB && ui_state()->active) adopt_remote();
 }
 bool App_SelectMotor(MotorAxis axis,MotorProfile profile)
 {
-    if ((unsigned)axis>=MOTOR_AXIS_COUNT) return false;
-    if (!s_model_ready) return AppSettings_SelectMotor(axis,profile);
-    MotorAxis old=s_view_axis;save_view();load_view(axis);
-    bool ok=select_motor(profile);
-    save_view();load_view(old);return ok;
+    return App_Configure(APP_CFG_MOTOR,axis,(int32_t)profile,0);
+}
+bool App_Configure(AppConfigAction action,MotorAxis axis,int32_t value,int32_t extra)
+{
+    bool independent_feedback=MotorControl_GetDrive(axis)!=MOTOR_DRIVE_ENCODER;
+    unsigned result=AppSettings_Configure(action,axis,value,extra);
+    bool ok=(result&APP_CONFIG_ACCEPTED)!=0;
+    if(!s_model_ready) return ok;
+    /* Same-model selection preserves running state and unconfirmed drafts. */
+    if(action==APP_CFG_MOTOR && result==APP_CONFIG_ACCEPTED) return true;
+    if(action==APP_CFG_ALIGN) {
+        s_pending_toast=ok ? ui_strings.text_align_requested : ui_strings.text_stop_check_axis;
+        return ok;
+    }
+    if(ok && action==APP_CFG_WORK) clear_run_flags();
+    if(ok && ((unsigned)action<=APP_CFG_MOTOR || action==APP_CFG_FOCUS)) clear_run_stop();
+    if(action==APP_CFG_MOTOR) {
+        if(!ok && (unsigned)axis<MOTOR_AXIS_COUNT) {
+            if(axis==s_view_axis) s_run_active=s_run_active && MotorSampling_IsAxisOutputRequested(axis);
+            else views[axis].run_active=views[axis].run_active && MotorSampling_IsAxisOutputRequested(axis);
+        }
+        s_pending_toast=ok ? (independent_feedback ? ui_strings.text_motor_set : ui_strings.text_motor_set_align) :
+            (independent_feedback ? ui_strings.text_wait_for_stop : ui_strings.text_stop_check_encoder);
+    } else if(action==APP_CFG_WORK) s_pending_toast=ok ? MotorControl_WorkText() : ui_strings.text_stop_both_first;
+    else if(action==APP_CFG_FOCUS) s_pending_toast=axis==MOTOR_AXIS_1 ? ui_strings.text_axis_m1 : ui_strings.text_axis_m2;
+    else if(!ok && (action==APP_CFG_FEEDBACK || action==APP_CFG_SIXSTEP)) s_pending_toast=ui_strings.text_single_m1_stop;
+    else if(!ok && action==APP_CFG_GEAR) s_pending_toast=ui_strings.text_stop_ratio_nonzero;
+    refresh_config_views((result&APP_CONFIG_RESET_AXIS) ? 1U<<(unsigned)axis : 0U);
+    if(ok && MotorControl_GetInput(s_view_axis)>=MOTOR_INPUT_USB && ui_state()->active) adopt_remote();
+    return ok;
 }
 __attribute__((noinline,noclone)) void App_SaveService(uint32_t now)
 {
@@ -2018,7 +2023,7 @@ void App_RemoteMotion(MotorAxis axis,bool detect)
     save_view(); load_view(axis); MotorControl_SetFocus(axis);
     if (!detect) {
         adopt_remote();
-        AppSettings_StoreTargets(axis,(const int32_t *)&current_view,(unsigned)s_throttle_pct);
+        AppSettings_StoreTargets(axis,current_view.settings.targets,(unsigned)s_throttle_pct);
     }
     s_remote_page=detect ? UI_PAGE_DETECT : UI_PAGE_RUN;
     s_remote_at=HAL_GetTick();
@@ -2027,7 +2032,7 @@ void App_RemoteMotion(MotorAxis axis,bool detect)
 
 void App_CancelNavigation(void) { s_remote_page=0; }
 
-uint8_t App_NavigationKeys(uint32_t now)
+uint8_t App_NavigationEvent(uint32_t now)
 {
     if (!s_remote_page) return 0;
     KK_UI_PageId page=KK_UI_GetCurrentPage();
@@ -2037,9 +2042,11 @@ uint8_t App_NavigationKeys(uint32_t now)
     if (page==s_remote_page || KK_UI_GoTo(s_remote_page,now)==KK_UI_OK) {
         s_remote_page=0; return 0;
     }
-    /* Cancel local editors / leave custom pages through public input. A
-     * release between pulses is required by KK_UI's ordinary debounce. */
-    return (now-s_remote_at)%80U<40U ? KK_UI_KEY_BACK : 0;
+    /* Synthetic navigation already uses normalized events; no fake GPIO
+     * pulses or second debounce path. Space Back requests by 80ms. */
+    if (now-s_remote_at<80U) return 0;
+    s_remote_at=now;
+    return KK_UI_KEY_EVENT(KK_UI_INPUT_BACK,KK_UI_INPUT_PRESS);
 }
 
 int App_ReadRow(unsigned axis,unsigned group,unsigned row,char *label,char *value)
@@ -2084,7 +2091,7 @@ void KK_UI_CustomOnEnter(KK_UI_PageId page)
         return;
     }
     if (page == UI_PAGE_RUN_STEPS) {
-        for (unsigned i = 0U; i < 3U; ++i) s_step_drafts[i] = s_run_steps[i];
+        for (unsigned i = 0U; i < 3U; ++i) s_step_drafts[i] = s_run_steps[step_index(i)];
         s_step_selected = 0U;
         return;
     }
@@ -2105,6 +2112,7 @@ void KK_UI_CustomOnLeave(KK_UI_PageId page)
 {
     if (page == UI_PAGE_DETECT) MotorDetect_Stop();
     if (page == UI_PAGE_RUN) {
+        ui_input_complete(UI_INPUT_CANCEL);
         s_run_lr_key=0U;
         uint32_t mask=__get_PRIMASK(); __disable_irq();
         for (unsigned a=0;a<2;++a)
@@ -2117,6 +2125,16 @@ void KK_UI_CustomOnLeave(KK_UI_PageId page)
 void KK_UI_CustomOnInput(KK_UI_PageId page, KK_UI_InputEvent event)
 {
     AppSettings_Input(HAL_GetTick());
+    if (event.source>=KK_UI_INPUT_RELEASE) {
+        if (page==UI_PAGE_RUN && MotorControl_GetWork()==MOTOR_WORK_INDEPENDENT &&
+            s_run_lr_key==(1U<<(unsigned)event.action)) {
+            s_run_lr_key=0U;
+            if (event.source==KK_UI_INPUT_LONG)
+                focus_axis(event.action==KK_UI_INPUT_LEFT ? MOTOR_AXIS_1 : MOTOR_AXIS_2);
+            else run_mode_step(event.action==KK_UI_INPUT_LEFT ? -1 : 1);
+        }
+        return;
+    }
     if (page == UI_PAGE_DETECT) {
         if (event.action==KK_UI_INPUT_BACK) {
             MotorDetect_Stop(); (void)KK_UI_CustomRequestClose();
@@ -2176,6 +2194,7 @@ void KK_UI_CustomOnInput(KK_UI_PageId page, KK_UI_InputEvent event)
         return;
     }
     if (page != UI_PAGE_RUN) return;
+
     if (event.action == KK_UI_INPUT_BACK) {
         if ((s_view_axis==MOTOR_AXIS_1 && JerryFOC_hasHSOFault())) (void)JerryFOC_useHSO(0U);
         if (s_run_active || views[1U-s_view_axis].run_active || !ui_state()->aligning)
@@ -2218,7 +2237,6 @@ void KK_UI_CustomOnInput(KK_UI_PageId page, KK_UI_InputEvent event)
     if (event.action == KK_UI_INPUT_LEFT || event.action == KK_UI_INPUT_RIGHT) {
         if (MotorControl_GetWork()==MOTOR_WORK_INDEPENDENT && event.source==KK_UI_INPUT_PRESS) {
             s_run_lr_key=event.action==KK_UI_INPUT_LEFT ? KK_UI_KEY_LEFT : KK_UI_KEY_RIGHT;
-            s_run_lr_pressed_at=HAL_GetTick(); s_run_lr_releasing=false;
         } else if (event.source != KK_UI_INPUT_REPEAT)
             run_mode_step(event.action == KK_UI_INPUT_LEFT ? -1 : 1);
         return;
@@ -2268,7 +2286,7 @@ void KK_UI_CustomOnInput(KK_UI_PageId page, KK_UI_InputEvent event)
     if (event.action != KK_UI_INPUT_UP && event.action != KK_UI_INPUT_DOWN) return;
     /* PRESS / REPEAT 共用同一条加减路径，三种模式均按当前步长修改草稿。 */
     bool throttle=throttle_mode(s_run_mode);
-    int32_t step = (throttle ? 1 : s_run_steps[s_run_mode]) * (int32_t)event.steps;
+    int32_t step = (throttle ? 1 : s_run_steps[step_index(s_run_mode)]) * (int32_t)event.steps;
     if (event.action == KK_UI_INPUT_DOWN) step = -step;
     int32_t limit;
     if (throttle) limit=100;
@@ -2382,8 +2400,7 @@ void KK_UI_CustomOnDraw(KK_UI_PageId page, int16_t x_offset,
                 OLED_SetDrawMode(OLED_DRAW_CLEAR);
             }
             OLED_DrawUTF8((int16_t)(5 + x_offset), y, mode_name((JerryFOC_ControlMode)i));
-            const char *unit = i == JERRYFOC_MODE_VELOCITY ? ui_strings.text_rad_s :
-                               i == JERRYFOC_MODE_POSITION ? "rad" : s_current_loop ? "A" : "V";
+            const char *unit = run_unit((JerryFOC_ControlMode)i);
             UiText_Fixed(buf, sizeof(buf), s_step_drafts[i], i == JERRYFOC_MODE_VELOCITY ? 1U : 2U, unit);
             OLED_DrawUTF8((int16_t)(W - 5 - OLED_GetUTF8Width(buf) + x_offset), y, buf);
             OLED_SetDrawMode(OLED_DRAW_SET);
@@ -2423,8 +2440,7 @@ void KK_UI_CustomOnDraw(KK_UI_PageId page, int16_t x_offset,
     int32_t confirmed=*run_target(false);
     bool changed=draft!=confirmed;
     const char *state=changed ? (s_run_active ? ui_strings.text_run : ui_strings.text_edit) : (s_run_active ? "RUN" : ui_strings.text_stop);
-    const char *unit=oil ? "%" : s_run_mode==JERRYFOC_MODE_VELOCITY ? ui_strings.text_rad_s :
-        s_run_mode==JERRYFOC_MODE_POSITION ? "rad" : s_current_loop ? "A" : "V";
+    const char *unit=oil ? "%" : run_unit(s_run_mode);
     int scale=run_scale(oil);
     fmt_fixed(v,sizeof(v),draft,scale);
     int16_t unit_width=(int16_t)OLED_GetUTF8Width(unit);
@@ -2491,7 +2507,7 @@ void KK_UI_CustomOnDraw(KK_UI_PageId page, int16_t x_offset,
         if (!MotorControl_IsCoupled() && s_run_mode!=JERRYFOC_MODE_TORQUE) {
             fmt_run_aux(v,draft);
         } else {
-            char step[10]; fmt_fixed(step,sizeof(step),s_run_steps[s_run_mode],scale);
+            char step[10]; fmt_fixed(step,sizeof(step),s_run_steps[step_index(s_run_mode)],scale);
             UiText_Format(v,sizeof(v),ui_strings.fmt_step_s,step);
         }
         int16_t right=(int16_t)(W-4-OLED_GetUTF8Width(v)+x_offset);

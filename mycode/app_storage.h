@@ -91,10 +91,10 @@ enum {
     APP_LOG_ALIGN_DONE,
 };
 
-bool AppStorage_Init(void);
+bool AppStorage_Init(void); /* Boot: probe, load A/B once, then scan logs. */
 bool AppStorage_IsReady(void);
 AppSettings *AppStorage_Get(void);
-void AppStorage_Load(void);
+void AppStorage_Load(void); /* Explicit reload: invalid A/B keep RAM; NO FLASH supplies defaults. */
 bool AppStorage_Save(void); /* 同步保存，仅用于启动/维护阶段。 */
 bool AppStorage_RequestSave(void);
 bool AppStorage_IsDeferred(void); /* M2 real-time sampling currently owns SPI2. */

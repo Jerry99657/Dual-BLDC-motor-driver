@@ -791,6 +791,7 @@ static void check_profile_settings(void)
         settings.position_x100=10;settings.axis2_position_x100=11;
         settings.speed_step_x10=17;settings.axis2_speed_step_x10=23;
         settings.control_config|=37UL<<APP_CONFIG_THROTTLE_SHIFT;
+        settings.control_config|=APP_CONFIG_FOCUS_M2|(27UL<<APP_CONFIG_IBUS_SHIFT);
         assert(MotorControl_SelectProfile(axis,target));
         uint32_t flags=a ? settings.axis2_flags : settings.flags;
         assert(flags==MotorControl_GetOptions(axis) && (flags & APP_FLAG_LED_ENABLE));
@@ -801,6 +802,8 @@ static void check_profile_settings(void)
         assert((a ? settings.axis2_position_x100 : settings.position_x100)==0);
         assert((a ? settings.speed_x10 : settings.axis2_speed_x10)==(a ? 300 : 400));
         assert(settings.speed_step_x10==17 && settings.axis2_speed_step_x10==23);
+        assert(settings.control_config&APP_CONFIG_FOCUS_M2);
+        assert((settings.control_config&APP_CONFIG_IBUS_MASK)==(27UL<<APP_CONFIG_IBUS_SHIFT));
         assert(((settings.control_config & APP_CONFIG_THROTTLE_MASK)!=0)==(a!=0));
         assert(!output_requested && !output2);
     }

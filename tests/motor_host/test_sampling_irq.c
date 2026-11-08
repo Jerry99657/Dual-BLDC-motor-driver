@@ -7,6 +7,7 @@ TIM_TypeDef tim2;
 static unsigned fast_calls;
 static bool capture_ok;
 void JerryFOC_OuterIRQ(void) {}
+void ui_input_tick(void) {}
 void JerryFOC_FastIRQ(void) { ++fast_calls; capture_ok=MotorSampling_Capture(); }
 void HostRegisterWrite(uint32_t *reg,uint32_t value)
 {

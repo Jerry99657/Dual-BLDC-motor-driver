@@ -166,6 +166,38 @@ static void m1_path_tests(void)
     assert(!output_requested);
     puts("PASS: actual M1 run adapter uses applied calibration and feedback speed, voltage mode remains direct volts, Stop clears feedforward and disconnects output");
 }
+static void current_filter_paths(void)
+{
+    ready=calibrated=true;healthy=aligned=1;encoder_velocity=0;
+    JerryFOC_setAngleSource(&source);JerryFOC_useCurrentLoop(0);
+    M0_Curr_Flt.Tf=0.00013f;
+    float previous_d[2]={JerryFOC_getId(),0.0f};
+    float previous_q=M0_Curr_Flt.y_prev;
+    uint32_t random=0x12345678U;
+    for(unsigned i=0;i<6000;++i) {
+        unsigned path=(i/7U)%3U; /* Idle monitor, open-loop, normal FOC. */
+        output_requested=path!=0;g_openloop_debug=path==1;
+        g_openloop_angle=0;JerryFOC_Target_Velocity=0;JerryFOC_Target_Iq=0.05f;
+        random=random*1664525U+1013904223U;
+        frame.m1_current[0]=(float)((int)(random>>16)-32768)*0.00001f;
+        random=random*1664525U+1013904223U;
+        frame.m1_current[1]=(float)((int)(random>>16)-32768)*0.00001f;
+        float alpha_current,beta_current,raw_d,raw_q;
+        JerryFOC_Clarke(frame.m1_current[0],frame.m1_current[1],&alpha_current,&beta_current);
+        JerryFOC_Park(alpha_current,beta_current,0,&raw_d,&raw_q);
+        float alpha=M0_Curr_Flt.Tf/(M0_Curr_Flt.Tf+0.0001f);
+        unsigned history=path==1 ? 1U : 0U;
+        float expected_q=alpha*previous_q+(1.0f-alpha)*raw_q;
+        float expected_d=alpha*previous_d[history]+(1.0f-alpha)*raw_d;
+        JerryFOC_run();
+        float actual_q=JerryFOC_getIq(),actual_d=JerryFOC_getId();
+        assert(memcmp(&expected_q,&actual_q,sizeof(float))==0);
+        assert(memcmp(&expected_d,&actual_d,sizeof(float))==0);
+        previous_q=expected_q;previous_d[history]=expected_d;
+    }
+    JerryFOC_stop();
+    puts("PASS: 6000 interleaved idle/open-loop/FOC samples match independent float filter equations bit-for-bit, with shared q and separate normal/debug d history");
+}
 #ifdef MOTOR_INVERTER_HOST
 #define main legacy_current_main
 #endif
@@ -173,7 +205,7 @@ int main(void)
 {
     tim1.ARR=tim8.ARR=8499;healthy=aligned=1;ready=calibrated=output_requested=true;
     JerryFOC_setAngleSource(&source);
-    bumpless_tests();feedforward_tests();saturation_tests();plant_tests();m1_path_tests();
+    bumpless_tests();feedforward_tests();saturation_tests();plant_tests();m1_path_tests();current_filter_paths();
     return 0;
 }
 #undef main

@@ -43,6 +43,12 @@ parser.add_argument("--allow-usb-lpm",action="store_true",
                     help="Permit only the R109 saved CubeMX LPM=0 setting and its native generated USB changes")
 parser.add_argument("--allow-encoder-user-build",action="store_true",
                     help="Permit only the R110 user encoder estimator source and its existing Os/LTO flags")
+parser.add_argument("--allow-adc-user-build",action="store_true",
+                    help="Permit only the R123 user ADC-DMA module CMake source/flags addition")
+parser.add_argument("--allow-ui-input-user-code",action="store_true",
+                    help="Permit only R127 main USER CODE input polling after UI context maintenance")
+parser.add_argument("--allow-key-pipeline-rework",action="store_true",
+                    help="Permit R129 normalized key-input port changes; all unrelated UI and official code must match")
 args = parser.parse_args()
 OUT = ROOT / args.directory
 LABEL = args.label
@@ -318,7 +324,9 @@ if LABEL == "baseline":
         destination = OUT / "mycode" / path.name
         destination.parent.mkdir(exist_ok=True)
         shutil.copy2(path, destination)
-    for name in ("Core/Src/main.c","Core/Src/stm32g4xx_it.c","CMakeLists.txt","mycode/kk_oled/driver/kk_oled_driver.c"):
+    copied=("Core/Src/main.c","Core/Src/stm32g4xx_it.c","CMakeLists.txt","mycode/kk_oled/driver/kk_oled_driver.c")
+    copied+=tuple(p.relative_to(ROOT).as_posix() for p in (ROOT/'mycode/kk_ui').rglob('*') if p.is_file())
+    for name in copied:
         destination=OUT/name
         destination.parent.mkdir(parents=True,exist_ok=True)
         shutil.copy2(ROOT/name,destination)
@@ -327,7 +335,11 @@ else:
     if baseline["protected"] != report["protected"]:
         changed = [name for name in set(baseline["protected"]) | set(report["protected"])
                    if baseline["protected"].get(name) != report["protected"].get(name)]
-        if args.allow_usb_lpm:
+        if args.allow_key_pipeline_rework:
+            from key_pipeline_boundary import verify
+            verify(ROOT,OUT,baseline,changed)
+            report['permitted_input_port_changes']=sorted(changed)
+        elif args.allow_usb_lpm:
             allowed={'FOC_two.ioc','USB_Device/Target/usbd_conf.h','USB_Device/Target/usbd_conf.c'}
             assert set(changed)==allowed,changed
             for name in allowed:
@@ -358,6 +370,17 @@ target_compile_definitions(stm32cubemx INTERFACE USE_USB_DOUBLE_BUFFER=0U)
             expected=before.replace('add_subdirectory(cmake/stm32cubemx)\n','add_subdirectory(cmake/stm32cubemx)\n'+addition)
             assert (ROOT/'CMakeLists.txt').read_text(encoding='utf-8')==expected,'Unexpected USB build change'
             report['permitted_user_changes']=changed
+        elif args.allow_ui_input_user_code:
+            assert changed==["Core/Src/main.c"],changed
+            name="Core/Src/main.c"
+            before=(OUT/name).read_text(encoding="utf-8")
+            old='    uint8_t ui_keys = ui_input_poll();\n\n'
+            anchor='        now = HAL_GetTick();\n        KK_UI_Status ui_status'
+            assert before.count(old)==1 and before.count(anchor)==1
+            expected=before.replace(old,'').replace(anchor,
+                '        now = HAL_GetTick();\n        uint8_t ui_keys = ui_input_poll();\n        KK_UI_Status ui_status')
+            assert (ROOT/name).read_text(encoding="utf-8")==expected,"Unexpected main USER CODE change"
+            report["permitted_user_changes"]=changed
         elif args.allow_key_startup_user_code:
             assert changed==["Core/Src/main.c"],changed
             name="Core/Src/main.c"
@@ -371,6 +394,17 @@ target_compile_definitions(stm32cubemx INTERFACE USE_USB_DOUBLE_BUFFER=0U)
             assert before.count(anchor)==1
             expected=before.replace(anchor,addition+anchor)
             assert (ROOT/name).read_text(encoding="utf-8")==expected,"Unexpected main.c change"
+            report["permitted_user_changes"]=changed
+        elif args.allow_adc_user_build:
+            assert changed==["CMakeLists.txt"],changed
+            before=(OUT/"CMakeLists.txt").read_text(encoding="utf-8")
+            assert sha(OUT/"CMakeLists.txt")==baseline["protected"]["CMakeLists.txt"]
+            addition=("\n# Regular ADC circular-DMA runtime; CubeMX and HAL retain ADC initialization.\n"
+                      "target_sources(${CMAKE_PROJECT_NAME} PRIVATE mycode/adc_port.c)\n"
+                      'set_source_files_properties(mycode/adc_port.c PROPERTIES COMPILE_OPTIONS "-Os;-flto")\n')
+            expected=before.replace('find_package(Python3 REQUIRED COMPONENTS Interpreter)',
+                                    addition+'\nfind_package(Python3 REQUIRED COMPONENTS Interpreter)')
+            assert (ROOT/"CMakeLists.txt").read_text(encoding="utf-8")==expected,"Unexpected ADC build change"
             report["permitted_user_changes"]=changed
         elif args.allow_encoder_user_build:
             assert changed==["CMakeLists.txt"],changed
@@ -433,7 +467,23 @@ target_compile_definitions(stm32cubemx INTERFACE USE_USB_DOUBLE_BUFFER=0U)
                 assert command.replace('-DUSE_USB_DOUBLE_BUFFER=0U ','')==baseline['commands'][mode][name],(mode,name)
         report['permitted_compile_definition']='USE_USB_DOUBLE_BUFFER=0U'
     elif not args.allow_native_ll_init and baseline["commands"] != report["commands"]:
-        raise SystemExit("Official/core compilation commands changed.")
+        if not args.allow_adc_user_build:
+            raise SystemExit("Official/core compilation commands changed.")
+        # This toolchain file appends target flags on configuration. A fresh
+        # CMake regeneration can remove one redundant identical block. Accept
+        # only that exact idempotent repetition; every other token must match.
+        block="-mcpu=cortex-m4 -mfpu=fpv4-sp-d16 -mfloat-abi=hard -Wall -fdata-sections -ffunction-sections -fstack-usage"
+        def normalized(command):
+            text=" ".join(command.split())
+            return text.replace(block+" "+block,block)
+        repeats=[]
+        for mode in ("Debug","Release"):
+            old,now=baseline["commands"][mode],report["commands"][mode]
+            assert set(old)==set(now),mode
+            for name in old:
+                assert normalized(old[name])==normalized(now[name]),(mode,name,"Unexpected official/core option change")
+                if old[name]!=now[name]:repeats.append(mode+":"+name)
+        report["redundant_target_flag_normalization"]=repeats
     for mode, current in report["images"].items():
         current["saved_bytes"] = baseline["images"][mode]["flash_bytes"] - current["flash_bytes"]
 (OUT / (LABEL + ".json")).write_text(json.dumps(report, indent=2), encoding="utf-8")
@@ -445,3 +495,5 @@ if "permitted_compile_definition" in report:
     print("Verified public ST configuration change:",report["permitted_compile_definition"])
 if "permitted_user_changes" in report:
     print("Verified application-only exceptions:",", ".join(report["permitted_user_changes"]))
+if 'permitted_input_port_changes' in report:
+    print('Verified input-port exceptions; other protected files unchanged:',', '.join(report['permitted_input_port_changes']))

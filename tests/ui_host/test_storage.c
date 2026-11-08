@@ -9,6 +9,8 @@
 static uint8_t flash[3*W25Q64_SECTOR_SIZE];
 static uint32_t tick, busy_until;
 static unsigned sync_calls;
+static unsigned bank_reads,init_calls,init_failures;
+static uint32_t read_failure=UINT32_MAX;
 static bool fail_program, corrupt_read, storage_blocked;
 bool MT6701_2_StorageBlocked(void) { return storage_blocked; }
 bool MT6701_2_FlashBegin(void) { return true; }
@@ -16,13 +18,19 @@ void MT6701_2_FlashEnd(void) {}
 uint32_t HAL_GetTick(void) { return tick; }
 void HAL_Delay(uint32_t ms) { assert(ms==2U); tick+=ms; }
 void MT6701_2_Service(uint32_t now) { (void)now; }
-bool W25Q_Init(void) { return true; }
+bool W25Q_Init(void) {
+    ++init_calls;
+    if(init_failures) { --init_failures; return false; }
+    return true;
+}
 uint32_t W25Q_ReadID(void) { return 0xEF4017; }
 uint32_t W25Q_LastFailure(void) { return 0x06010402U; }
 bool W25Q_LastFailureBusy(void) { return false; }
 uint8_t W25Q_LastStatus(void) { return 1; }
 bool W25Q_Read(uint32_t addr, uint8_t *data, uint32_t len) {
     assert((int32_t)(tick-busy_until)>=0);
+    if(addr<W25Q64_SECTOR_SIZE*2U && len==sizeof(AppSettings)) ++bank_reads;
+    if(addr==read_failure) return false;
     assert(addr+len<=sizeof(flash)); memcpy(data,flash+addr,len);
     if(corrupt_read) data[0]^=1;
     return true;
@@ -62,7 +70,69 @@ static uint32_t crc32(const void *data,unsigned len) {
     }
     return ~crc;
 }
+static void put_bank(unsigned bank,AppSettings record,uint32_t seq,int32_t speed,bool valid) {
+    record.seq=seq;record.speed_x10=speed;
+    record.crc=crc32(&record,offsetof(AppSettings,crc))^(valid ? 0U : 1U);
+    memcpy(flash+bank*W25Q64_SECTOR_SIZE,&record,sizeof(record));
+}
+static void check_bank_loading(void) {
+    memset(flash,255,sizeof(flash));assert(AppStorage_Init());
+    const AppSettings record=*AppStorage_Get();
+    const struct { uint32_t a,b; bool va,vb; int expected; } cases[]={
+        {1,2,true,true,1},{2,1,true,true,0},{7,7,true,true,1},
+        {UINT32_MAX,0,true,true,1},{0,UINT32_MAX,true,true,0},
+        {3,4,true,false,0},{4,3,false,true,1},{3,4,false,false,-1}};
+    for(unsigned c=0;c<sizeof(cases)/sizeof(cases[0]);++c) {
+        memset(flash,255,sizeof(flash));
+        put_bank(0,record,cases[c].a,111,cases[c].va);
+        put_bank(1,record,cases[c].b,222,cases[c].vb);
+        bank_reads=0;assert(AppStorage_Init() && bank_reads==2);
+        int32_t expected=cases[c].expected<0 ? 0 : cases[c].expected ? 222 : 111;
+        assert(AppStorage_Get()->speed_x10==expected);
+        AppStorage_Get()->speed_x10=333;
+        bank_reads=0;AppStorage_Load();assert(bank_reads==2);
+        assert(AppStorage_Get()->speed_x10==(cases[c].expected<0 ? 333 : expected));
+        /* Saving after load must alternate from the selected bank (or A
+         * when boot found no valid record), not overwrite the good copy. */
+        unsigned target=cases[c].expected==1 ? 0U : 1U;
+        uint8_t previous[sizeof(AppSettings)];
+        memcpy(previous,flash+(1U-target)*W25Q64_SECTOR_SIZE,sizeof(previous));
+        AppStorage_Get()->speed_x10=444;
+        assert(AppStorage_RequestSave());service(80);assert(result());service(20);
+        AppSettings saved;memcpy(&saved,flash+target*W25Q64_SECTOR_SIZE,sizeof(saved));
+        assert(saved.speed_x10==444 && saved.crc==crc32(&saved,offsetof(AppSettings,crc)));
+        assert(!memcmp(previous,flash+(1U-target)*W25Q64_SECTOR_SIZE,sizeof(previous)));
+    }
+    /* A transient single-bank read failure still loads the surviving bank. */
+    for(unsigned failed=0;failed<2;++failed) {
+        memset(flash,255,sizeof(flash));put_bank(0,record,9,111,true);put_bank(1,record,10,222,true);
+        read_failure=failed*W25Q64_SECTOR_SIZE;bank_reads=0;
+        assert(AppStorage_Init() && bank_reads==2);
+        assert(AppStorage_Get()->speed_x10==(failed ? 111 : 222));
+    }
+    read_failure=UINT32_MAX;
+    /* Losing both persisted copies must not erase accepted unsaved values
+     * or the active bank during explicit reload. Boot still uses defaults. */
+    memset(flash,255,sizeof(flash));put_bank(1,record,42,222,true);
+    assert(AppStorage_Init());AppStorage_Get()->speed_x10=555;
+    memset(flash,255,sizeof(flash));AppSettings accepted=*AppStorage_Get();
+    AppStorage_Load();assert(!memcmp(&accepted,AppStorage_Get(),sizeof(accepted)));
+    assert(AppStorage_RequestSave());service(80);assert(result());service(20);
+    AppSettings saved;memcpy(&saved,flash,sizeof(saved));
+    assert(saved.speed_x10==555 && saved.seq==43); /* Previous active bank was B. */
+    memset(flash,255,sizeof(flash));assert(AppStorage_Init());assert(AppStorage_Get()->speed_x10==0);
+    /* Probe retries remain bounded; no bank I/O on NO FLASH, and explicit
+     * reload without a ready device continues to supply defaults. */
+    unsigned calls=init_calls;uint32_t before=tick;init_failures=2;
+    assert(AppStorage_Init() && init_calls==calls+3 && tick==before+4);
+    calls=init_calls;before=tick;init_failures=3;bank_reads=0;
+    assert(!AppStorage_Init() && init_calls==calls+3 && tick==before+4 && bank_reads==0);
+    AppStorage_Get()->speed_x10=555;AppStorage_Load();assert(AppStorage_Get()->speed_x10==0 && bank_reads==0);
+    assert(!strcmp(AppStorage_SaveErrorText(),"Save NO FLASH"));
+    puts("PASS: A/B validity, equal/wrapped sequence, read failure, explicit reload retention, selected-bank save, boot defaults and bounded Flash retries");
+}
 int main(void) {
+    check_bank_loading();
     memset(flash,255,sizeof(flash)); assert(AppStorage_Init());
     assert(AppStorage_GetSaveState()==APP_SAVE_IDLE);
     assert(sync_calls==0);
@@ -230,6 +300,6 @@ int main(void) {
     assert(AppStorage_Get()->custom[0].ls_uh==440 && AppStorage_Get()->custom[2].ls_uh==860 && !AppStorage_Get()->custom[1].poles_rs);
     AppStorage_ResetDefaults(); assert(AppStorage_Get()->motor_detect==0 && !AppStorage_Get()->calibration[0].poles_rs && !AppStorage_Get()->calibration[1].poles_rs);
     assert(!AppStorage_Get()->motor_detect_l_uh && !AppStorage_Get()->motor_detect_flux_uwb);
-    printf("PASS: async save/log, A/B recovery, failure paths, step/speed-limit persistence, versions 1/2 migration and dual-axis v3 persistence\n");
+    printf("PASS: async save/log, A/B recovery, failure paths, step/speed-limit persistence, versions 1..6 migration and dual-axis v7 persistence\n");
     return 0;
 }

@@ -8,6 +8,7 @@
 #include <string.h>
 #include <stddef.h>
 #include "adc.h"
+#include "adc_port.h"
 #include "tim.h"
 #include "comp.h"
 #include "dac.h"
@@ -770,7 +771,7 @@ void MotorSampling_Stop(void)
     (void)HAL_TIM_Base_Stop(&htim6);
     (void)HAL_ADCEx_InjectedStop_IT(&hadc1);
     (void)HAL_ADCEx_InjectedStop(&hadc2);
-    (void)HAL_ADC_Stop_DMA(&hadc1);
+    (void)AdcPort_Stop(&hadc1);
     acquisition.bus_valid = false;
     acquisition.bus_seen = false;
     acquisition.reference_valid = false;
@@ -828,7 +829,7 @@ __attribute__((noinline,noclone)) bool MotorSampling_Start(void)
     }
     if (HAL_ADCEx_Calibration_Start(&hadc1, ADC_SINGLE_ENDED) != HAL_OK ||
         HAL_ADCEx_Calibration_Start(&hadc2, ADC_SINGLE_ENDED) != HAL_OK ||
-        HAL_ADC_Start_DMA(&hadc1, (uint32_t *)(void *)s_bus_dma, 4U) != HAL_OK) goto failed;
+        AdcPort_Start(&hadc1, s_bus_dma, 4U) != HAL_OK) goto failed;
 
     /* VBUS may be 0 V or absent for an arbitrary time. Keep acquisition alive
      * and start the injected group with both power stages disabled. */
